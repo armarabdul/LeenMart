@@ -65,6 +65,19 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_API_PROXY_TARGET ?? 'http://localhost:4000',
           changeOrigin: true,
         },
+        // Health/readiness are deliberately mounted outside /api/v1 (see
+        // shared/api/health.api.ts), so they need their own proxy entries —
+        // without this, the dev server serves its SPA fallback for /readyz
+        // instead of forwarding to the API, and the frontend reads that as
+        // "unreachable".
+        '/healthz': {
+          target: env.VITE_API_PROXY_TARGET ?? 'http://localhost:4000',
+          changeOrigin: true,
+        },
+        '/readyz': {
+          target: env.VITE_API_PROXY_TARGET ?? 'http://localhost:4000',
+          changeOrigin: true,
+        },
       },
     },
     preview: { port: 5173, strictPort: true },
