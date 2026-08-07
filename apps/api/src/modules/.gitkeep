@@ -1,0 +1,18 @@
+Business modules live here, one directory per bounded context (SDD 5).
+
+Each module owns its tables, exposes a published interface through index.ts and
+communicates outward only through that interface or through domain events. The
+ESLint dependency rule in @leen-mart/config/eslint/node enforces both of those
+constraints at build time.
+
+Expected layout, per SDD 25.2:
+
+  modules/<name>/
+    domain/          entities, value objects, events, state machines, errors
+    application/     use cases, ports, DTOs
+    infrastructure/  Prisma repositories, gateways, mappers
+    interface/       routers, controllers, Zod schemas, job handlers
+    <name>.module.ts DI wiring
+    index.ts         published interface — the only legal cross-module import
+
+No business module is implemented in this scaffold by design.

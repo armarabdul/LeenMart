@@ -1,0 +1,248 @@
+PRODUCT REQUIREMENTS DOCUMENT
+Leen Mart
+1. Executive Summary
+Leen Mart is a multi-vendor marketplace platform designed to support a wide range of
+sellers—from individual vendors to large businesses—focused initially on a regional market,
+with scalability to pan-India.
+The platform differentiates itself through:
+● Flexible vendor monetization (commission OR subscription)
+● Strong preorder system for time-sensitive goods (food, fish, etc.)
+● Hybrid fulfillment model (pickup + vendor-managed delivery)
+● Trust-first approach (manual approvals + fraud controls)
+2. Objectives
+Primary Goals
+● Enable vendors to easily set up and manage online shops
+● Provide customers with a seamless mobile-first buying experience
+● Ensure platform trust via approval and fraud detection systems
+Secondary Goals
+● Support hyperlocal commerce
+● Enable preorders for time-sensitive inventory
+● Scale to national-level operations
+3. User Roles
+3.1 Customer
+● Browse products
+● Place orders (delivery or pickup)
+● Make payments (online or COD if available)
+● Leave reviews
+● Report fraud
+3.2 Vendor
+● Register and complete KYC
+● Create and manage shop
+● Add products (subject to approval)
+● Configure delivery/pickup
+● Manage orders and preorders
+3.3 Admin
+● Approve/reject products
+● Monitor fraud
+● Manage vendors and users
+● Handle disputes (non-mediator role)
+● Analytics and reporting
+4. Business Model
+4.1 Revenue Streams
+1. Commission-Based
+○ Category-based commission (e.g., food, electronics, vehicles)
+2. Subscription-Based
+○ Tiered plans:
+■ Basic (limited products)
+■ Pro (medium scale)
+■ Enterprise (large catalog)
+5. Core Features
+5.1 Vendor Onboarding
+● Vendor registration
+● Mandatory KYC verification
+● Shop profile creation
+5.2 Product Management
+● Vendors can add products
+● Products require manual admin approval
+● Support for:
+○ New products
+○ Second-hand goods
+○ Services (optional future)
+5.3 Preorder System (Key Feature)
+Capabilities:
+● Vendors define:
+○ Quantity limit
+○ Preorder start time
+○ Expiry date/time
+○ Advance payment (% configurable)
+Example Use Cases:
+● Cake orders for next day
+● Fish sales for morning pickup
+● Limited stock items
+Behavior:
+● Once quantity exceeded → Out of Stock
+● After expiry → Listing disabled
+5.4 Order Management
+Order Types:
+1. Delivery
+2. Pickup
+5.5 Delivery System
+● Platform does NOT provide delivery
+● Vendor controls:
+○ Delivery radius
+○ Charges
+○ Time slots
+Customer Flow:
+● Select delivery
+● Enter exact location
+● Choose time slot
+5.6 Pickup System (QR-Based)
+● Customer selects pickup time
+● System generates secure QR code
+● Vendor scans QR → order marked complete
+Rules:
+● QR valid until scanned
+● Prevents fraud and misuse
+5.7 Payment System
+Integration:
+● Razorpay
+Payment Types:
+● Online payment
+● Cash on Delivery (restricted)
+Rules:
+● Payments go to platform first
+● Settlement to vendors later
+● COD only for trusted vendors
+5.8 Reviews & Ratings
+Supported:
+● Product reviews
+● Shop reviews
+Features:
+● Rating system (1–5)
+● Text feedback
+● Abuse reporting
+5.9 Notifications
+● Email
+● SMS
+● Push notifications (PWA)
+Events:
+● Order confirmation
+● Payment success/failure
+● Delivery/pickup reminders
+● Preorder alerts
+5.10 Fraud & Safety System
+Features:
+● Rule-based fraud detection
+● Transaction hold capability
+● User reporting system
+Examples:
+● Multiple complaints → auto-flag vendor
+● Suspicious transactions → hold funds
+6. Admin Panel
+6.1 Dashboard
+● Total orders
+● Revenue
+● Active vendors
+● Fraud alerts
+6.2 Vendor Management
+● Approve vendors
+● Monitor performance
+● Suspend accounts
+6.3 Product Approval
+● Manual approval queue
+● Reject with reason
+6.4 Fraud Monitoring
+● Flagged users
+● Transaction holds
+● Reports dashboard
+7. User Journeys
+7.1 Customer Journey
+1. Open PWA
+2. Browse/search products
+3. Select product
+4. Choose:
+○ Delivery OR Pickup
+5. Select time slot
+6. Make payment / Cash on Delivery (Only on approved vendors)
+7. Receive order OR scan QR at pickup
+8. Leave review
+7.2 Vendor Journey
+1. Register → KYC
+2. Create shop
+3. Add product
+4. Wait for admin approval
+5. Start receiving orders
+6. Manage:
+○ Delivery
+○ Pickup
+○ Preorders
+7.3 Admin Journey
+1. Login
+2. Review product approvals
+3. Monitor dashboard
+4. Handle reports
+5. Manage vendors
+8. System Architecture
+High-Level Flow:
+PWA (React)
+↓
+API Layer (Node.js)
+↓
+PostgreSQL Database
+↓
+Cloudflare R2 (Images)
+↓
+Razorpay (Payments)
+↓
+AWS Infrastructure (Hosting)
+9. Database Design (High-Level)
+Core Tables:
+● Users
+● Vendors
+● Products
+● Categories
+● Orders
+● Order Items
+● Payments
+● Reviews
+● Preorders
+● Reports
+10. Technology Stack
+Frontend
+● ReactJS
+● Redux Toolkit
+● RTK Query
+● Tailwind CSS
+● shadcn UI
+Backend
+● Node.js (Express)
+Database
+● PostgreSQL
+Infrastructure
+● AWS (EC2 / RDS / S3 alternatives)
+● Cloudflare R2 (image storage)
+PWA
+● Offline support (cart + browsing if possible)
+11. PWA Requirements
+● Mobile-first design
+● Installable app
+● Offline support:
+○ Cache product listings
+○ Save cart locally
+● Push notifications
+12. Security Requirements
+● JWT-based authentication
+● Secure payment handling
+● Encrypted user data
+● QR code validation system
+● Rate limiting APIs
+13. Scalability Plan
+Phase 1:
+● Single region deployment
+Phase 2:
+● Multi-city support
+● Vendor clustering
+Phase 3:
+● Pan-India rollout
+● High availability architecture
+14. Risks & Considerations
+● Fraud from unverified products
+● Delivery inconsistency (vendor-managed)
+● COD misuse
+● Scaling preorder complexity
+16. Conclusion
+Leen Mart is positioned as a flexible, scalable, and vendor-friendly marketplace with strong
+differentiation in:
+● Preorders
+● Hyperlocal commerce
+● Vendor autonomy

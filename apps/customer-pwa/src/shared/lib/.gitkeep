@@ -1,0 +1,2 @@
+Cross-feature helpers: money and IST date formatters, validators, small pure
+utilities. Nothing here may import from a feature.

@@ -1,0 +1,7 @@
+Cross-cutting domain building blocks used by more than one module:
+Entity, AggregateRoot, DomainEvent base types, and shared value objects that do
+not belong in @leen-mart/domain-kit because they are Leen-Mart-specific rather
+than generic.
+
+Nothing here may import from application/, infrastructure/ or interface/, or
+from any framework. ESLint enforces this.

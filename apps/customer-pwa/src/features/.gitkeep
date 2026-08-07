@@ -1,0 +1,16 @@
+Feature slices live here, one directory per user-facing capability
+(catalogue, cart, checkout, orders, preorder, pickup, reviews, auth, profile).
+
+Per SDD 25.3 each feature owns:
+
+  features/<name>/
+    api.ts          RTK Query endpoints injected into the shared baseApi slice
+    components/     presentational + container components
+    hooks/          feature-local hooks
+    types.ts        feature-local types
+
+A feature may import from `shared/`, never from another feature. The ESLint
+config enforces this. Cross-feature needs get lifted into `shared/` or composed
+at the page level.
+
+No feature is implemented in this scaffold by design.

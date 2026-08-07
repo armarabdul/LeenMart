@@ -1,0 +1,52 @@
+import type { PrismaClient } from '@prisma/client';
+import { toUuid, type Uuid } from '@leen-mart/domain-kit';
+import type { UserRepository } from '../../application/ports/user-repository.port.js';
+import { Role } from '../../domain/entities/role.entity.js';
+import { User } from '../../domain/entities/user.entity.js';
+
+interface UserRow {
+  readonly id: string;
+  readonly email: string;
+  readonly passwordHash: string;
+  readonly role: string;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+const toDomain = (row: UserRow): User =>
+  User.reconstitute({
+    id: toUuid(row.id),
+    email: row.email,
+    passwordHash: row.passwordHash,
+    role: Role.fromName(row.role),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  });
+
+/** Maps rows to `User` at the boundary; Prisma types never escape this file (SDD 3.4). */
+export class PrismaUserRepository implements UserRepository {
+  constructor(private readonly prisma: PrismaClient) {}
+
+  async create(user: User): Promise<void> {
+    await this.prisma.user.create({
+      data: {
+        id: user.id,
+        email: user.email,
+        passwordHash: user.passwordHash,
+        role: user.role.name,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      },
+    });
+  }
+
+  async findByEmail(email: string): Promise<User | null> {
+    const row = await this.prisma.user.findFirst({ where: { email, deletedAt: null } });
+    return row ? toDomain(row) : null;
+  }
+
+  async findById(id: Uuid): Promise<User | null> {
+    const row = await this.prisma.user.findFirst({ where: { id, deletedAt: null } });
+    return row ? toDomain(row) : null;
+  }
+}

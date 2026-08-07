@@ -1,0 +1,108 @@
+# ---------------------------------------------------------------------------
+# Local development infrastructure.
+#
+#   pnpm infra:up      start everything
+#   pnpm infra:down    stop
+#   pnpm infra:reset   destroy volumes and start clean
+#
+# The applications are NOT containerised here on purpose: running them natively
+# keeps HMR and the debugger fast. Production images live in api.Dockerfile and
+# web.Dockerfile.
+# ---------------------------------------------------------------------------
+name: leen-mart
+
+services:
+  postgres:
+    # PostGIS from day one: delivery-radius queries are a core requirement
+    # (SDD 6.3 / ASM-17), and adding the extension later means a migration
+    # against a populated database.
+    image: postgis/postgis:16-3.4
+    container_name: leenmart-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: leenmart
+      POSTGRES_PASSWORD: leenmart
+      POSTGRES_DB: leenmart
+      # Deterministic collation so index ordering matches production.
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U leenmart -d leenmart']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    command:
+      - postgres
+      - '-c'
+      - 'log_min_duration_statement=500'
+      - '-c'
+      - 'shared_preload_libraries=pg_stat_statements'
+      - '-c'
+      - 'max_connections=200'
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: leenmart-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    command:
+      - redis-server
+      - '--appendonly'
+      - 'no'
+      - '--maxmemory'
+      - '256mb'
+      - '--maxmemory-policy'
+      - 'allkeys-lru'
+
+  minio:
+    # Stands in for Cloudflare R2 locally: R2 is S3-compatible, so the same
+    # adapter code works against both (SDD 12.1).
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    container_name: leenmart-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: leenmart
+      MINIO_ROOT_PASSWORD: leenmart-dev-secret
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mailpit:
+    # Catches every outbound email in development so nothing can escape to a
+    # real inbox from a developer machine.
+    image: axllent/mailpit:v1.21
+    container_name: leenmart-mailpit
+    restart: unless-stopped
+    ports:
+      - '1025:1025'
+      - '8025:8025'
+    environment:
+      MP_MAX_MESSAGES: 500
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

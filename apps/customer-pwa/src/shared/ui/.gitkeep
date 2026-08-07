@@ -1,0 +1,3 @@
+Design-system components live here, re-exported from the shared packages/ui
+workspace once it exists. Anything used by more than one feature belongs here
+rather than being imported across a feature boundary.

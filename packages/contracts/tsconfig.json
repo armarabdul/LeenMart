@@ -1,0 +1,9 @@
+{
+  "extends": "@leen-mart/config/tsconfig/node.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "."
+  },
+  "include": ["src/**/*", "test/**/*", "*.config.ts"],
+  "exclude": ["node_modules", "dist"]
+}

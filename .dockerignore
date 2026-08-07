@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+**/build
+**/coverage
+**/.turbo
+**/.git
+**/.env
+**/.env.*
+!**/.env.example
+**/*.log
+.docker-data
+docs

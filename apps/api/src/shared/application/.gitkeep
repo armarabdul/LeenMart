@@ -1,0 +1,4 @@
+Cross-cutting application services and ports: UnitOfWork, EventBus, the outbox
+writer, and the transaction boundary helpers every module's use cases depend on.
+
+May import from domain/. May not import an adapter or the HTTP framework.

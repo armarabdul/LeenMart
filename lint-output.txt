@@ -1,0 +1,108 @@
+
+> leen-mart@0.1.0 lint C:\Users\Home\Downloads\leen-mart
+> turbo run lint
+
+turbo 2.3.3
+
+• Packages in scope: @leen-mart/api, @leen-mart/config, @leen-mart/contracts, @leen-mart/customer-pwa, @leen-mart/domain-kit
+• Running lint in 5 packages
+• Remote caching disabled
+@leen-mart/config:lint: cache hit, replaying logs 970c1cffeba6c281
+@leen-mart/config:lint: 
+@leen-mart/config:lint: > @leen-mart/config@0.1.0 lint C:\Users\Home\Downloads\leen-mart\packages\config
+@leen-mart/config:lint: > echo "(config) no lintable sources"
+@leen-mart/config:lint: 
+@leen-mart/config:lint: "(config) no lintable sources"
+@leen-mart/config:build: cache hit, replaying logs 68e4eb40ef438abd
+@leen-mart/config:build: 
+@leen-mart/config:build: > @leen-mart/config@0.1.0 build C:\Users\Home\Downloads\leen-mart\packages\config
+@leen-mart/config:build: > echo "(config) nothing to build — presets are consumed as source"
+@leen-mart/config:build: 
+@leen-mart/config:build: "(config) nothing to build - presets are consumed as source"
+@leen-mart/domain-kit:lint: cache hit, replaying logs 6ae85f584030333c
+@leen-mart/domain-kit:lint: 
+@leen-mart/domain-kit:lint: > @leen-mart/domain-kit@0.1.0 lint C:\Users\Home\Downloads\leen-mart\packages\domain-kit
+@leen-mart/domain-kit:lint: > eslint . --max-warnings=0
+@leen-mart/domain-kit:lint: 
+@leen-mart/contracts:lint: cache hit, replaying logs f3bb3aa49e7d952b
+@leen-mart/contracts:build: cache hit, replaying logs 61375131ac41be08
+@leen-mart/contracts:build: 
+@leen-mart/contracts:build: > @leen-mart/contracts@0.1.0 build C:\Users\Home\Downloads\leen-mart\packages\contracts
+@leen-mart/contracts:build: > tsc -p tsconfig.build.json
+@leen-mart/contracts:build: 
+@leen-mart/contracts:lint: 
+@leen-mart/contracts:lint: > @leen-mart/contracts@0.1.0 lint C:\Users\Home\Downloads\leen-mart\packages\contracts
+@leen-mart/contracts:lint: > eslint . --max-warnings=0
+@leen-mart/contracts:lint: 
+@leen-mart/customer-pwa:lint: cache miss, executing ef44416abb066cba
+@leen-mart/domain-kit:build: cache hit, replaying logs 10ca1d7a7f9b238c
+@leen-mart/domain-kit:build: 
+@leen-mart/domain-kit:build: > @leen-mart/domain-kit@0.1.0 build C:\Users\Home\Downloads\leen-mart\packages\domain-kit
+@leen-mart/domain-kit:build: > tsc -p tsconfig.build.json
+@leen-mart/domain-kit:build: 
+@leen-mart/api:lint: cache miss, executing 33987f7661477351
+@leen-mart/api:lint: 
+@leen-mart/api:lint: > @leen-mart/api@0.1.0 lint C:\Users\Home\Downloads\leen-mart\apps\api
+@leen-mart/api:lint: > eslint . --max-warnings=0
+@leen-mart/api:lint: 
+@leen-mart/customer-pwa:lint: 
+@leen-mart/customer-pwa:lint: > @leen-mart/customer-pwa@0.1.0 lint C:\Users\Home\Downloads\leen-mart\apps\customer-pwa
+@leen-mart/customer-pwa:lint: > eslint . --max-warnings=0
+@leen-mart/customer-pwa:lint: 
+@leen-mart/api:lint: 
+@leen-mart/api:lint: C:\Users\Home\Downloads\leen-mart\apps\api\test\unit\modules\identity\application\fakes.ts
+@leen-mart/api:lint:    2:1  error  '../../../../../src/modules/identity/application/ports/access-token.port.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)              no-restricted-imports
+@leen-mart/api:lint:    7:1  error  '../../../../../src/modules/identity/application/ports/password-hasher.port.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)           no-restricted-imports
+@leen-mart/api:lint:    8:1  error  '../../../../../src/modules/identity/application/ports/refresh-token-hasher.port.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)      no-restricted-imports
+@leen-mart/api:lint:    9:1  error  '../../../../../src/modules/identity/application/ports/refresh-token-repository.port.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)  no-restricted-imports
+@leen-mart/api:lint:   10:1  error  '../../../../../src/modules/identity/application/ports/user-repository.port.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)           no-restricted-imports
+@leen-mart/api:lint:   11:1  error  '../../../../../src/modules/identity/domain/entities/refresh-token.entity.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)             no-restricted-imports
+@leen-mart/api:lint:   12:1  error  '../../../../../src/modules/identity/domain/entities/user.entity.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)                      no-restricted-imports
+@leen-mart/api:lint: 
+@leen-mart/api:lint: C:\Users\Home\Downloads\leen-mart\apps\api\test\unit\modules\identity\application\login.use-case.test.ts
+@leen-mart/api:lint:   3:1  error  '../../../../../src/modules/identity/application/services/session-issuer.service.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)       no-restricted-imports
+@leen-mart/api:lint:   4:1  error  '../../../../../src/modules/identity/application/use-cases/login.use-case.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)              no-restricted-imports
+@leen-mart/api:lint:   5:1  error  '../../../../../src/modules/identity/application/use-cases/register-customer.use-case.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)  no-restricted-imports
+@leen-mart/api:lint:   6:1  error  '../../../../../src/modules/identity/domain/errors/identity-errors.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)                     no-restricted-imports
+@leen-mart/api:lint: 
+@leen-mart/api:lint: C:\Users\Home\Downloads\leen-mart\apps\api\test\unit\modules\identity\application\logout.use-case.test.ts
+@leen-mart/api:lint:   3:1  error  '../../../../../src/modules/identity/application/services/session-issuer.service.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)       no-restricted-imports
+@leen-mart/api:lint:   4:1  error  '../../../../../src/modules/identity/application/use-cases/logout.use-case.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)             no-restricted-imports
+@leen-mart/api:lint:   5:1  error  '../../../../../src/modules/identity/application/use-cases/refresh-session.use-case.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)    no-restricted-imports
+@leen-mart/api:lint:   6:1  error  '../../../../../src/modules/identity/application/use-cases/register-customer.use-case.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)  no-restricted-imports
+@leen-mart/api:lint:   7:1  error  '../../../../../src/modules/identity/domain/errors/identity-errors.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)                     no-restricted-imports
+@leen-mart/api:lint: 
+@leen-mart/api:lint: C:\Users\Home\Downloads\leen-mart\apps\api\test\unit\modules\identity\application\refresh-session.use-case.test.ts
+@leen-mart/api:lint:   3:1  error  '../../../../../src/modules/identity/application/services/session-issuer.service.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)       no-restricted-imports
+@leen-mart/api:lint:   4:1  error  '../../../../../src/modules/identity/application/use-cases/refresh-session.use-case.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)    no-restricted-imports
+@leen-mart/api:lint:   5:1  error  '../../../../../src/modules/identity/application/use-cases/register-customer.use-case.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)  no-restricted-imports
+@leen-mart/api:lint:   6:1  error  '../../../../../src/modules/identity/domain/errors/identity-errors.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)                     no-restricted-imports
+@leen-mart/api:lint: 
+@leen-mart/api:lint: C:\Users\Home\Downloads\leen-mart\apps\api\test\unit\modules\identity\application\register-customer.use-case.test.ts
+@leen-mart/api:lint:   3:1  error  '../../../../../src/modules/identity/application/services/session-issuer.service.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)       no-restricted-imports
+@leen-mart/api:lint:   4:1  error  '../../../../../src/modules/identity/application/use-cases/register-customer.use-case.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)  no-restricted-imports
+@leen-mart/api:lint:   5:1  error  '../../../../../src/modules/identity/domain/errors/identity-errors.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)                     no-restricted-imports
+@leen-mart/api:lint: 
+@leen-mart/api:lint: C:\Users\Home\Downloads\leen-mart\apps\api\test\unit\modules\identity\domain\refresh-token.entity.test.ts
+@leen-mart/api:lint:   3:1  error  '../../../../../src/modules/identity/domain/entities/refresh-token.entity.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)  no-restricted-imports
+@leen-mart/api:lint: 
+@leen-mart/api:lint: C:\Users\Home\Downloads\leen-mart\apps\api\test\unit\modules\identity\domain\role.entity.test.ts
+@leen-mart/api:lint:   2:1  error  '../../../../../src/modules/identity/domain/entities/role.entity.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)  no-restricted-imports
+@leen-mart/api:lint: 
+@leen-mart/api:lint: C:\Users\Home\Downloads\leen-mart\apps\api\test\unit\modules\identity\domain\user.entity.test.ts
+@leen-mart/api:lint:   3:1  error  '../../../../../src/modules/identity/domain/entities/role.entity.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)  no-restricted-imports
+@leen-mart/api:lint:   4:1  error  '../../../../../src/modules/identity/domain/entities/user.entity.js' import is restricted from being used by a pattern. Cross-module access must go through the module index.ts published interface (SDD 5.1)  no-restricted-imports
+@leen-mart/api:lint: 
+@leen-mart/api:lint: ✖ 27 problems (27 errors, 0 warnings)
+@leen-mart/api:lint: 
+@leen-mart/api:lint:  ELIFECYCLE  Command failed with exit code 1.
+@leen-mart/api:lint: ERROR: command finished with error: command (C:\Users\Home\Downloads\leen-mart\apps\api) C:\Program Files\nodejs\pnpm.CMD run lint exited (1)
+@leen-mart/api#lint: command (C:\Users\Home\Downloads\leen-mart\apps\api) C:\Program Files\nodejs\pnpm.CMD run lint exited (1)
+
+ Tasks:    6 successful, 8 total
+Cached:    6 cached, 8 total
+  Time:    6.478s 
+Failed:    @leen-mart/api#lint
+
+ ERROR  run failed: command  exited (1)
+ ELIFECYCLE  Command failed with exit code 1.
