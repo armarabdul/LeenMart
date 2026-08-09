@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { toUuid } from '@leen-mart/domain-kit';
 import { RefreshToken } from '../../../../../src/modules/identity/domain/entities/refresh-token.entity.js';
+import { toSessionId } from '../../../../../src/modules/identity/domain/value-objects/session-id.value-object.js';
+import { toUserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 
-const tokenId = toUuid('00000000-0000-7000-8000-000000000010');
-const userId = toUuid('00000000-0000-7000-8000-000000000011');
-const replacementId = toUuid('00000000-0000-7000-8000-000000000012');
+const tokenId = toSessionId('00000000-0000-7000-8000-000000000010');
+const userId = toUserId('00000000-0000-7000-8000-000000000011');
+const replacementId = toSessionId('00000000-0000-7000-8000-000000000012');
 
 const issue = (now: Date, expiresAt: Date): RefreshToken =>
   RefreshToken.issue({ id: tokenId, userId, tokenHash: 'hash', expiresAt, now });

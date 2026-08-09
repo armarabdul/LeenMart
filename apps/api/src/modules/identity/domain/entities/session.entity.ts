@@ -1,12 +1,13 @@
-import type { Uuid } from '@leen-mart/domain-kit';
+import type { SessionId } from '../value-objects/session-id.value-object.js';
+import type { UserId } from '../value-objects/user-id.value-object.js';
 
 export interface SessionProps {
-  readonly id: Uuid;
-  readonly userId: Uuid;
+  readonly id: SessionId;
+  readonly userId: UserId;
   readonly tokenHash: string;
   readonly expiresAt: Date;
   readonly revokedAt: Date | null;
-  readonly replacedByTokenId: Uuid | null;
+  readonly replacedByTokenId: SessionId | null;
   readonly createdAt: Date;
 }
 
@@ -21,16 +22,17 @@ export interface SessionProps {
  * and, when it died because it was exchanged for a new one, which token
  * replaced it. That distinction is what lets a reused, already-rotated token
  * be recognised as token theft rather than an ordinary expiry.
- *
- * `id`/`userId` remain the generic `Uuid` rather than `SessionId`/`UserId`
- * for now: existing application/infrastructure code constructs this entity
- * with plain `Uuid` values, and this milestone is domain-only — retyping
- * these would ripple into layers this milestone doesn't touch.
  */
 export class Session {
   private constructor(private readonly props: SessionProps) {}
 
-  static issue(props: { id: Uuid; userId: Uuid; tokenHash: string; expiresAt: Date; now: Date }): Session {
+  static issue(props: {
+    id: SessionId;
+    userId: UserId;
+    tokenHash: string;
+    expiresAt: Date;
+    now: Date;
+  }): Session {
     return new Session({
       id: props.id,
       userId: props.userId,
@@ -46,11 +48,11 @@ export class Session {
     return new Session(props);
   }
 
-  get id(): Uuid {
+  get id(): SessionId {
     return this.props.id;
   }
 
-  get userId(): Uuid {
+  get userId(): UserId {
     return this.props.userId;
   }
 
@@ -66,7 +68,7 @@ export class Session {
     return this.props.revokedAt;
   }
 
-  get replacedByTokenId(): Uuid | null {
+  get replacedByTokenId(): SessionId | null {
     return this.props.replacedByTokenId;
   }
 
@@ -82,7 +84,7 @@ export class Session {
     return !this.isExpired(now) && !this.isRevoked();
   }
 
-  revoke(now: Date, replacedByTokenId: Uuid | null = null): Session {
+  revoke(now: Date, replacedByTokenId: SessionId | null = null): Session {
     return new Session({ ...this.props, revokedAt: now, replacedByTokenId });
   }
 }

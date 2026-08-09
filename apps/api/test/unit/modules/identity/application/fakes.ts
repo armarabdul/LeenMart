@@ -1,4 +1,5 @@
-import { NullLogger, type Uuid } from '@leen-mart/domain-kit';
+import { NullLogger } from '@leen-mart/domain-kit';
+import type { SessionId } from '../../../../../src/modules/identity/domain/value-objects/session-id.value-object.js';
 import type { UserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 import type {
   AccessTokenClaims,
@@ -33,7 +34,7 @@ export class InMemoryUserRepository implements UserRepository {
 }
 
 export class InMemoryRefreshTokenRepository implements RefreshTokenRepository {
-  private readonly byId = new Map<Uuid, RefreshToken>();
+  private readonly byId = new Map<SessionId, RefreshToken>();
 
   create(token: RefreshToken): Promise<void> {
     this.byId.set(token.id, token);

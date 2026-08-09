@@ -1,6 +1,7 @@
-import { type Clock, type IdGenerator, toUuid, type Uuid } from '@leen-mart/domain-kit';
+import type { Clock, IdGenerator } from '@leen-mart/domain-kit';
 import { RefreshToken } from '../../domain/entities/refresh-token.entity.js';
 import type { User } from '../../domain/entities/user.entity.js';
+import { toSessionId, type SessionId } from '../../domain/value-objects/session-id.value-object.js';
 import type { AccessTokenService } from '../ports/access-token.port.js';
 import type { RefreshTokenHasher } from '../ports/refresh-token-hasher.port.js';
 import type { RefreshTokenRepository } from '../ports/refresh-token-repository.port.js';
@@ -12,7 +13,7 @@ export interface AuthSession {
   readonly refreshToken: string;
   readonly refreshTokenExpiresAt: Date;
   /** Internal id of the persisted refresh token, used to link rotation. Not exposed on the wire. */
-  readonly refreshTokenId: Uuid;
+  readonly refreshTokenId: SessionId;
 }
 
 export interface SessionIssuerDeps {
@@ -50,12 +51,8 @@ export class SessionIssuer {
     const rawRefreshToken = refreshTokenHasher.generate();
     const refreshTokenExpiresAt = new Date(now.getTime() + refreshTtlDays * MS_PER_DAY);
     const refreshTokenEntity = RefreshToken.issue({
-      id: idGenerator.generate(),
-      // Session.userId is not migrated in this step (Milestone 2 backlog
-      // item 1, remaining half) — user.id is now UserId, so it needs an
-      // explicit, safe re-validation back down to the generic Uuid Session
-      // still expects. This seam disappears once Session's own migration lands.
-      userId: toUuid(user.id),
+      id: toSessionId(idGenerator.generate()),
+      userId: user.id,
       tokenHash: refreshTokenHasher.hash(rawRefreshToken),
       expiresAt: refreshTokenExpiresAt,
       now,

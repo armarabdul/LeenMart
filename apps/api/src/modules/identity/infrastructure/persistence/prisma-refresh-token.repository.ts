@@ -1,7 +1,8 @@
 import type { PrismaClient } from '@prisma/client';
-import { toUuid } from '@leen-mart/domain-kit';
 import type { RefreshTokenRepository } from '../../application/ports/refresh-token-repository.port.js';
 import { RefreshToken } from '../../domain/entities/refresh-token.entity.js';
+import { toSessionId } from '../../domain/value-objects/session-id.value-object.js';
+import { toUserId } from '../../domain/value-objects/user-id.value-object.js';
 
 interface RefreshTokenRow {
   readonly id: string;
@@ -15,12 +16,12 @@ interface RefreshTokenRow {
 
 const toDomain = (row: RefreshTokenRow): RefreshToken =>
   RefreshToken.reconstitute({
-    id: toUuid(row.id),
-    userId: toUuid(row.userId),
+    id: toSessionId(row.id),
+    userId: toUserId(row.userId),
     tokenHash: row.tokenHash,
     expiresAt: row.expiresAt,
     revokedAt: row.revokedAt,
-    replacedByTokenId: row.replacedById ? toUuid(row.replacedById) : null,
+    replacedByTokenId: row.replacedById ? toSessionId(row.replacedById) : null,
     createdAt: row.createdAt,
   });
 
