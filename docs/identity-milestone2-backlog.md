@@ -24,6 +24,7 @@ infrastructure, not a type-only change, and this milestone was scoped to
 domain-only with the build required to stay green throughout.
 
 **Files that will be affected in Milestone 2**:
+
 - `application/ports/user-repository.port.ts` — `findById(id: Uuid)` → `UserId`
 - `application/ports/access-token.port.ts` — `AccessTokenClaims.sub: Uuid` → `UserId`
 - `application/services/session-issuer.service.ts` — `user.id` used at 2 call
@@ -53,13 +54,14 @@ production call site that constructs a `User` without it
 (`prisma-user.repository.ts`'s `toDomain()`), and fixing that properly requires
 a Prisma migration (new column) plus repository read/write logic — both
 infrastructure/Prisma work, explicitly out of scope this milestone. A
-stopgap default *inside the repository* was considered and rejected for this
+stopgap default _inside the repository_ was considered and rejected for this
 milestone too: it still means editing `prisma-user.repository.ts`, and you
 directed that compatibility defaults do not belong in repositories during
 Milestone 1 either — the persistence layer should own a real column before the
 domain treats status as always-present.
 
 **Files that will be affected in Milestone 2**:
+
 - `apps/api/prisma/schema.prisma` — add a `status` column to `User` (with a migration)
 - `infrastructure/persistence/prisma-user.repository.ts` — `toDomain()` must read the new column instead of omitting the field
 - `domain/entities/user.entity.ts` — `status` becomes a required field on `UserProps`; drop the `?? UserStatus.ACTIVE` default in the getter
@@ -82,9 +84,10 @@ invariants first, orchestration and persistence later.
 
 **Files that will be affected in Milestone 2 (or a dedicated persistence
 milestone)**:
+
 - `apps/api/prisma/schema.prisma` — new `VendorProfile` and `Otp` models
 - New `infrastructure/persistence/prisma-vendor-profile.repository.ts` and `prisma-otp.repository.ts`
-- New `application/ports/vendor-repository.port.ts` and `otp-repository.port.ts` (see item 5 below — repository interfaces for these do land in Milestone 1, Step 5; only the *implementations* are deferred)
+- New `application/ports/vendor-repository.port.ts` and `otp-repository.port.ts` (see item 5 below — repository interfaces for these do land in Milestone 1, Step 5; only the _implementations_ are deferred)
 - New application use cases: vendor registration/onboarding, OTP issuance/verification, KYC approval workflow
 
 **Owning milestone**: Milestone 2 (repository implementations, Prisma models); application use cases may land in a later milestone still, once the auth-strategy work below is scoped.
@@ -105,6 +108,7 @@ relocation with no behavioral upside, deferred to avoid unnecessary churn
 while other things were still settling.
 
 **Files that will be affected whenever this is revisited**:
+
 - `domain/entities/role.entity.ts` → `domain/value-objects/role.value-object.ts`
 - `domain/entities/user.entity.ts` — import path update
 - Once Milestone 2's infrastructure changes land: `infrastructure/persistence/prisma-user.repository.ts` — import path update
@@ -126,6 +130,7 @@ account legitimately hold more than one role simultaneously?) that wasn't
 resolved, only postponed.
 
 **Files that will be affected if/when this changes**:
+
 - `domain/entities/user.entity.ts` — `role: Role` → `roles: ReadonlySet<Role>` (or similar), plus the "at least one role" invariant enforced in `register()`/mutation methods
 - Every application/infrastructure file that reads `user.role` (see the file list in item 1 — largely the same surface)
 - `apps/api/prisma/schema.prisma` — `role Role` column would need to become a join table or array column
@@ -150,10 +155,11 @@ etc.), which would break `prisma-user.repository.ts`'s `create()` method
 — an infrastructure/Prisma change, out of scope this milestone. Decision #8
 ("keep the design open for future authentication strategies without
 implementing them yet") was satisfied by ensuring nothing in this milestone's
-model *precludes* this later (the `PhoneNumber` value object already exists,
+model _precludes_ this later (the `PhoneNumber` value object already exists,
 unused), not by implementing it now.
 
 **Files that will be affected in Milestone 2+**:
+
 - `apps/api/prisma/schema.prisma` — `email` becomes nullable; new `phone` column (unique, nullable-until-verified)
 - `domain/entities/user.entity.ts` — `email`/`passwordHash` become optional; new `phone?: PhoneNumber` field; a new factory (e.g. a phone-based registration path) alongside the existing `register()`
 - `infrastructure/persistence/prisma-user.repository.ts` — `create()`/`toDomain()` updated for nullable columns
@@ -175,6 +181,7 @@ vendor or admin account into existence yet.
 model the domain," reaffirmed by decision #8.
 
 **Files that will be affected**:
+
 - New application use cases for vendor registration and admin login/MFA
 - `infrastructure/security/` — an MFA-capable token/verification service (new)
 - `apps/api/prisma/schema.prisma` — MFA secret storage for admins
@@ -192,7 +199,7 @@ per the milestone's explicit spec. Three of these — `UserRepository`,
 `RefreshTokenRepository`), and `PasswordHasher` — describe the same capability
 as an interface that already exists in `application/ports/` for the currently
 wired-up use cases. `TokenGenerator` overlaps partially with the existing
-`RefreshTokenHasher` port (which bundles generation *and* hashing; the new
+`RefreshTokenHasher` port (which bundles generation _and_ hashing; the new
 domain interface is generation-only, deliberately narrower). No file was
 renamed, removed, or converted to a re-export this time — unlike the
 `Session`/`RefreshToken` resolution, the method signatures actually differ
@@ -207,13 +214,14 @@ satisfy both (an infrastructure-layer edit) — both explicitly out of scope
 for a domain-only milestone.
 
 **Files that will be affected in Milestone 2**:
-- `application/ports/user-repository.port.ts` — reconcile with `domain/repositories/user.repository.ts`
-- `application/ports/refresh-token-repository.port.ts` — reconcile with `domain/repositories/session.repository.ts`
-- `application/ports/password-hasher.port.ts` — reconcile with `domain/services/password-hasher.service.ts` (note the `PasswordHash` vs. raw `string` difference)
-- `application/ports/refresh-token-hasher.port.ts` — reconcile with `domain/services/token-generator.service.ts` (note the generation/hashing split)
-- `infrastructure/persistence/prisma-user.repository.ts`, `prisma-refresh-token.repository.ts`, `infrastructure/security/argon2-password-hasher.ts` — whichever interface each ends up implementing
 
-**Owning milestone**: Milestone 2, ideally the same pass as item 1 (branded IDs) since it touches the same files.
+- ~~`application/ports/user-repository.port.ts` — reconcile with `domain/repositories/user.repository.ts`~~ **Done** (Milestone 2 Step 1): now a compatibility re-export of the domain interface; structurally identical, no caller changes needed.
+- ~~`application/ports/refresh-token-repository.port.ts` — reconcile with `domain/repositories/session.repository.ts`~~ **Done** (Milestone 2 Step 2): now a compatibility re-export (`SessionRepository as RefreshTokenRepository`); structurally identical, no caller changes needed.
+- `application/ports/password-hasher.port.ts` — reconcile with `domain/services/password-hasher.service.ts` (note the `PasswordHash` vs. raw `string` difference) — **still pending**, not structurally identical (see below), requires real infrastructure/use-case edits.
+- `application/ports/refresh-token-hasher.port.ts` — reconcile with `domain/services/token-generator.service.ts` (note the generation/hashing split) — **still pending**.
+- `infrastructure/persistence/prisma-user.repository.ts`, `prisma-refresh-token.repository.ts`, `infrastructure/security/argon2-password-hasher.ts` — whichever interface each ends up implementing — **still pending**.
+
+**Owning milestone**: Milestone 2. The two repository re-exports (`UserRepository`, `SessionRepository`/`RefreshTokenRepository`) are complete. `PasswordHasher` and `TokenGenerator`/`RefreshTokenHasher` remain — unlike the repositories, their method signatures genuinely differ (value objects vs. raw primitives, bundled vs. split responsibilities), so reconciling them means editing infrastructure and use-case code, not just re-exporting a type.
 
 ---
 
@@ -235,6 +243,7 @@ milestone's file scope was `apps/api/src/modules/identity/domain/` only, so
 the move to `packages/domain-kit` wasn't done here.
 
 **Files that will be affected**:
+
 - `packages/domain-kit/src/events/domain-event.ts` (new location)
 - `packages/domain-kit/src/index.ts` — export it
 - `modules/identity/domain/events/domain-event.ts` — deleted, replaced by the domain-kit import
@@ -273,15 +282,15 @@ existing call site in this codebase gets it).
 
 ## Summary table
 
-| # | Item | Owning milestone |
-|---|---|---|
-| 1 | Branded IDs on `User`/`Session` throughout app/infra | Milestone 2 |
-| 2 | `User.status` mandatory + real persistence column | Milestone 2 |
-| 3 | Persistence + use cases for `Session`/`VendorProfile`/`Otp` | Milestone 2 (partial), later for use cases |
-| 4 | `Role` relocation to `value-objects/` | Unscheduled (opportunistic, likely alongside #1/#2) |
-| 5 | Single `Role` → role collection | Unscheduled (needs product decision) |
-| 6 | Optional email / phone-primary customer auth | Milestone 2 (schema+domain), later (use case) |
-| 7 | Vendor registration + Admin MFA | Unscheduled (likely its own milestone) |
-| 8 | Reconcile `domain/{repositories,services}` with `application/ports` | Milestone 2 |
-| 9 | Move `DomainEvent<TType>` to `@leen-mart/domain-kit` | Unscheduled (when a 2nd bounded context needs it) |
-| 10 | Remove/simplify the pure-re-export `clock.service.ts` | Unscheduled (opportunistic, alongside #8) |
+| #   | Item                                                                | Owning milestone                                    |
+| --- | ------------------------------------------------------------------- | --------------------------------------------------- |
+| 1   | Branded IDs on `User`/`Session` throughout app/infra                | Milestone 2                                         |
+| 2   | `User.status` mandatory + real persistence column                   | Milestone 2                                         |
+| 3   | Persistence + use cases for `Session`/`VendorProfile`/`Otp`         | Milestone 2 (partial), later for use cases          |
+| 4   | `Role` relocation to `value-objects/`                               | Unscheduled (opportunistic, likely alongside #1/#2) |
+| 5   | Single `Role` → role collection                                     | Unscheduled (needs product decision)                |
+| 6   | Optional email / phone-primary customer auth                        | Milestone 2 (schema+domain), later (use case)       |
+| 7   | Vendor registration + Admin MFA                                     | Unscheduled (likely its own milestone)              |
+| 8   | Reconcile `domain/{repositories,services}` with `application/ports` | Milestone 2                                         |
+| 9   | Move `DomainEvent<TType>` to `@leen-mart/domain-kit`                | Unscheduled (when a 2nd bounded context needs it)   |
+| 10  | Remove/simplify the pure-re-export `clock.service.ts`               | Unscheduled (opportunistic, alongside #8)           |
