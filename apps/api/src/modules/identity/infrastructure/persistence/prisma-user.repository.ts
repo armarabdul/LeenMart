@@ -4,12 +4,15 @@ import type { UserRepository } from '../../application/ports/user-repository.por
 import { Role } from '../../domain/value-objects/role.value-object.js';
 import { User } from '../../domain/entities/user.entity.js';
 import { PasswordHash } from '../../domain/value-objects/password-hash.value-object.js';
+import { PhoneNumber } from '../../domain/value-objects/phone-number.value-object.js';
 import { UserStatus } from '../../domain/value-objects/user-status.value-object.js';
 
 interface UserRow {
   readonly id: string;
-  readonly email: string;
-  readonly passwordHash: string;
+  readonly email: string | null;
+  readonly passwordHash: string | null;
+  readonly phone: string | null;
+  readonly phoneVerifiedAt: Date | null;
   readonly role: string;
   readonly status: string;
   readonly createdAt: Date;
@@ -19,8 +22,10 @@ interface UserRow {
 const toDomain = (row: UserRow): User =>
   User.reconstitute({
     id: toUserId(row.id),
-    email: row.email,
-    passwordHash: PasswordHash.create(row.passwordHash),
+    ...(row.email ? { email: row.email } : {}),
+    ...(row.passwordHash ? { passwordHash: PasswordHash.create(row.passwordHash) } : {}),
+    ...(row.phone ? { phone: PhoneNumber.create(row.phone) } : {}),
+    phoneVerifiedAt: row.phoneVerifiedAt,
     role: Role.fromName(row.role),
     status: UserStatus.fromName(row.status),
     createdAt: row.createdAt,
@@ -35,8 +40,10 @@ export class PrismaUserRepository implements UserRepository {
     await this.prisma.user.create({
       data: {
         id: user.id,
-        email: user.email,
-        passwordHash: user.passwordHash.value,
+        email: user.email ?? null,
+        passwordHash: user.passwordHash?.value ?? null,
+        phone: user.phone?.value ?? null,
+        phoneVerifiedAt: user.phoneVerifiedAt,
         role: user.role.name,
         status: user.status.name,
         createdAt: user.createdAt,
@@ -47,6 +54,13 @@ export class PrismaUserRepository implements UserRepository {
 
   async findByEmail(email: string): Promise<User | null> {
     const row = await this.prisma.user.findFirst({ where: { email, deletedAt: null } });
+    return row ? toDomain(row) : null;
+  }
+
+  async findByPhone(phone: PhoneNumber): Promise<User | null> {
+    const row = await this.prisma.user.findFirst({
+      where: { phone: phone.value, deletedAt: null },
+    });
     return row ? toDomain(row) : null;
   }
 

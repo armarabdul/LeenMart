@@ -1,13 +1,17 @@
 import type { UserId } from '../value-objects/user-id.value-object.js';
 import { Role } from '../value-objects/role.value-object.js';
 import type { PasswordHash } from '../value-objects/password-hash.value-object.js';
+import type { PhoneNumber } from '../value-objects/phone-number.value-object.js';
 import { UserStatus } from '../value-objects/user-status.value-object.js';
 import { AccountLockedError, AccountSuspendedError } from '../errors/identity-errors.js';
 
 export interface UserProps {
   readonly id: UserId;
-  readonly email: string;
-  readonly passwordHash: PasswordHash;
+  /** Optional: a customer may register with either email+password or phone+OTP (SDD 7.1). */
+  readonly email?: string;
+  readonly passwordHash?: PasswordHash;
+  readonly phone?: PhoneNumber;
+  readonly phoneVerifiedAt?: Date | null;
   readonly role: Role;
   readonly status: UserStatus;
   readonly createdAt: Date;
@@ -35,6 +39,19 @@ export class User {
     });
   }
 
+  /** Phone+OTP sign-up (SDD 7.1's primary customer path). Unverified until `verifyPhone()`. */
+  static registerWithPhone(props: { id: UserId; phone: PhoneNumber; now: Date }): User {
+    return new User({
+      id: props.id,
+      phone: props.phone,
+      phoneVerifiedAt: null,
+      role: Role.CUSTOMER,
+      status: UserStatus.PENDING,
+      createdAt: props.now,
+      updatedAt: props.now,
+    });
+  }
+
   /** Rehydrates a User from persisted state. Never applies registration defaults. */
   static reconstitute(props: UserProps): User {
     return new User(props);
@@ -44,12 +61,20 @@ export class User {
     return this.props.id;
   }
 
-  get email(): string {
+  get email(): string | undefined {
     return this.props.email;
   }
 
-  get passwordHash(): PasswordHash {
+  get passwordHash(): PasswordHash | undefined {
     return this.props.passwordHash;
+  }
+
+  get phone(): PhoneNumber | undefined {
+    return this.props.phone;
+  }
+
+  get phoneVerifiedAt(): Date | null {
+    return this.props.phoneVerifiedAt ?? null;
   }
 
   get role(): Role {
@@ -83,6 +108,27 @@ export class User {
       throw new AccountLockedError();
     }
     return new User({ ...this.props, status: UserStatus.ACTIVE, updatedAt: now });
+  }
+
+  /**
+   * Records a successful OTP verification and activates the account in one
+   * step — the same suspended/locked guard as `activate()`, since a phone
+   * check must not be able to reactivate an account that was deliberately
+   * shut out.
+   */
+  verifyPhone(now: Date): User {
+    if (this.status.equals(UserStatus.SUSPENDED)) {
+      throw new AccountSuspendedError();
+    }
+    if (this.status.equals(UserStatus.LOCKED)) {
+      throw new AccountLockedError();
+    }
+    return new User({
+      ...this.props,
+      phoneVerifiedAt: now,
+      status: UserStatus.ACTIVE,
+      updatedAt: now,
+    });
   }
 
   suspend(now: Date): User {

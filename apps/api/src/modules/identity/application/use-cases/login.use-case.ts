@@ -23,7 +23,10 @@ export class LoginUseCase {
     const { userRepository, passwordHasher, sessionIssuer, logger } = this.deps;
 
     const user = await userRepository.findByEmail(input.email);
-    if (!user) {
+    if (!user?.passwordHash) {
+      // Covers both an unknown email and a phone-registered account with no
+      // password set yet — identical response either way (SEC-15: this must
+      // never become an account-enumeration oracle).
       logger.warn({ email: input.email }, 'Login failed: unknown email');
       throw new InvalidCredentialsError();
     }

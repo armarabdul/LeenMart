@@ -31,7 +31,7 @@ export const logoutRequestSchema = z
 
 export const authUserSchema = z.object({
   id: uuidSchema,
-  email: emailSchema,
+  email: emailSchema.optional(),
   role: roleSchema,
 });
 

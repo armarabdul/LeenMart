@@ -1,6 +1,7 @@
 import { NullLogger } from '@leen-mart/domain-kit';
 import type { SessionId } from '../../../../../src/modules/identity/domain/value-objects/session-id.value-object.js';
 import type { UserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
+import type { PhoneNumber } from '../../../../../src/modules/identity/domain/value-objects/phone-number.value-object.js';
 import type {
   AccessTokenClaims,
   AccessTokenService,
@@ -25,6 +26,13 @@ export class InMemoryUserRepository implements UserRepository {
   findByEmail(email: string): Promise<User | null> {
     for (const user of this.byId.values()) {
       if (user.email === email) return Promise.resolve(user);
+    }
+    return Promise.resolve(null);
+  }
+
+  findByPhone(phone: PhoneNumber): Promise<User | null> {
+    for (const user of this.byId.values()) {
+      if (user.phone?.equals(phone)) return Promise.resolve(user);
     }
     return Promise.resolve(null);
   }
