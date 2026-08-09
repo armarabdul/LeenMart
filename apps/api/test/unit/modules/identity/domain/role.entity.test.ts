@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Role } from '../../../../../src/modules/identity/domain/entities/role.entity.js';
+import { Role } from '../../../../../src/modules/identity/domain/value-objects/role.value-object.js';
 
 describe('Role', () => {
   it('exposes the three fixed platform roles', () => {

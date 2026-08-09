@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { toUserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 import { PasswordHash } from '../../../../../src/modules/identity/domain/value-objects/password-hash.value-object.js';
 import { UserStatus } from '../../../../../src/modules/identity/domain/value-objects/user-status.value-object.js';
-import { Role } from '../../../../../src/modules/identity/domain/entities/role.entity.js';
+import { Role } from '../../../../../src/modules/identity/domain/value-objects/role.value-object.js';
 import { User } from '../../../../../src/modules/identity/domain/entities/user.entity.js';
 
 const userId = toUserId('00000000-0000-7000-8000-000000000001');
