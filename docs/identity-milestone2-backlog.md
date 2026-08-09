@@ -221,10 +221,44 @@ for a domain-only milestone.
 - ~~`application/ports/user-repository.port.ts` — reconcile with `domain/repositories/user.repository.ts`~~ **Done** (Milestone 2 Step 1): now a compatibility re-export of the domain interface; structurally identical, no caller changes needed.
 - ~~`application/ports/refresh-token-repository.port.ts` — reconcile with `domain/repositories/session.repository.ts`~~ **Done** (Milestone 2 Step 2): now a compatibility re-export (`SessionRepository as RefreshTokenRepository`); structurally identical, no caller changes needed.
 - ~~`application/ports/password-hasher.port.ts` — reconcile with `domain/services/password-hasher.service.ts`~~ **Done** (Milestone 2 Step 6): unlike the repositories, this was genuinely not structurally identical (`PasswordHash` vs. raw `string`), so it was reconciled by _adoption_ rather than re-export — the domain contract became canonical, and every caller was migrated to it, not aliased around. See the new subsection below.
-- `application/ports/refresh-token-hasher.port.ts` — reconcile with `domain/services/token-generator.service.ts` (note the generation/hashing split) — **still pending**.
-- `infrastructure/persistence/prisma-refresh-token.repository.ts` — whichever interface it ends up implementing for `RefreshTokenHasher`/`TokenGenerator` — **still pending**. (`prisma-user.repository.ts` and `argon2-password-hasher.ts` are done, see below.)
+- ~~`application/ports/refresh-token-hasher.port.ts` — reconcile with `domain/services/token-generator.service.ts`~~ **Done** (Milestone 2 Step 7): unlike `PasswordHasher`, this did _not_ need a full-adoption migration — see 8b below.
 
-**Owning milestone**: Milestone 2. The two repository re-exports (`UserRepository`, `SessionRepository`/`RefreshTokenRepository`) and the `PasswordHasher` reconciliation are complete. `TokenGenerator`/`RefreshTokenHasher` remains — its method signatures genuinely differ (bundled generation+hashing vs. split responsibilities), so reconciling it will mean editing infrastructure and use-case code, not just re-exporting a type — the same shape of work `PasswordHasher` just went through.
+**Owning milestone**: Milestone 2. All four reconciliations under this item are now complete: the two repository re-exports (Steps 1–2), `PasswordHasher` (Step 6, full adoption), and `TokenGenerator`/`TokenHasher`/`RefreshTokenHasher` (Step 7, split + compatibility alias). Item 8 is closed.
+
+### 8b. `TokenGenerator`/`RefreshTokenHasher` reconciliation — resolution (Milestone 2 Step 7)
+
+Chosen resolution differed deliberately from `PasswordHasher`'s: rather than
+picking one existing interface as canonical, the bundled application-layer
+`RefreshTokenHasher` (`generate()` + `hash()` in one interface) was **split**
+into two narrower canonical domain contracts, matching how the two
+operations are actually semantically distinct (a refresh token is already
+256 bits of randomness — hashing it for storage needs no `verify` method the
+way a low-entropy password does, since lookups happen by re-hashing and
+querying, not by comparison):
+
+- `domain/services/token-generator.service.ts` — already existed
+  (`generate(): string`), adopted as-is, unchanged.
+- `domain/services/token-hasher.service.ts` — **new**, minimal
+  (`hash(rawToken: string): string`), added only because the existing
+  `RefreshTokenHasher` genuinely bundles hashing with generation and
+  needed a real hashing-only counterpart to split against — not spun up
+  speculatively.
+- `application/ports/refresh-token-hasher.port.ts` — `RefreshTokenHasher` is
+  now `export type RefreshTokenHasher = TokenGenerator & TokenHasher`, an
+  intersection re-export rather than the previous freestanding interface.
+  This resolved structurally identically to the old bundled shape (same two
+  method signatures), so **every existing caller needed zero changes**:
+  `CryptoRefreshTokenHasher`, `SessionIssuer`, `RefreshSessionUseCase`,
+  `LogoutUseCase`, `identity.module.ts`, and every test fake/test file all
+  compiled and passed unmodified. This is different from `PasswordHasher`
+  (Step 6), where the return-type change (`string → PasswordHash`) genuinely
+  propagated through callers — here, both domain contracts still deal in
+  plain `string`, so there was no representation change to propagate, only
+  an organizational one.
+
+**No plaintext token is ever stored** — unaffected by this step; the
+generate → return raw → hash → persist-hash-only flow is identical to
+before, confirmed unchanged by the full identity integration test suite.
 
 ### 8a. `PasswordHasher` reconciliation — resolution (Milestone 2 Step 6)
 
@@ -355,16 +389,16 @@ calls these methods.
 
 ## Summary table
 
-| #   | Item                                                                | Owning milestone                                                   |
-| --- | ------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| 1   | Branded IDs on `User`/`Session` throughout app/infra                | Milestone 2                                                        |
-| 2   | `User.status` mandatory + real persistence column                   | ✅ Done (Milestone 2 Step 5)                                       |
-| 3   | Persistence + use cases for `Session`/`VendorProfile`/`Otp`         | Milestone 2 (partial), later for use cases                         |
-| 4   | `Role` relocation to `value-objects/`                               | Unscheduled (opportunistic, likely alongside #1/#2)                |
-| 5   | Single `Role` → role collection                                     | Unscheduled (needs product decision)                               |
-| 6   | Optional email / phone-primary customer auth                        | Milestone 2 (schema+domain), later (use case)                      |
-| 7   | Vendor registration + Admin MFA                                     | Unscheduled (likely its own milestone)                             |
-| 8   | Reconcile `domain/{repositories,services}` with `application/ports` | Milestone 2 (`PasswordHasher` ✅ Step 6; `TokenGenerator` pending) |
-| 9   | Move `DomainEvent<TType>` to `@leen-mart/domain-kit`                | Unscheduled (when a 2nd bounded context needs it)                  |
-| 10  | Remove/simplify the pure-re-export `clock.service.ts`               | Unscheduled (opportunistic, alongside #8)                          |
-| 11  | Persist `User` status transitions (needs `UserRepository.update()`) | Unscheduled (no current caller)                                    |
+| #   | Item                                                                | Owning milestone                                    |
+| --- | ------------------------------------------------------------------- | --------------------------------------------------- |
+| 1   | Branded IDs on `User`/`Session` throughout app/infra                | Milestone 2                                         |
+| 2   | `User.status` mandatory + real persistence column                   | ✅ Done (Milestone 2 Step 5)                        |
+| 3   | Persistence + use cases for `Session`/`VendorProfile`/`Otp`         | Milestone 2 (partial), later for use cases          |
+| 4   | `Role` relocation to `value-objects/`                               | Unscheduled (opportunistic, likely alongside #1/#2) |
+| 5   | Single `Role` → role collection                                     | Unscheduled (needs product decision)                |
+| 6   | Optional email / phone-primary customer auth                        | Milestone 2 (schema+domain), later (use case)       |
+| 7   | Vendor registration + Admin MFA                                     | Unscheduled (likely its own milestone)              |
+| 8   | Reconcile `domain/{repositories,services}` with `application/ports` | ✅ Done (Steps 1, 2, 6, 7)                          |
+| 9   | Move `DomainEvent<TType>` to `@leen-mart/domain-kit`                | Unscheduled (when a 2nd bounded context needs it)   |
+| 10  | Remove/simplify the pure-re-export `clock.service.ts`               | Unscheduled (opportunistic, alongside #8)           |
+| 11  | Persist `User` status transitions (needs `UserRepository.update()`) | Unscheduled (no current caller)                     |

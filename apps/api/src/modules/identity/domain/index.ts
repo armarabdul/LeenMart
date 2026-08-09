@@ -49,4 +49,5 @@ export * from './repositories/otp.repository.js';
 export * from './services/password-hasher.service.js';
 export * from './services/otp-generator.service.js';
 export * from './services/token-generator.service.js';
+export * from './services/token-hasher.service.js';
 export * from './services/clock.service.js';

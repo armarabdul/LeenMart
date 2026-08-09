@@ -1,15 +1,15 @@
+import type { TokenGenerator } from '../../domain/services/token-generator.service.js';
+import type { TokenHasher } from '../../domain/services/token-hasher.service.js';
+
 /**
- * Generates and hashes opaque refresh tokens.
- *
- * Kept separate from `PasswordHasher`: a refresh token is already 256 bits of
- * randomness, so a fast general-purpose hash (SHA-256) is correct here — an
- * intentionally slow, memory-hard hash like Argon2 would only add latency
- * without adding resistance to anything, since there is no low-entropy
- * secret to protect against brute force.
+ * Compatibility re-export. `RefreshTokenHasher` used to define its own
+ * bundled generate+hash interface; the domain now canonically splits that
+ * into `TokenGenerator` (generation-only) and `TokenHasher` (hashing-only)
+ * (Milestone 2 Step 7 — see docs/identity-milestone2-backlog.md). Every
+ * current caller (`SessionIssuer`, `RefreshSessionUseCase`, `LogoutUseCase`)
+ * always needs both operations together, so this alias preserves the
+ * bundled shape those call sites depend on — it is structurally identical
+ * to the old interface (`{ generate(): string; hash(rawToken: string): string }`),
+ * so no caller needed to change.
  */
-export interface RefreshTokenHasher {
-  /** A new cryptographically random opaque token, returned to the client once. */
-  generate(): string;
-  /** The stored, irreversible digest of a raw token, used for lookups. */
-  hash(rawToken: string): string;
-}
+export type RefreshTokenHasher = TokenGenerator & TokenHasher;
