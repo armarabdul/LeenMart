@@ -220,11 +220,53 @@ for a domain-only milestone.
 
 - ~~`application/ports/user-repository.port.ts` — reconcile with `domain/repositories/user.repository.ts`~~ **Done** (Milestone 2 Step 1): now a compatibility re-export of the domain interface; structurally identical, no caller changes needed.
 - ~~`application/ports/refresh-token-repository.port.ts` — reconcile with `domain/repositories/session.repository.ts`~~ **Done** (Milestone 2 Step 2): now a compatibility re-export (`SessionRepository as RefreshTokenRepository`); structurally identical, no caller changes needed.
-- `application/ports/password-hasher.port.ts` — reconcile with `domain/services/password-hasher.service.ts` (note the `PasswordHash` vs. raw `string` difference) — **still pending**, not structurally identical (see below), requires real infrastructure/use-case edits.
+- ~~`application/ports/password-hasher.port.ts` — reconcile with `domain/services/password-hasher.service.ts`~~ **Done** (Milestone 2 Step 6): unlike the repositories, this was genuinely not structurally identical (`PasswordHash` vs. raw `string`), so it was reconciled by _adoption_ rather than re-export — the domain contract became canonical, and every caller was migrated to it, not aliased around. See the new subsection below.
 - `application/ports/refresh-token-hasher.port.ts` — reconcile with `domain/services/token-generator.service.ts` (note the generation/hashing split) — **still pending**.
-- `infrastructure/persistence/prisma-user.repository.ts`, `prisma-refresh-token.repository.ts`, `infrastructure/security/argon2-password-hasher.ts` — whichever interface each ends up implementing — **still pending**.
+- `infrastructure/persistence/prisma-refresh-token.repository.ts` — whichever interface it ends up implementing for `RefreshTokenHasher`/`TokenGenerator` — **still pending**. (`prisma-user.repository.ts` and `argon2-password-hasher.ts` are done, see below.)
 
-**Owning milestone**: Milestone 2. The two repository re-exports (`UserRepository`, `SessionRepository`/`RefreshTokenRepository`) are complete. `PasswordHasher` and `TokenGenerator`/`RefreshTokenHasher` remain — unlike the repositories, their method signatures genuinely differ (value objects vs. raw primitives, bundled vs. split responsibilities), so reconciling them means editing infrastructure and use-case code, not just re-exporting a type.
+**Owning milestone**: Milestone 2. The two repository re-exports (`UserRepository`, `SessionRepository`/`RefreshTokenRepository`) and the `PasswordHasher` reconciliation are complete. `TokenGenerator`/`RefreshTokenHasher` remains — its method signatures genuinely differ (bundled generation+hashing vs. split responsibilities), so reconciling it will mean editing infrastructure and use-case code, not just re-exporting a type — the same shape of work `PasswordHasher` just went through.
+
+### 8a. `PasswordHasher` reconciliation — resolution (Milestone 2 Step 6)
+
+Chosen resolution: **Option A, full adoption** — the domain `PasswordHasher`
+(`hash(plaintext): Promise<PasswordHash>`, `verify(hash: PasswordHash, plaintext): Promise<boolean>`)
+became the one canonical contract. The pre-existing application-layer port
+(raw `string` in, raw `string` out) was not compatible enough for a re-export
+(`Promise<PasswordHash>` cannot stand in for `Promise<string>`), so this was a
+real migration:
+
+- `application/ports/password-hasher.port.ts` — no longer defines its own
+  interface; now `export type { PasswordHasher } from '../../domain/services/password-hasher.service.js'`.
+- `domain/entities/user.entity.ts` — `UserProps.passwordHash` (and the
+  `register()`/getter signatures) changed from `string` to `PasswordHash`.
+  This was the one genuinely new piece of scope beyond the port itself:
+  `PasswordHash` had zero adopters before this (not even `User`, the entity
+  it was ostensibly modelled for) — Step 6 is what actually put it to use.
+- `infrastructure/security/argon2-password-hasher.ts` — `hash()` now wraps
+  Argon2's raw output in `PasswordHash.create(...)`; `verify()` reads the
+  wrapped value's already-public `.value` accessor before calling
+  `argon2.verify()`. Algorithm/parameters unchanged.
+- `infrastructure/persistence/prisma-user.repository.ts` — `toDomain()` wraps
+  the read column in `PasswordHash.create(row.passwordHash)`; `create()`
+  writes `user.passwordHash.value`. Prisma's `password_hash` column is
+  unchanged (still a plain `TEXT` column — branding/wrapping is TypeScript-only).
+- `register-customer.use-case.ts`, `login.use-case.ts` — **needed zero
+  changes**. Both already passed the hasher's `hash()`/`verify()` results
+  straight through without touching the raw value, so the type change
+  propagated transparently — the intended payoff of doing this as a contract
+  migration rather than a spot-fix.
+- Test fakes/tests updated to match: `FakePasswordHasher` in
+  `test/.../application/fakes.ts` now returns/accepts `PasswordHash`;
+  `user.entity.test.ts`, `register-customer.use-case.test.ts`, and
+  `argon2-password-hasher.test.ts` updated for the new type. Two unrelated
+  tests (`logout.use-case.test.ts`, `refresh-session.use-case.test.ts`) used
+  a 2-character placeholder password (`'pw'`) that produced a fake hash under
+  `PasswordHash`'s 20-character minimum — fixed by using a longer placeholder
+  password, since neither test asserts anything about the password itself.
+
+**No plaintext password is ever stored** — `PasswordHash.create()`'s existing
+validation (rejecting anything under 20 characters, aimed at catching an
+accidental plaintext/empty value) was not weakened, and nothing bypasses it.
 
 ---
 
@@ -313,16 +355,16 @@ calls these methods.
 
 ## Summary table
 
-| #   | Item                                                                | Owning milestone                                    |
-| --- | ------------------------------------------------------------------- | --------------------------------------------------- |
-| 1   | Branded IDs on `User`/`Session` throughout app/infra                | Milestone 2                                         |
-| 2   | `User.status` mandatory + real persistence column                   | ✅ Done (Milestone 2 Step 5)                        |
-| 3   | Persistence + use cases for `Session`/`VendorProfile`/`Otp`         | Milestone 2 (partial), later for use cases          |
-| 4   | `Role` relocation to `value-objects/`                               | Unscheduled (opportunistic, likely alongside #1/#2) |
-| 5   | Single `Role` → role collection                                     | Unscheduled (needs product decision)                |
-| 6   | Optional email / phone-primary customer auth                        | Milestone 2 (schema+domain), later (use case)       |
-| 7   | Vendor registration + Admin MFA                                     | Unscheduled (likely its own milestone)              |
-| 8   | Reconcile `domain/{repositories,services}` with `application/ports` | Milestone 2                                         |
-| 9   | Move `DomainEvent<TType>` to `@leen-mart/domain-kit`                | Unscheduled (when a 2nd bounded context needs it)   |
-| 10  | Remove/simplify the pure-re-export `clock.service.ts`               | Unscheduled (opportunistic, alongside #8)           |
-| 11  | Persist `User` status transitions (needs `UserRepository.update()`) | Unscheduled (no current caller)                     |
+| #   | Item                                                                | Owning milestone                                                   |
+| --- | ------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| 1   | Branded IDs on `User`/`Session` throughout app/infra                | Milestone 2                                                        |
+| 2   | `User.status` mandatory + real persistence column                   | ✅ Done (Milestone 2 Step 5)                                       |
+| 3   | Persistence + use cases for `Session`/`VendorProfile`/`Otp`         | Milestone 2 (partial), later for use cases                         |
+| 4   | `Role` relocation to `value-objects/`                               | Unscheduled (opportunistic, likely alongside #1/#2)                |
+| 5   | Single `Role` → role collection                                     | Unscheduled (needs product decision)                               |
+| 6   | Optional email / phone-primary customer auth                        | Milestone 2 (schema+domain), later (use case)                      |
+| 7   | Vendor registration + Admin MFA                                     | Unscheduled (likely its own milestone)                             |
+| 8   | Reconcile `domain/{repositories,services}` with `application/ports` | Milestone 2 (`PasswordHasher` ✅ Step 6; `TokenGenerator` pending) |
+| 9   | Move `DomainEvent<TType>` to `@leen-mart/domain-kit`                | Unscheduled (when a 2nd bounded context needs it)                  |
+| 10  | Remove/simplify the pure-re-export `clock.service.ts`               | Unscheduled (opportunistic, alongside #8)                          |
+| 11  | Persist `User` status transitions (needs `UserRepository.update()`) | Unscheduled (no current caller)                                    |

@@ -53,7 +53,12 @@ const setup = (): {
     clock,
     logger: nullLogger,
   });
-  const logoutUseCase = new LogoutUseCase({ refreshTokenRepository, refreshTokenHasher, clock, logger: nullLogger });
+  const logoutUseCase = new LogoutUseCase({
+    refreshTokenRepository,
+    refreshTokenHasher,
+    clock,
+    logger: nullLogger,
+  });
 
   return { registerUseCase, refreshUseCase, logoutUseCase };
 };
@@ -61,22 +66,30 @@ const setup = (): {
 describe('LogoutUseCase', () => {
   it('revokes an active token so a subsequent refresh is rejected', async () => {
     const { registerUseCase, refreshUseCase, logoutUseCase } = setup();
-    const session = await registerUseCase.execute({ email: 'shopper@example.com', password: 'pw' });
+    const session = await registerUseCase.execute({
+      email: 'shopper@example.com',
+      password: 'correct horse battery',
+    });
 
     await logoutUseCase.execute({ refreshToken: session.refreshToken });
 
-    await expect(refreshUseCase.execute({ refreshToken: session.refreshToken })).rejects.toBeInstanceOf(
-      InvalidRefreshTokenError,
-    );
+    await expect(
+      refreshUseCase.execute({ refreshToken: session.refreshToken }),
+    ).rejects.toBeInstanceOf(InvalidRefreshTokenError);
   });
 
   it('is idempotent for a token that was already revoked', async () => {
     const { registerUseCase, logoutUseCase } = setup();
-    const session = await registerUseCase.execute({ email: 'shopper@example.com', password: 'pw' });
+    const session = await registerUseCase.execute({
+      email: 'shopper@example.com',
+      password: 'correct horse battery',
+    });
 
     await logoutUseCase.execute({ refreshToken: session.refreshToken });
 
-    await expect(logoutUseCase.execute({ refreshToken: session.refreshToken })).resolves.toBeUndefined();
+    await expect(
+      logoutUseCase.execute({ refreshToken: session.refreshToken }),
+    ).resolves.toBeUndefined();
   });
 
   it('is idempotent for a token that was never issued, so it cannot be used to probe token validity', async () => {

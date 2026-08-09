@@ -1,12 +1,13 @@
 import type { UserId } from '../value-objects/user-id.value-object.js';
 import { Role } from './role.entity.js';
+import type { PasswordHash } from '../value-objects/password-hash.value-object.js';
 import { UserStatus } from '../value-objects/user-status.value-object.js';
 import { AccountLockedError, AccountSuspendedError } from '../errors/identity-errors.js';
 
 export interface UserProps {
   readonly id: UserId;
   readonly email: string;
-  readonly passwordHash: string;
+  readonly passwordHash: PasswordHash;
   readonly role: Role;
   readonly status: UserStatus;
   readonly createdAt: Date;
@@ -17,7 +18,12 @@ export class User {
   private constructor(private readonly props: UserProps) {}
 
   /** New customer sign-up. Role is always CUSTOMER — there is no self-service path to VENDOR/ADMIN. */
-  static register(props: { id: UserId; email: string; passwordHash: string; now: Date }): User {
+  static register(props: {
+    id: UserId;
+    email: string;
+    passwordHash: PasswordHash;
+    now: Date;
+  }): User {
     return new User({
       id: props.id,
       email: props.email,
@@ -42,7 +48,7 @@ export class User {
     return this.props.email;
   }
 
-  get passwordHash(): string {
+  get passwordHash(): PasswordHash {
     return this.props.passwordHash;
   }
 

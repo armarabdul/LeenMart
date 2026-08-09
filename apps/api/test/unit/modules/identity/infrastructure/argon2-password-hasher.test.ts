@@ -7,8 +7,8 @@ describe('Argon2PasswordHasher', () => {
 
     const hash = await hasher.hash('correct horse battery staple');
 
-    expect(hash).not.toBe('correct horse battery staple');
-    expect(hash).toMatch(/^\$argon2id\$/);
+    expect(hash.value).not.toBe('correct horse battery staple');
+    expect(hash.value).toMatch(/^\$argon2id\$/);
   });
 
   it('verifies a matching password', async () => {
@@ -33,6 +33,6 @@ describe('Argon2PasswordHasher', () => {
       hasher.hash('correct horse battery staple'),
     ]);
 
-    expect(first).not.toBe(second);
+    expect(first.value).not.toBe(second.value);
   });
 });

@@ -12,6 +12,7 @@ import type { RefreshTokenRepository } from '../../../../../src/modules/identity
 import type { UserRepository } from '../../../../../src/modules/identity/application/ports/user-repository.port.js';
 import type { RefreshToken } from '../../../../../src/modules/identity/domain/entities/refresh-token.entity.js';
 import type { User } from '../../../../../src/modules/identity/domain/entities/user.entity.js';
+import { PasswordHash } from '../../../../../src/modules/identity/domain/value-objects/password-hash.value-object.js';
 
 export class InMemoryUserRepository implements UserRepository {
   private readonly byId = new Map<UserId, User>();
@@ -56,12 +57,12 @@ export class InMemoryRefreshTokenRepository implements RefreshTokenRepository {
 
 /** Deliberately not a real hash — fast and inspectable for assertions. */
 export class FakePasswordHasher implements PasswordHasher {
-  hash(plaintext: string): Promise<string> {
-    return Promise.resolve(`hashed:${plaintext}`);
+  hash(plaintext: string): Promise<PasswordHash> {
+    return Promise.resolve(PasswordHash.create(`hashed:${plaintext}`));
   }
 
-  verify(hash: string, plaintext: string): Promise<boolean> {
-    return Promise.resolve(hash === `hashed:${plaintext}`);
+  verify(hash: PasswordHash, plaintext: string): Promise<boolean> {
+    return Promise.resolve(hash.value === `hashed:${plaintext}`);
   }
 }
 

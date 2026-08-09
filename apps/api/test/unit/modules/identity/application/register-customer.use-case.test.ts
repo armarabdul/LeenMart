@@ -66,7 +66,7 @@ describe('RegisterCustomerUseCase', () => {
     await useCase.execute({ email: 'shopper@example.com', password: 'correct horse battery' });
 
     const stored = await userRepository.findByEmail('shopper@example.com');
-    expect(stored?.passwordHash).toBe('hashed:correct horse battery');
+    expect(stored?.passwordHash.value).toBe('hashed:correct horse battery');
   });
 
   it('rejects a second registration with the same email', async () => {

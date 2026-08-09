@@ -61,7 +61,10 @@ const setup = (): {
 describe('RefreshSessionUseCase', () => {
   it('rotates: exchanges a valid token for a new pair', async () => {
     const { registerUseCase, refreshUseCase } = setup();
-    const initial = await registerUseCase.execute({ email: 'shopper@example.com', password: 'pw' });
+    const initial = await registerUseCase.execute({
+      email: 'shopper@example.com',
+      password: 'correct horse battery',
+    });
 
     const rotated = await refreshUseCase.execute({ refreshToken: initial.refreshToken });
 
@@ -71,12 +74,15 @@ describe('RefreshSessionUseCase', () => {
 
   it('rejects reuse of an already-rotated token', async () => {
     const { registerUseCase, refreshUseCase } = setup();
-    const initial = await registerUseCase.execute({ email: 'shopper@example.com', password: 'pw' });
+    const initial = await registerUseCase.execute({
+      email: 'shopper@example.com',
+      password: 'correct horse battery',
+    });
     await refreshUseCase.execute({ refreshToken: initial.refreshToken });
 
-    await expect(refreshUseCase.execute({ refreshToken: initial.refreshToken })).rejects.toBeInstanceOf(
-      InvalidRefreshTokenError,
-    );
+    await expect(
+      refreshUseCase.execute({ refreshToken: initial.refreshToken }),
+    ).rejects.toBeInstanceOf(InvalidRefreshTokenError);
   });
 
   it('rejects a token that was never issued', async () => {
@@ -89,12 +95,15 @@ describe('RefreshSessionUseCase', () => {
 
   it('rejects an expired token', async () => {
     const { registerUseCase, refreshUseCase, clock } = setup();
-    const initial = await registerUseCase.execute({ email: 'shopper@example.com', password: 'pw' });
+    const initial = await registerUseCase.execute({
+      email: 'shopper@example.com',
+      password: 'correct horse battery',
+    });
 
     clock.advanceMs(31 * DAY_MS); // past the 30-day TTL used in setup()
 
-    await expect(refreshUseCase.execute({ refreshToken: initial.refreshToken })).rejects.toBeInstanceOf(
-      InvalidRefreshTokenError,
-    );
+    await expect(
+      refreshUseCase.execute({ refreshToken: initial.refreshToken }),
+    ).rejects.toBeInstanceOf(InvalidRefreshTokenError);
   });
 });
