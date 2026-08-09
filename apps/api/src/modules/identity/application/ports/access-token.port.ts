@@ -1,8 +1,8 @@
-import type { Uuid } from '@leen-mart/domain-kit';
+import type { UserId } from '../../domain/value-objects/user-id.value-object.js';
 import type { RoleName } from '../../domain/entities/role.entity.js';
 
 export interface AccessTokenClaims {
-  readonly sub: Uuid;
+  readonly sub: UserId;
   readonly role: RoleName;
 }
 

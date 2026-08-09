@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { FixedClock, toUuid } from '@leen-mart/domain-kit';
+import { FixedClock } from '@leen-mart/domain-kit';
+import { toUserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 import { JsonWebTokenAccessTokenService } from '../../../../../src/modules/identity/infrastructure/security/jsonwebtoken-access-token.service.js';
 
-const userId = toUuid('00000000-0000-7000-8000-000000000099');
+const userId = toUserId('00000000-0000-7000-8000-000000000099');
 
 const buildService = (
   overrides: Partial<{ secret: string; issuer: string; ttlSeconds: number }> = {},

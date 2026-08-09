@@ -1,4 +1,5 @@
 import { NullLogger, type Uuid } from '@leen-mart/domain-kit';
+import type { UserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 import type {
   AccessTokenClaims,
   AccessTokenService,
@@ -12,7 +13,7 @@ import type { RefreshToken } from '../../../../../src/modules/identity/domain/en
 import type { User } from '../../../../../src/modules/identity/domain/entities/user.entity.js';
 
 export class InMemoryUserRepository implements UserRepository {
-  private readonly byId = new Map<Uuid, User>();
+  private readonly byId = new Map<UserId, User>();
 
   create(user: User): Promise<void> {
     this.byId.set(user.id, user);
@@ -26,7 +27,7 @@ export class InMemoryUserRepository implements UserRepository {
     return Promise.resolve(null);
   }
 
-  findById(id: Uuid): Promise<User | null> {
+  findById(id: UserId): Promise<User | null> {
     return Promise.resolve(this.byId.get(id) ?? null);
   }
 }

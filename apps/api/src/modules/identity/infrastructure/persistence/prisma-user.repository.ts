@@ -1,5 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
-import { toUuid, type Uuid } from '@leen-mart/domain-kit';
+import { toUserId, type UserId } from '../../domain/value-objects/user-id.value-object.js';
 import type { UserRepository } from '../../application/ports/user-repository.port.js';
 import { Role } from '../../domain/entities/role.entity.js';
 import { User } from '../../domain/entities/user.entity.js';
@@ -15,7 +15,7 @@ interface UserRow {
 
 const toDomain = (row: UserRow): User =>
   User.reconstitute({
-    id: toUuid(row.id),
+    id: toUserId(row.id),
     email: row.email,
     passwordHash: row.passwordHash,
     role: Role.fromName(row.role),
@@ -45,7 +45,7 @@ export class PrismaUserRepository implements UserRepository {
     return row ? toDomain(row) : null;
   }
 
-  async findById(id: Uuid): Promise<User | null> {
+  async findById(id: UserId): Promise<User | null> {
     const row = await this.prisma.user.findFirst({ where: { id, deletedAt: null } });
     return row ? toDomain(row) : null;
   }

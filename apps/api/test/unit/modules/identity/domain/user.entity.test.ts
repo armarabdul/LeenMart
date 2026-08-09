@@ -1,14 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { toUuid } from '@leen-mart/domain-kit';
+import { toUserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 import { Role } from '../../../../../src/modules/identity/domain/entities/role.entity.js';
 import { User } from '../../../../../src/modules/identity/domain/entities/user.entity.js';
 
-const userId = toUuid('00000000-0000-7000-8000-000000000001');
+const userId = toUserId('00000000-0000-7000-8000-000000000001');
 
 describe('User', () => {
   it('registers a new user as CUSTOMER regardless of anything the caller passes', () => {
     const now = new Date('2026-01-01T00:00:00.000Z');
-    const user = User.register({ id: userId, email: 'shopper@example.com', passwordHash: 'hash', now });
+    const user = User.register({
+      id: userId,
+      email: 'shopper@example.com',
+      passwordHash: 'hash',
+      now,
+    });
 
     expect(user.role).toBe(Role.CUSTOMER);
     expect(user.email).toBe('shopper@example.com');

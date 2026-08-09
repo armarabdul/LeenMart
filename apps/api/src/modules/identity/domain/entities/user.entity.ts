@@ -1,10 +1,10 @@
-import type { Uuid } from '@leen-mart/domain-kit';
+import type { UserId } from '../value-objects/user-id.value-object.js';
 import { Role } from './role.entity.js';
 import { UserStatus } from '../value-objects/user-status.value-object.js';
 import { AccountLockedError, AccountSuspendedError } from '../errors/identity-errors.js';
 
 export interface UserProps {
-  readonly id: Uuid;
+  readonly id: UserId;
   readonly email: string;
   readonly passwordHash: string;
   readonly role: Role;
@@ -23,7 +23,7 @@ export class User {
   private constructor(private readonly props: UserProps) {}
 
   /** New customer sign-up. Role is always CUSTOMER — there is no self-service path to VENDOR/ADMIN. */
-  static register(props: { id: Uuid; email: string; passwordHash: string; now: Date }): User {
+  static register(props: { id: UserId; email: string; passwordHash: string; now: Date }): User {
     return new User({
       id: props.id,
       email: props.email,
@@ -40,7 +40,7 @@ export class User {
     return new User(props);
   }
 
-  get id(): Uuid {
+  get id(): UserId {
     return this.props.id;
   }
 

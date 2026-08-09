@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
-import { type Clock, toUuid, UnauthenticatedError } from '@leen-mart/domain-kit';
+import { type Clock, UnauthenticatedError } from '@leen-mart/domain-kit';
+import { toUserId } from '../../domain/value-objects/user-id.value-object.js';
 import type {
   AccessTokenClaims,
   AccessTokenService,
@@ -38,10 +39,14 @@ export class JsonWebTokenAccessTokenService implements AccessTokenService {
   verify(token: string): AccessTokenClaims {
     try {
       const payload = jwt.verify(token, this.config.secret, { issuer: this.config.issuer });
-      if (typeof payload === 'string' || typeof payload.sub !== 'string' || !isRoleName(payload.role)) {
+      if (
+        typeof payload === 'string' ||
+        typeof payload.sub !== 'string' ||
+        !isRoleName(payload.role)
+      ) {
         throw new TypeError('Malformed access token payload');
       }
-      return { sub: toUuid(payload.sub), role: payload.role };
+      return { sub: toUserId(payload.sub), role: payload.role };
     } catch (cause) {
       throw new UnauthenticatedError('Invalid or expired access token.', {
         code: 'INVALID_ACCESS_TOKEN',

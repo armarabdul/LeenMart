@@ -1,5 +1,6 @@
 import type { Clock, Logger } from '@leen-mart/domain-kit';
 import { InvalidRefreshTokenError } from '../../domain/errors/identity-errors.js';
+import { toUserId } from '../../domain/value-objects/user-id.value-object.js';
 import type { RefreshTokenHasher } from '../ports/refresh-token-hasher.port.js';
 import type { RefreshTokenRepository } from '../ports/refresh-token-repository.port.js';
 import type { UserRepository } from '../ports/user-repository.port.js';
@@ -28,7 +29,14 @@ export class RefreshSessionUseCase {
   constructor(private readonly deps: RefreshSessionDeps) {}
 
   async execute(input: RefreshSessionInput): Promise<AuthSession> {
-    const { userRepository, refreshTokenRepository, refreshTokenHasher, sessionIssuer, clock, logger } = this.deps;
+    const {
+      userRepository,
+      refreshTokenRepository,
+      refreshTokenHasher,
+      sessionIssuer,
+      clock,
+      logger,
+    } = this.deps;
 
     const tokenHash = refreshTokenHasher.hash(input.refreshToken);
     const existing = await refreshTokenRepository.findByTokenHash(tokenHash);
@@ -36,12 +44,17 @@ export class RefreshSessionUseCase {
 
     if (!existing?.isActive(now)) {
       if (existing?.isRevoked()) {
-        logger.warn({ tokenId: existing.id }, 'Rejected reuse of a rotated or revoked refresh token');
+        logger.warn(
+          { tokenId: existing.id },
+          'Rejected reuse of a rotated or revoked refresh token',
+        );
       }
       throw new InvalidRefreshTokenError();
     }
 
-    const user = await userRepository.findById(existing.userId);
+    // Session.userId is not migrated in this step, so it's still the
+    // generic Uuid — re-validate it into UserId at this boundary.
+    const user = await userRepository.findById(toUserId(existing.userId));
     if (!user) {
       throw new InvalidRefreshTokenError();
     }
