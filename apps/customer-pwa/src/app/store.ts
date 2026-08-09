@@ -1,6 +1,7 @@
 import { configureStore } from '@reduxjs/toolkit';
 import { setupListeners } from '@reduxjs/toolkit/query';
 import { baseApi } from '@/shared/api/base-api';
+import { sessionReducer } from '@/shared/api/session.slice';
 
 /**
  * Store factory.
@@ -13,7 +14,8 @@ export const createStore = () =>
   configureStore({
     reducer: {
       [baseApi.reducerPath]: baseApi.reducer,
-      // Feature slices are registered here as modules are built.
+      session: sessionReducer,
+      // Further feature slices are registered here as modules are built.
     },
     middleware: (getDefaultMiddleware) => getDefaultMiddleware().concat(baseApi.middleware),
     devTools: import.meta.env.DEV,

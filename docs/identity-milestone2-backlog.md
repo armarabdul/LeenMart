@@ -410,18 +410,53 @@ calls these methods.
 
 ---
 
+## 12. Refresh token is not set as an httpOnly cookie (SDD 7.2 mismatch)
+
+**What was found**: during Milestone 3 Step 1 (Customer Identity Delivery —
+wiring the existing email/password backend into `customer-pwa`), analysis
+confirmed that `identity.controller.ts` returns the refresh token as a plain
+string in the JSON response body, and `/refresh`/`/logout` require the client
+to resubmit it in the request body. No `res.cookie(...)` exists anywhere in
+`apps/api/src`; no `cookie-parser` is installed. This directly contradicts
+SDD §7.2, which specifies the refresh token as an `httpOnly; Secure;
+SameSite=Strict` cookie, never JS-accessible. The frontend scaffold
+(`shared/api/base-api.ts`) was already written assuming the cookie existed
+(`credentials: 'include'`, a comment citing SDD 7.2) — the mismatch predates
+Milestone 3 and was not introduced by any Milestone 1–2 work, none of which
+touched the interface layer.
+
+**Why not fixed now**: Milestone 3 Step 1 was scoped to the frontend only —
+"do not modify backend authentication endpoints." The approved interim
+resolution (Step 1, Option (a)) is to consume the backend exactly as it is:
+the customer-pwa holds both the access token and the refresh token in Redux
+state (JS memory only, never Web Storage), accepting that a full page reload
+loses the session and the customer signs in again.
+
+**Files that will be affected when this is picked up**:
+
+- `apps/api/src/app.ts` — add `cookie-parser` middleware
+- `apps/api/src/modules/identity/interface/http/identity.controller.ts` — set an httpOnly/Secure/SameSite=Strict cookie on register/login/refresh; stop requiring `refreshToken` in the `/refresh`/`/logout` request body (read it from the cookie instead)
+- `packages/contracts/src/identity/identity.contract.ts` — `refreshSessionRequestSchema`/`logoutRequestSchema` would no longer need a body at all
+- `apps/customer-pwa/src/shared/api/base-api.ts` — remove the in-memory refresh-token handling once the cookie carries it instead
+- `apps/customer-pwa/src/shared/api/session.slice.ts` — drop `refreshToken`/`refreshTokenExpiresAt` from state
+
+**Owning milestone**: Unscheduled — a backend/security task, separate from Milestone 3 Step 1's frontend scope. Should be picked up before production launch given SDD §7.2's stated rationale (an httpOnly cookie is the entire point of not exposing the refresh token to JS/XSS).
+
+---
+
 ## Summary table
 
-| #   | Item                                                                | Owning milestone                                  |
-| --- | ------------------------------------------------------------------- | ------------------------------------------------- |
-| 1   | Branded IDs on `User`/`Session` throughout app/infra                | Milestone 2                                       |
-| 2   | `User.status` mandatory + real persistence column                   | ✅ Done (Milestone 2 Step 5)                      |
-| 3   | Persistence + use cases for `Session`/`VendorProfile`/`Otp`         | Milestone 2 (partial), later for use cases        |
-| 4   | `Role` relocation to `value-objects/`                               | ✅ Done (Milestone 2 Step 8)                      |
-| 5   | Single `Role` → role collection                                     | Unscheduled (needs product decision)              |
-| 6   | Optional email / phone-primary customer auth                        | Milestone 2 (schema+domain), later (use case)     |
-| 7   | Vendor registration + Admin MFA                                     | Unscheduled (likely its own milestone)            |
-| 8   | Reconcile `domain/{repositories,services}` with `application/ports` | ✅ Done (Steps 1, 2, 6, 7)                        |
-| 9   | Move `DomainEvent<TType>` to `@leen-mart/domain-kit`                | Unscheduled (when a 2nd bounded context needs it) |
-| 10  | Remove/simplify the pure-re-export `clock.service.ts`               | ✅ Done (Milestone 2 Step 8)                      |
-| 11  | Persist `User` status transitions (needs `UserRepository.update()`) | Unscheduled (no current caller)                   |
+| #   | Item                                                                | Owning milestone                                                 |
+| --- | ------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| 1   | Branded IDs on `User`/`Session` throughout app/infra                | Milestone 2                                                      |
+| 2   | `User.status` mandatory + real persistence column                   | ✅ Done (Milestone 2 Step 5)                                     |
+| 3   | Persistence + use cases for `Session`/`VendorProfile`/`Otp`         | Milestone 2 (partial), later for use cases                       |
+| 4   | `Role` relocation to `value-objects/`                               | ✅ Done (Milestone 2 Step 8)                                     |
+| 5   | Single `Role` → role collection                                     | Unscheduled (needs product decision)                             |
+| 6   | Optional email / phone-primary customer auth                        | Milestone 2 (schema+domain), later (use case)                    |
+| 7   | Vendor registration + Admin MFA                                     | Unscheduled (likely its own milestone)                           |
+| 8   | Reconcile `domain/{repositories,services}` with `application/ports` | ✅ Done (Steps 1, 2, 6, 7)                                       |
+| 9   | Move `DomainEvent<TType>` to `@leen-mart/domain-kit`                | Unscheduled (when a 2nd bounded context needs it)                |
+| 10  | Remove/simplify the pure-re-export `clock.service.ts`               | ✅ Done (Milestone 2 Step 8)                                     |
+| 11  | Persist `User` status transitions (needs `UserRepository.update()`) | Unscheduled (no current caller)                                  |
+| 12  | Refresh token not set as an httpOnly cookie (SDD 7.2 mismatch)      | Unscheduled (backend/security task, found in Milestone 3 Step 1) |
