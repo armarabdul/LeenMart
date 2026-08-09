@@ -6,7 +6,7 @@ import type {
   AccessTokenService,
   SignedAccessToken,
 } from '../../application/ports/access-token.port.js';
-import { type RoleName } from '../../domain/entities/role.entity.js';
+import { type RoleName } from '../../domain/value-objects/role.value-object.js';
 
 export interface JsonWebTokenAccessTokenServiceConfig {
   readonly secret: string;

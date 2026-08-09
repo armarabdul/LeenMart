@@ -1,7 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
 import { toUserId, type UserId } from '../../domain/value-objects/user-id.value-object.js';
 import type { UserRepository } from '../../application/ports/user-repository.port.js';
-import { Role } from '../../domain/entities/role.entity.js';
+import { Role } from '../../domain/value-objects/role.value-object.js';
 import { User } from '../../domain/entities/user.entity.js';
 import { PasswordHash } from '../../domain/value-objects/password-hash.value-object.js';
 import { UserStatus } from '../../domain/value-objects/user-status.value-object.js';

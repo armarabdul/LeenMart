@@ -97,26 +97,46 @@ milestone)**:
 
 ---
 
-## 4. `Role` still lives in `domain/entities/`, not `domain/value-objects/`
+## 4. `Role` still lives in `domain/entities/`, not `domain/value-objects/` ✅ Done (Milestone 2 Step 8)
 
 **What was deferred**: `Role` is structurally a value object (immutable,
-private constructor, no identity) but remains at
+private constructor, no identity) but remained at
 `domain/entities/role.entity.ts` rather than moving to
 `domain/value-objects/role.value-object.ts`, per your explicit "keep it where
 it is for now" instruction.
 
-**Why**: at the time, moving it would have changed an import path relied on by
-`user.entity.ts` and (once branded IDs land) infrastructure code — a pure
-relocation with no behavioral upside, deferred to avoid unnecessary churn
-while other things were still settling.
+**Why it was deferred**: at the time, moving it would have changed an import
+path relied on by `user.entity.ts` and (once branded IDs landed) infrastructure
+code — a pure relocation with no behavioral upside, deferred to avoid
+unnecessary churn while other things were still settling.
 
-**Files that will be affected whenever this is revisited**:
+**Resolution (Step 8)**: relocated file content unchanged — `Role`'s values,
+`fromName()`, `equals()`, and singleton behavior are byte-identical to before,
+only the file's path and its imports changed. Updated every genuine consumer:
+`domain/index.ts` (barrel export moved from the entities section to the
+value-objects section), `domain/entities/user.entity.ts`,
+`application/ports/access-token.port.ts`,
+`infrastructure/persistence/prisma-user.repository.ts`,
+`infrastructure/security/jsonwebtoken-access-token.service.ts`, and the two
+test files that imported `Role` by path
+(`test/.../domain/user.entity.test.ts`, `test/.../domain/role.entity.test.ts` —
+the test file itself was not renamed or moved, matching this codebase's
+existing convention of flat test files regardless of source subfolder). No
+compatibility re-export was left behind — every consumer is internal to this
+repository, so the old path was removed outright rather than aliased.
+
+**Files affected**:
 
 - `domain/entities/role.entity.ts` → `domain/value-objects/role.value-object.ts`
+- `domain/index.ts` — barrel export moved
 - `domain/entities/user.entity.ts` — import path update
-- Once Milestone 2's infrastructure changes land: `infrastructure/persistence/prisma-user.repository.ts` — import path update
+- `application/ports/access-token.port.ts` — import path update
+- `infrastructure/persistence/prisma-user.repository.ts` — import path update
+- `infrastructure/security/jsonwebtoken-access-token.service.ts` — import path update
+- `test/unit/modules/identity/domain/user.entity.test.ts` — import path update
+- `test/unit/modules/identity/domain/role.entity.test.ts` — import path update
 
-**Owning milestone**: Unscheduled — revisit opportunistically, likely alongside Milestone 2 since that's when `user.entity.ts` and the Prisma repository are next touched anyway.
+**Owning milestone**: Milestone 2, Step 8.
 
 ---
 
@@ -332,30 +352,33 @@ the move to `packages/domain-kit` wasn't done here.
 
 ---
 
-## 10. `domain/services/clock.service.ts` is a pure re-export with no domain-specific behaviour
+## 10. `domain/services/clock.service.ts` is a pure re-export with no domain-specific behaviour ✅ Done (Milestone 2 Step 8)
 
-**What was deferred**: `domain/services/clock.service.ts` exists solely to
+**What was deferred**: `domain/services/clock.service.ts` existed solely to
 satisfy the milestone's original "four domain service interfaces" list —
-its entire content is `export type { Clock } from '@leen-mart/domain-kit';`.
-It adds nothing; the real interface and its `SystemClock`/`FixedClock`
+its entire content was `export type { Clock } from '@leen-mart/domain-kit';`.
+It added nothing; the real interface and its `SystemClock`/`FixedClock`
 implementations already live in domain-kit and are what every entity/value
 object in this module actually uses (`now: Date` parameters).
 
-**Why flagged rather than removed now**: it does no harm sitting alongside
-the other three (genuinely non-trivial) service interfaces in the same
-folder, and removing it isn't worth a separate change on its own. Per
+**Why it was flagged rather than removed at the time**: it did no harm sitting
+alongside the other three (genuinely non-trivial) service interfaces in the
+same folder, and removing it wasn't worth a separate change on its own. Per
 explicit instruction, this pattern (a wrapper re-export with zero added
-behaviour) should not be expanded elsewhere — this is the one and only
+behaviour) was not to be expanded elsewhere — it was the one and only
 exception, kept for discoverability within `domain/services/`, not a
 precedent.
 
-**Files affected if simplified**: delete `domain/services/clock.service.ts`;
-remove its line from `domain/index.ts`; anywhere that would have imported
-`Clock` from this module's domain barrel imports it from
-`@leen-mart/domain-kit` directly instead (which is already how every other
-existing call site in this codebase gets it).
+**Resolution (Step 8)**: deleted `domain/services/clock.service.ts` and
+removed its line from `domain/index.ts`. Confirmed first, by inspection, that
+nothing in the identity module imported `Clock` via the domain barrel —
+every existing call site (`identity.module.ts`, all four use cases,
+`session-issuer.service.ts`, `jsonwebtoken-access-token.service.ts`, and every
+test that needs `FixedClock`) already imported `Clock` directly from
+`@leen-mart/domain-kit`, exactly as this entry predicted. No other file
+required any change.
 
-**Owning milestone**: Unscheduled — cheap to do opportunistically whenever `domain/services/` is next touched (e.g. alongside item 8's reconciliation).
+**Owning milestone**: Milestone 2, Step 8.
 
 ---
 
@@ -389,16 +412,16 @@ calls these methods.
 
 ## Summary table
 
-| #   | Item                                                                | Owning milestone                                    |
-| --- | ------------------------------------------------------------------- | --------------------------------------------------- |
-| 1   | Branded IDs on `User`/`Session` throughout app/infra                | Milestone 2                                         |
-| 2   | `User.status` mandatory + real persistence column                   | ✅ Done (Milestone 2 Step 5)                        |
-| 3   | Persistence + use cases for `Session`/`VendorProfile`/`Otp`         | Milestone 2 (partial), later for use cases          |
-| 4   | `Role` relocation to `value-objects/`                               | Unscheduled (opportunistic, likely alongside #1/#2) |
-| 5   | Single `Role` → role collection                                     | Unscheduled (needs product decision)                |
-| 6   | Optional email / phone-primary customer auth                        | Milestone 2 (schema+domain), later (use case)       |
-| 7   | Vendor registration + Admin MFA                                     | Unscheduled (likely its own milestone)              |
-| 8   | Reconcile `domain/{repositories,services}` with `application/ports` | ✅ Done (Steps 1, 2, 6, 7)                          |
-| 9   | Move `DomainEvent<TType>` to `@leen-mart/domain-kit`                | Unscheduled (when a 2nd bounded context needs it)   |
-| 10  | Remove/simplify the pure-re-export `clock.service.ts`               | Unscheduled (opportunistic, alongside #8)           |
-| 11  | Persist `User` status transitions (needs `UserRepository.update()`) | Unscheduled (no current caller)                     |
+| #   | Item                                                                | Owning milestone                                  |
+| --- | ------------------------------------------------------------------- | ------------------------------------------------- |
+| 1   | Branded IDs on `User`/`Session` throughout app/infra                | Milestone 2                                       |
+| 2   | `User.status` mandatory + real persistence column                   | ✅ Done (Milestone 2 Step 5)                      |
+| 3   | Persistence + use cases for `Session`/`VendorProfile`/`Otp`         | Milestone 2 (partial), later for use cases        |
+| 4   | `Role` relocation to `value-objects/`                               | ✅ Done (Milestone 2 Step 8)                      |
+| 5   | Single `Role` → role collection                                     | Unscheduled (needs product decision)              |
+| 6   | Optional email / phone-primary customer auth                        | Milestone 2 (schema+domain), later (use case)     |
+| 7   | Vendor registration + Admin MFA                                     | Unscheduled (likely its own milestone)            |
+| 8   | Reconcile `domain/{repositories,services}` with `application/ports` | ✅ Done (Steps 1, 2, 6, 7)                        |
+| 9   | Move `DomainEvent<TType>` to `@leen-mart/domain-kit`                | Unscheduled (when a 2nd bounded context needs it) |
+| 10  | Remove/simplify the pure-re-export `clock.service.ts`               | ✅ Done (Milestone 2 Step 8)                      |
+| 11  | Persist `User` status transitions (needs `UserRepository.update()`) | Unscheduled (no current caller)                   |

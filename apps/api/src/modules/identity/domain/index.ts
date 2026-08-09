@@ -9,12 +9,12 @@
 
 // entities
 export * from './entities/user.entity.js';
-export * from './entities/role.entity.js';
 export * from './entities/session.entity.js';
 export * from './entities/vendor-profile.entity.js';
 export * from './entities/otp.entity.js';
 
 // value objects
+export * from './value-objects/role.value-object.js';
 export * from './value-objects/user-id.value-object.js';
 export * from './value-objects/session-id.value-object.js';
 export * from './value-objects/vendor-id.value-object.js';
@@ -50,4 +50,3 @@ export * from './services/password-hasher.service.js';
 export * from './services/otp-generator.service.js';
 export * from './services/token-generator.service.js';
 export * from './services/token-hasher.service.js';
-export * from './services/clock.service.js';

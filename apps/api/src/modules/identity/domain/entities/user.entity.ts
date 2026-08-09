@@ -1,5 +1,5 @@
 import type { UserId } from '../value-objects/user-id.value-object.js';
-import { Role } from './role.entity.js';
+import { Role } from '../value-objects/role.value-object.js';
 import type { PasswordHash } from '../value-objects/password-hash.value-object.js';
 import { UserStatus } from '../value-objects/user-status.value-object.js';
 import { AccountLockedError, AccountSuspendedError } from '../errors/identity-errors.js';

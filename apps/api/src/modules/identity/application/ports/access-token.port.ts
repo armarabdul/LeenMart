@@ -1,5 +1,5 @@
 import type { UserId } from '../../domain/value-objects/user-id.value-object.js';
-import type { RoleName } from '../../domain/entities/role.entity.js';
+import type { RoleName } from '../../domain/value-objects/role.value-object.js';
 
 export interface AccessTokenClaims {
   readonly sub: UserId;
