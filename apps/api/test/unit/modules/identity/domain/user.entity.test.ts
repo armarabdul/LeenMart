@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { toUserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
+import { UserStatus } from '../../../../../src/modules/identity/domain/value-objects/user-status.value-object.js';
 import { Role } from '../../../../../src/modules/identity/domain/entities/role.entity.js';
 import { User } from '../../../../../src/modules/identity/domain/entities/user.entity.js';
 
@@ -28,6 +29,7 @@ describe('User', () => {
       email: 'vendor@example.com',
       passwordHash: 'hash',
       role: Role.VENDOR,
+      status: UserStatus.ACTIVE,
       createdAt: now,
       updatedAt: now,
     });

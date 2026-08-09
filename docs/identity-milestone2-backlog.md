@@ -41,33 +41,36 @@ domain-only with the build required to stay green throughout.
 
 ---
 
-## 2. `User.status` made mandatory
+## 2. `User.status` made mandatory ✅ Done (Milestone 2 Step 5)
 
-**What was deferred**: `UserProps.status` stays optional (`status?: UserStatus`),
+**What was deferred**: `UserProps.status` stayed optional (`status?: UserStatus`),
 with the `status` getter defaulting to `ACTIVE` when absent, rather than being
 a required field the entity always owns explicitly.
 
-**Why**: the Prisma `User` model has **no `status` column at all today** —
-there is nothing for the repository to read even if it were in scope to try.
-Making the field mandatory in the domain type would immediately break the one
-production call site that constructs a `User` without it
-(`prisma-user.repository.ts`'s `toDomain()`), and fixing that properly requires
+**Why it was deferred**: the Prisma `User` model had **no `status` column at
+all** — there was nothing for the repository to read even if it were in scope
+to try. Making the field mandatory in the domain type would have immediately
+broken the one production call site that constructs a `User` without it
+(`prisma-user.repository.ts`'s `toDomain()`), and fixing that properly required
 a Prisma migration (new column) plus repository read/write logic — both
-infrastructure/Prisma work, explicitly out of scope this milestone. A
-stopgap default _inside the repository_ was considered and rejected for this
-milestone too: it still means editing `prisma-user.repository.ts`, and you
-directed that compatibility defaults do not belong in repositories during
-Milestone 1 either — the persistence layer should own a real column before the
-domain treats status as always-present.
+infrastructure/Prisma work, out of scope for the domain-only Milestone 1.
 
-**Files that will be affected in Milestone 2**:
+**Resolution (Step 5)**: added `enum UserStatus` and `User.status UserStatus
+@default(ACTIVE)` to `schema.prisma`, with a migration that adds the column as
+`NOT NULL DEFAULT 'ACTIVE'` (safe for any existing rows — matches the exact
+fallback the domain getter already used). `UserProps.status` is now required;
+the `?? UserStatus.ACTIVE` fallback was removed from the getter.
+`prisma-user.repository.ts` reads `UserStatus.fromName(row.status)` in
+`toDomain()` and writes `user.status.name` in `create()`, mirroring the
+existing `Role` mapping pattern exactly. `register()`, `activate()`,
+`suspend()`, `lock()`, and `reinstate()` were not changed — they already
+either set `status` explicitly or already required no change.
 
-- `apps/api/prisma/schema.prisma` — add a `status` column to `User` (with a migration)
-- `infrastructure/persistence/prisma-user.repository.ts` — `toDomain()` must read the new column instead of omitting the field
-- `domain/entities/user.entity.ts` — `status` becomes a required field on `UserProps`; drop the `?? UserStatus.ACTIVE` default in the getter
-- `test/unit/modules/identity/domain/user.entity.test.ts` — `reconstitute()` call must supply `status` explicitly
-
-**Owning milestone**: Milestone 2.
+**Explicitly not included in Step 5** (see item 11): persisting the _results_
+of `activate()`/`suspend()`/`lock()`/`reinstate()` — there is still no
+`UserRepository.update()`/`PrismaUserRepository.update()` method. Step 5 made
+the column exist and made create/read round-trip correctly; it did not add a
+way to persist a status transition after registration.
 
 ---
 
@@ -280,12 +283,40 @@ existing call site in this codebase gets it).
 
 ---
 
+## 11. `User` status transitions (`activate`/`suspend`/`lock`/`reinstate`) are not persisted
+
+**What was deferred**: `User.activate()`, `.suspend()`, `.lock()`, and
+`.reinstate()` all correctly return a new `User` instance with the updated
+`status` in memory, but nothing writes that change back to the database —
+`UserRepository`/`PrismaUserRepository` has no `update()` method at all today,
+only `create()`, `findById()`, and `findByEmail()`.
+
+**Why deferred**: Milestone 2 Step 5 was explicitly scoped to making
+`UserStatus` a persisted, required _column_ — correct create/read round-trip
+through `status` — not to wiring up transition persistence, which requires a
+new port method (`UserRepository.update(user: User): Promise<void>`), a new
+`PrismaUserRepository.update()` implementation, and (eventually) an
+application use case that actually calls `activate()`/`suspend()`/etc. and
+persists the result. None of that exists yet, and no current use case ever
+calls these methods.
+
+**Files that will be affected when this is picked up**:
+
+- `domain/repositories/user.repository.ts` — add `update(user: User): Promise<void>`
+- `application/ports/user-repository.port.ts` — re-export picks this up automatically (it's a compatibility alias of the domain interface)
+- `infrastructure/persistence/prisma-user.repository.ts` — new `update()` implementation
+- New application use case(s) to actually trigger a transition (e.g. admin suspends a user) — not yet scoped
+
+**Owning milestone**: Unscheduled — no current use case needs it; pick up whenever a real caller (e.g. admin moderation) is scoped.
+
+---
+
 ## Summary table
 
 | #   | Item                                                                | Owning milestone                                    |
 | --- | ------------------------------------------------------------------- | --------------------------------------------------- |
 | 1   | Branded IDs on `User`/`Session` throughout app/infra                | Milestone 2                                         |
-| 2   | `User.status` mandatory + real persistence column                   | Milestone 2                                         |
+| 2   | `User.status` mandatory + real persistence column                   | ✅ Done (Milestone 2 Step 5)                        |
 | 3   | Persistence + use cases for `Session`/`VendorProfile`/`Otp`         | Milestone 2 (partial), later for use cases          |
 | 4   | `Role` relocation to `value-objects/`                               | Unscheduled (opportunistic, likely alongside #1/#2) |
 | 5   | Single `Role` → role collection                                     | Unscheduled (needs product decision)                |
@@ -294,3 +325,4 @@ existing call site in this codebase gets it).
 | 8   | Reconcile `domain/{repositories,services}` with `application/ports` | Milestone 2                                         |
 | 9   | Move `DomainEvent<TType>` to `@leen-mart/domain-kit`                | Unscheduled (when a 2nd bounded context needs it)   |
 | 10  | Remove/simplify the pure-re-export `clock.service.ts`               | Unscheduled (opportunistic, alongside #8)           |
+| 11  | Persist `User` status transitions (needs `UserRepository.update()`) | Unscheduled (no current caller)                     |

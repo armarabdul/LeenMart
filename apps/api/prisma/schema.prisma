@@ -62,14 +62,22 @@ enum Role {
   ADMIN
 }
 
+enum UserStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  LOCKED
+}
+
 model User {
-  id           String    @id @db.Uuid
-  email        String    @unique @db.VarChar(254)
-  passwordHash String    @map("password_hash")
-  role         Role      @default(CUSTOMER)
-  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
-  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+  id           String     @id @db.Uuid
+  email        String     @unique @db.VarChar(254)
+  passwordHash String     @map("password_hash")
+  role         Role       @default(CUSTOMER)
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt    DateTime?  @map("deleted_at") @db.Timestamptz(6)
 
   refreshTokens RefreshToken[]
 

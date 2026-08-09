@@ -3,12 +3,14 @@ import { toUserId, type UserId } from '../../domain/value-objects/user-id.value-
 import type { UserRepository } from '../../application/ports/user-repository.port.js';
 import { Role } from '../../domain/entities/role.entity.js';
 import { User } from '../../domain/entities/user.entity.js';
+import { UserStatus } from '../../domain/value-objects/user-status.value-object.js';
 
 interface UserRow {
   readonly id: string;
   readonly email: string;
   readonly passwordHash: string;
   readonly role: string;
+  readonly status: string;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -19,6 +21,7 @@ const toDomain = (row: UserRow): User =>
     email: row.email,
     passwordHash: row.passwordHash,
     role: Role.fromName(row.role),
+    status: UserStatus.fromName(row.status),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   });
@@ -34,6 +37,7 @@ export class PrismaUserRepository implements UserRepository {
         email: user.email,
         passwordHash: user.passwordHash,
         role: user.role.name,
+        status: user.status.name,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
       },

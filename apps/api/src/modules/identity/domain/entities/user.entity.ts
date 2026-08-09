@@ -8,13 +8,7 @@ export interface UserProps {
   readonly email: string;
   readonly passwordHash: string;
   readonly role: Role;
-  /**
-   * Optional for backward compatibility: rows persisted before this field
-   * existed reconstitute without one. `status` getter defaults them to
-   * ACTIVE, since that's what "no status column yet" has meant in practice
-   * for every account created through the existing register() flow.
-   */
-  readonly status?: UserStatus;
+  readonly status: UserStatus;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -57,7 +51,7 @@ export class User {
   }
 
   get status(): UserStatus {
-    return this.props.status ?? UserStatus.ACTIVE;
+    return this.props.status;
   }
 
   get createdAt(): Date {
