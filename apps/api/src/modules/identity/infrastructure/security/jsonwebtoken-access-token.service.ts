@@ -14,7 +14,17 @@ export interface JsonWebTokenAccessTokenServiceConfig {
   readonly ttlSeconds: number;
 }
 
-const ROLE_NAMES: readonly RoleName[] = ['CUSTOMER', 'VENDOR', 'ADMIN'];
+const ROLE_NAMES: readonly RoleName[] = [
+  'CUSTOMER',
+  'VENDOR_OWNER',
+  'VENDOR_MANAGER',
+  'VENDOR_STAFF',
+  'SUPER_ADMIN',
+  'CATALOGUE_MODERATOR',
+  'FINANCE_ADMIN',
+  'RISK_ANALYST',
+  'SUPPORT_AGENT',
+];
 
 const isRoleName = (value: unknown): value is RoleName =>
   typeof value === 'string' && (ROLE_NAMES as readonly string[]).includes(value);

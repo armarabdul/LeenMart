@@ -1,7 +1,18 @@
 import { z } from 'zod';
 import { emailSchema, isoDateTimeSchema, phoneSchema, uuidSchema } from '../common/primitives.js';
 
-export const roleSchema = z.enum(['CUSTOMER', 'VENDOR', 'ADMIN']);
+/** Mirrors the domain `Role` value object's nine fixed roles (SDD 8.1). */
+export const roleSchema = z.enum([
+  'CUSTOMER',
+  'VENDOR_OWNER',
+  'VENDOR_MANAGER',
+  'VENDOR_STAFF',
+  'SUPER_ADMIN',
+  'CATALOGUE_MODERATOR',
+  'FINANCE_ADMIN',
+  'RISK_ANALYST',
+  'SUPPORT_AGENT',
+]);
 
 export const registerCustomerRequestSchema = z
   .object({

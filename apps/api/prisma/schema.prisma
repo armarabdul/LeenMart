@@ -53,13 +53,21 @@ model OutboxEvent {
 
 /// Identity module (first business module).
 ///
-/// A single fixed role per user is sufficient for the three roles this
-/// platform defines today; no permissions/roles join table is modelled since
-/// nothing beyond CUSTOMER/VENDOR/ADMIN membership has been requested.
+/// A single fixed role per user is sufficient for the nine roles the SDD's
+/// role hierarchy defines (SDD 8.1); no permissions/roles join table is
+/// modelled since nothing beyond fixed membership in one of these roles has
+/// been requested. The permission matrix these roles feed (SDD 8.2) is
+/// separate, out-of-scope-here policy, not part of this enum.
 enum Role {
   CUSTOMER
-  VENDOR
-  ADMIN
+  VENDOR_OWNER
+  VENDOR_MANAGER
+  VENDOR_STAFF
+  SUPER_ADMIN
+  CATALOGUE_MODERATOR
+  FINANCE_ADMIN
+  RISK_ANALYST
+  SUPPORT_AGENT
 }
 
 enum UserStatus {

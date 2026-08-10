@@ -30,12 +30,12 @@ describe('User', () => {
       id: userId,
       email: 'vendor@example.com',
       passwordHash,
-      role: Role.VENDOR,
+      role: Role.VENDOR_OWNER,
       status: UserStatus.ACTIVE,
       createdAt: now,
       updatedAt: now,
     });
 
-    expect(user.role).toBe(Role.VENDOR);
+    expect(user.role).toBe(Role.VENDOR_OWNER);
   });
 });
