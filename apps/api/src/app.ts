@@ -12,6 +12,7 @@ import {
 } from './shared/interface/http/middleware/error-handler.js';
 import { createHealthRouter } from './shared/interface/http/routes/health.routes.js';
 import { createIdentityModule } from './modules/identity/index.js';
+import { createVendorModule } from './modules/vendor/index.js';
 
 /**
  * Builds the Express application.
@@ -83,6 +84,16 @@ export const createApp = (container: Container): Express => {
 
   const identityModule = createIdentityModule({ prisma, env, clock, idGenerator, logger });
   app.use('/api/v1/identity', identityModule.router);
+
+  // Shares identity's token verifier rather than minting a second one (SDD 5).
+  const vendorModule = createVendorModule({
+    prisma,
+    accessTokenService: identityModule.accessTokenService,
+    clock,
+    idGenerator,
+    logger,
+  });
+  app.use('/api/v1/vendors', vendorModule.router);
 
   // Further business modules mount here as they are built, e.g.
   //   app.use('/api/v1/catalogue', createCatalogueRouter(container));

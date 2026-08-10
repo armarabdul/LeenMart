@@ -2,6 +2,7 @@ import type { PrismaClient } from '@prisma/client';
 import type { Router } from 'express';
 import type { Clock, IdGenerator, Logger } from '@leen-mart/domain-kit';
 import type { Env } from '../../shared/config/env.js';
+import type { AccessTokenService } from './application/ports/access-token.port.js';
 import { Argon2OtpHasher } from './infrastructure/security/argon2-otp-hasher.js';
 import { Argon2PasswordHasher } from './infrastructure/security/argon2-password-hasher.js';
 import { CryptoOtpGenerator } from './infrastructure/security/crypto-otp-generator.js';
@@ -32,6 +33,12 @@ export interface IdentityModule {
   readonly router: Router;
   readonly requestOtpUseCase: RequestOtpUseCase;
   readonly verifyOtpUseCase: VerifyOtpUseCase;
+  /**
+   * Published so the composition root can give other modules' authenticated
+   * routes the *same* verifier rather than minting a second one — SDD 5
+   * makes this module the sole owner of tokens.
+   */
+  readonly accessTokenService: AccessTokenService;
 }
 
 interface AuthUseCaseDeps {
@@ -205,5 +212,5 @@ export const createIdentityModule = (deps: IdentityModuleDeps): IdentityModule =
   });
 
   const router = createIdentityRouter(controller, accessTokenService);
-  return { router, requestOtpUseCase, verifyOtpUseCase };
+  return { router, requestOtpUseCase, verifyOtpUseCase, accessTokenService };
 };
