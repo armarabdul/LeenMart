@@ -8,5 +8,8 @@ export * from './entities/vendor-profile.entity.js';
 // value objects
 export * from './value-objects/vendor-status.value-object.js';
 
+// errors
+export * from './errors/vendor-errors.js';
+
 // repository interfaces
 export * from './repositories/vendor.repository.js';
