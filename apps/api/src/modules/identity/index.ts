@@ -6,6 +6,13 @@ export type { IdentityModule, IdentityModuleDeps } from './identity.module.js';
 // reason to depend on this module.
 export type { RoleName } from './domain/index.js';
 
+// `UserId` is the shared identity anchor other modules key their records to
+// (SDD 6.7). `VendorId` is published from here only because it still lives
+// in this module — a documented pre-existing SDD 5 discrepancy, since SDD 5
+// assigns the vendor profile and its events to the `vendor` module. Left in
+// place deliberately; the `vendor` module consumes it through this interface.
+export type { UserId, VendorId } from './domain/index.js';
+
 // Minimal cross-cutting surface: the shared authentication middleware
 // (SDD 7.4 step 1) is parameterised by this module's AccessTokenService and
 // produces a Principal from its verified claims.

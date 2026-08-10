@@ -10,7 +10,6 @@
 // entities
 export * from './entities/user.entity.js';
 export * from './entities/session.entity.js';
-export * from './entities/vendor-profile.entity.js';
 export * from './entities/otp.entity.js';
 
 // value objects
@@ -42,7 +41,6 @@ export * from './events/vendor-approved.event.js';
 // repository interfaces
 export * from './repositories/user.repository.js';
 export * from './repositories/session.repository.js';
-export * from './repositories/vendor.repository.js';
 export * from './repositories/otp.repository.js';
 
 // service interfaces
