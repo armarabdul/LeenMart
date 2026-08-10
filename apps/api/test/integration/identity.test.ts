@@ -19,6 +19,10 @@ interface ErrorBody {
   error: { code: string; message: string };
 }
 
+interface MeBody {
+  data: { id: string; role: string };
+}
+
 const EMAIL_PREFIX = 'identity-integration-';
 const PHONE_PREFIX = '+9197';
 
@@ -278,6 +282,64 @@ describe('identity endpoints', () => {
       const response = await verifyOtp(app, phone, '123456').expect(401);
 
       expect((response.body as ErrorBody).error.code).toBe('EXPIRED_OTP');
+    });
+  });
+
+  describe('GET /me', () => {
+    it('returns the authenticated caller for a valid access token', async () => {
+      const email = uniqueEmail('me');
+      const registered = await registerCustomer(app, email, 'correct horse battery staple').expect(
+        201,
+      );
+      const session = registered.body as AuthSessionBody;
+
+      const response = await request(app)
+        .get('/api/v1/identity/me')
+        .set('Authorization', `Bearer ${session.data.accessToken}`)
+        .expect(200);
+
+      const body = response.body as MeBody;
+      expect(body.data.id).toBe(session.data.user.id);
+      expect(body.data.role).toBe('CUSTOMER');
+    });
+
+    it('rejects a request with no Authorization header', async () => {
+      const response = await request(app).get('/api/v1/identity/me').expect(401);
+
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_ACCESS_TOKEN');
+    });
+
+    it('rejects a request with an invalid access token', async () => {
+      const response = await request(app)
+        .get('/api/v1/identity/me')
+        .set('Authorization', 'Bearer not-a-real-token')
+        .expect(401);
+
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_ACCESS_TOKEN');
+    });
+
+    it('rejects a non-Bearer Authorization scheme', async () => {
+      const response = await request(app)
+        .get('/api/v1/identity/me')
+        .set('Authorization', 'Basic dXNlcjpwYXNz')
+        .expect(401);
+
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_ACCESS_TOKEN');
+    });
+
+    it('does not accept a refresh token in place of an access token', async () => {
+      const email = uniqueEmail('me-refresh-token');
+      const registered = await registerCustomer(app, email, 'correct horse battery staple').expect(
+        201,
+      );
+      const session = registered.body as AuthSessionBody;
+
+      const response = await request(app)
+        .get('/api/v1/identity/me')
+        .set('Authorization', `Bearer ${session.data.refreshToken}`)
+        .expect(401);
+
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_ACCESS_TOKEN');
     });
   });
 });

@@ -4,6 +4,7 @@ import type {
   LoginRequest,
   LogoutRequest,
   LogoutResponse,
+  MeResponse,
   RefreshSessionRequest,
   RegisterCustomerRequest,
   RequestOtpRequest,
@@ -27,6 +28,12 @@ export interface IdentityController {
   readonly logout: (req: Request, res: Response) => Promise<void>;
   readonly requestOtp: (req: Request, res: Response) => Promise<void>;
   readonly verifyOtp: (req: Request, res: Response) => Promise<void>;
+  /**
+   * Synchronous, unlike the other handlers: it does no I/O, only reads the
+   * `Principal` the `authenticate()` middleware already attached to the
+   * request — there's nothing here to `await`.
+   */
+  readonly me: (req: Request, res: Response) => void;
 }
 
 export interface IdentityControllerDeps {
@@ -88,5 +95,18 @@ export const createIdentityController = (deps: IdentityControllerDeps): Identity
     const { body } = validatedData<VerifyOtpRequest>(req);
     const session = await deps.verifyOtpUseCase.execute(body);
     res.status(200).json({ data: toSessionResponse(session), meta: { requestId: getRequestId() } });
+  },
+
+  me: (req: Request, res: Response): void => {
+    // `authenticate()` guarantees `req.principal` is set before this handler
+    // runs — reachability without it means the route was wired without the
+    // middleware, a programming error, not a client-facing 401 case.
+    if (!req.principal) {
+      throw new Error(
+        'GET /me reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+    const data: MeResponse = { id: req.principal.userId, role: req.principal.role };
+    res.status(200).json({ data, meta: { requestId: getRequestId() } });
   },
 });

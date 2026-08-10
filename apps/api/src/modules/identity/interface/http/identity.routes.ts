@@ -8,10 +8,15 @@ import {
   verifyOtpRequestSchema,
 } from '@leen-mart/contracts';
 import { asyncHandler } from '../../../../shared/interface/http/middleware/async-handler.js';
+import { authenticate } from '../../../../shared/interface/http/middleware/authenticate.js';
 import { validate } from '../../../../shared/interface/http/middleware/validate.js';
+import type { AccessTokenService } from '../../application/ports/access-token.port.js';
 import type { IdentityController } from './identity.controller.js';
 
-export const createIdentityRouter = (controller: IdentityController): Router => {
+export const createIdentityRouter = (
+  controller: IdentityController,
+  accessTokenService: AccessTokenService,
+): Router => {
   const router = Router();
 
   router.post(
@@ -36,6 +41,7 @@ export const createIdentityRouter = (controller: IdentityController): Router => 
     validate({ body: verifyOtpRequestSchema }),
     asyncHandler(controller.verifyOtp),
   );
+  router.get('/me', authenticate(accessTokenService), controller.me);
 
   return router;
 };

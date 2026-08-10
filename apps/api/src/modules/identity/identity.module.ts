@@ -204,5 +204,6 @@ export const createIdentityModule = (deps: IdentityModuleDeps): IdentityModule =
     verifyOtpUseCase,
   });
 
-  return { router: createIdentityRouter(controller), requestOtpUseCase, verifyOtpUseCase };
+  const router = createIdentityRouter(controller, accessTokenService);
+  return { router, requestOtpUseCase, verifyOtpUseCase };
 };

@@ -77,6 +77,17 @@ export const requestOtpResponseSchema = z.object({
   success: z.literal(true),
 });
 
+/**
+ * GET /me returns exactly what the verified access token's Principal
+ * carries (SDD 7.4 step 1) — no email/phone, since those aren't part of the
+ * token today. Deliberately not `authUserSchema`: that shape implies an
+ * optional email a bare Principal can never actually supply.
+ */
+export const meResponseSchema = z.object({
+  id: uuidSchema,
+  role: roleSchema,
+});
+
 export type RoleDto = z.infer<typeof roleSchema>;
 export type RegisterCustomerRequest = z.infer<typeof registerCustomerRequestSchema>;
 export type LoginRequest = z.infer<typeof loginRequestSchema>;
@@ -88,3 +99,4 @@ export type AuthUserDto = z.infer<typeof authUserSchema>;
 export type AuthSessionResponse = z.infer<typeof authSessionResponseSchema>;
 export type LogoutResponse = z.infer<typeof logoutResponseSchema>;
 export type RequestOtpResponse = z.infer<typeof requestOtpResponseSchema>;
+export type MeResponse = z.infer<typeof meResponseSchema>;
