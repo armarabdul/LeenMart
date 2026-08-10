@@ -1,12 +1,11 @@
 import type { OtpId } from '../value-objects/otp-id.value-object.js';
 import type { UserId } from '../value-objects/user-id.value-object.js';
-import type { OtpCode } from '../value-objects/otp-code.value-object.js';
 import { ExpiredOtpError, InvalidOtpError } from '../errors/identity-errors.js';
 
 export interface OtpProps {
   readonly id: OtpId;
   readonly userId: UserId;
-  readonly code: OtpCode;
+  readonly codeHash: string;
   readonly attempts: number;
   readonly expiresAt: Date;
   readonly consumedAt: Date | null;
@@ -27,17 +26,26 @@ const MS_PER_MINUTE = 60_000;
  * (already used, already exhausted, expired) rather than silently
  * succeeding — "single use" and "maximum 5 attempts" are invariants to
  * enforce, not just data to record.
+ *
+ * Holds `codeHash`, never the raw code — same reasoning as `Session.tokenHash`.
+ * The caller hashes the freshly-generated code (via `OtpHasher`) before
+ * calling `issue()`; this entity never sees the plaintext value. Because
+ * Argon2 hashes are salted (non-deterministic), there is no entity-level
+ * `matches()`/equality check — verifying a supplied code means calling
+ * `OtpHasher.verify(otp.codeHash, suppliedCode)` at the application layer,
+ * exactly mirroring how refresh-token verification has no entity-level
+ * compare method either.
  */
 export class Otp {
   static readonly MAX_ATTEMPTS = 5;
 
   private constructor(private readonly props: OtpProps) {}
 
-  static issue(props: { id: OtpId; userId: UserId; code: OtpCode; now: Date }): Otp {
+  static issue(props: { id: OtpId; userId: UserId; codeHash: string; now: Date }): Otp {
     return new Otp({
       id: props.id,
       userId: props.userId,
-      code: props.code,
+      codeHash: props.codeHash,
       attempts: 0,
       expiresAt: new Date(props.now.getTime() + VALIDITY_MINUTES * MS_PER_MINUTE),
       consumedAt: null,
@@ -55,6 +63,10 @@ export class Otp {
 
   get userId(): UserId {
     return this.props.userId;
+  }
+
+  get codeHash(): string {
+    return this.props.codeHash;
   }
 
   get attempts(): number {
@@ -83,11 +95,6 @@ export class Otp {
 
   isActive(now: Date): boolean {
     return !this.isExpired(now) && !this.isConsumed() && !this.hasExceededMaxAttempts();
-  }
-
-  /** Pure comparison — recording the attempt is a separate step (`recordFailedAttempt`). */
-  matches(code: OtpCode): boolean {
-    return this.props.code.equals(code);
   }
 
   recordFailedAttempt(now: Date): Otp {

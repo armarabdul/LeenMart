@@ -82,6 +82,7 @@ model User {
   deletedAt       DateTime?  @map("deleted_at") @db.Timestamptz(6)
 
   refreshTokens RefreshToken[]
+  otps          Otp[]
 
   @@map("users")
 }
@@ -106,6 +107,30 @@ model RefreshToken {
 
   @@index([userId], map: "idx_refresh_tokens_user")
   @@map("refresh_tokens")
+}
+
+/// One-time phone verification codes (SDD 7.1/7.3, Milestone 3 Step 2).
+///
+/// `codeHash` is the only representation of the code ever persisted — never
+/// the raw 6-digit value, hashed with Argon2id (same reasoning as password
+/// storage: the code space is small enough that a fast hash would be
+/// brute-forceable offline). `attempts`/`expiresAt`/`consumedAt` mirror the
+/// domain `Otp` entity's own invariants (5-minute validity, 5 max attempts,
+/// single use) exactly; this table only stores that state, it never decides
+/// it.
+model Otp {
+  id         String    @id @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  codeHash   String    @map("code_hash")
+  attempts   Int       @default(0)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "idx_otps_user")
+  @@map("otps")
 }
 
 /// Immutable admin action log (SDD 18.4).
