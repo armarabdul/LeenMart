@@ -12,6 +12,7 @@ import type { User } from '../entities/user.entity.js';
  */
 export interface UserRepository {
   create(user: User): Promise<void>;
+  update(user: User): Promise<void>;
   findById(id: UserId): Promise<User | null>;
   findByEmail(email: string): Promise<User | null>;
   findByPhone(phone: PhoneNumber): Promise<User | null>;

@@ -52,6 +52,17 @@ export class PrismaUserRepository implements UserRepository {
     });
   }
 
+  async update(user: User): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        status: user.status.name,
+        phoneVerifiedAt: user.phoneVerifiedAt,
+        updatedAt: user.updatedAt,
+      },
+    });
+  }
+
   async findByEmail(email: string): Promise<User | null> {
     const row = await this.prisma.user.findFirst({ where: { email, deletedAt: null } });
     return row ? toDomain(row) : null;

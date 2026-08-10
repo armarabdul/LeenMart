@@ -6,6 +6,9 @@ import type {
   LogoutResponse,
   RefreshSessionRequest,
   RegisterCustomerRequest,
+  RequestOtpRequest,
+  RequestOtpResponse,
+  VerifyOtpRequest,
 } from '@leen-mart/contracts';
 import { getRequestId } from '../../../../shared/interface/http/middleware/request-context.js';
 import { validatedData } from '../../../../shared/interface/http/middleware/validate.js';
@@ -14,12 +17,16 @@ import type { LoginUseCase } from '../../application/use-cases/login.use-case.js
 import type { LogoutUseCase } from '../../application/use-cases/logout.use-case.js';
 import type { RefreshSessionUseCase } from '../../application/use-cases/refresh-session.use-case.js';
 import type { RegisterCustomerUseCase } from '../../application/use-cases/register-customer.use-case.js';
+import type { RequestOtpUseCase } from '../../application/use-cases/request-otp.use-case.js';
+import type { VerifyOtpUseCase } from '../../application/use-cases/verify-otp.use-case.js';
 
 export interface IdentityController {
   readonly register: (req: Request, res: Response) => Promise<void>;
   readonly login: (req: Request, res: Response) => Promise<void>;
   readonly refresh: (req: Request, res: Response) => Promise<void>;
   readonly logout: (req: Request, res: Response) => Promise<void>;
+  readonly requestOtp: (req: Request, res: Response) => Promise<void>;
+  readonly verifyOtp: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface IdentityControllerDeps {
@@ -27,6 +34,8 @@ export interface IdentityControllerDeps {
   readonly loginUseCase: LoginUseCase;
   readonly refreshSessionUseCase: RefreshSessionUseCase;
   readonly logoutUseCase: LogoutUseCase;
+  readonly requestOtpUseCase: RequestOtpUseCase;
+  readonly verifyOtpUseCase: VerifyOtpUseCase;
 }
 
 const toSessionResponse = (session: AuthSession): AuthSessionResponse => ({
@@ -66,5 +75,18 @@ export const createIdentityController = (deps: IdentityControllerDeps): Identity
     await deps.logoutUseCase.execute(body);
     const data: LogoutResponse = { success: true };
     res.status(200).json({ data, meta: { requestId: getRequestId() } });
+  },
+
+  requestOtp: async (req: Request, res: Response): Promise<void> => {
+    const { body } = validatedData<RequestOtpRequest>(req);
+    await deps.requestOtpUseCase.execute(body);
+    const data: RequestOtpResponse = { success: true };
+    res.status(200).json({ data, meta: { requestId: getRequestId() } });
+  },
+
+  verifyOtp: async (req: Request, res: Response): Promise<void> => {
+    const { body } = validatedData<VerifyOtpRequest>(req);
+    const session = await deps.verifyOtpUseCase.execute(body);
+    res.status(200).json({ data: toSessionResponse(session), meta: { requestId: getRequestId() } });
   },
 });

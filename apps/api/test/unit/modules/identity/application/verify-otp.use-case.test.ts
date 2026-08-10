@@ -1,0 +1,197 @@
+import { describe, expect, it, vi } from 'vitest';
+import { FixedClock, UuidV4Generator } from '@leen-mart/domain-kit';
+import { VerifyOtpUseCase } from '../../../../../src/modules/identity/application/use-cases/verify-otp.use-case.js';
+import { SessionIssuer } from '../../../../../src/modules/identity/application/services/session-issuer.service.js';
+import { RequestOtpUseCase } from '../../../../../src/modules/identity/application/use-cases/request-otp.use-case.js';
+import { PhoneNumber } from '../../../../../src/modules/identity/domain/value-objects/phone-number.value-object.js';
+import { User } from '../../../../../src/modules/identity/domain/entities/user.entity.js';
+import { Otp } from '../../../../../src/modules/identity/domain/entities/otp.entity.js';
+import { toUserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
+import { toOtpId } from '../../../../../src/modules/identity/domain/value-objects/otp-id.value-object.js';
+import {
+  ExpiredOtpError,
+  InvalidOtpError,
+} from '../../../../../src/modules/identity/domain/errors/identity-errors.js';
+import {
+  FakeAccessTokenService,
+  FakeOtpGenerator,
+  FakeOtpHasher,
+  InMemoryOtpRepository,
+  InMemoryRefreshTokenRepository,
+  InMemoryUserRepository,
+  SequentialRefreshTokenHasher,
+  nullLogger,
+} from './fakes.js';
+
+const PHONE = '+919876543210';
+const NOW = new Date('2026-01-01T00:00:00.000Z');
+
+const setup = (): {
+  verifyUseCase: VerifyOtpUseCase;
+  requestUseCase: RequestOtpUseCase;
+  userRepository: InMemoryUserRepository;
+  otpRepository: InMemoryOtpRepository;
+  otpHasher: FakeOtpHasher;
+  clock: FixedClock;
+} => {
+  const clock = new FixedClock(NOW);
+  const idGenerator = new UuidV4Generator();
+  const userRepository = new InMemoryUserRepository();
+  const otpRepository = new InMemoryOtpRepository();
+  const otpGenerator = new FakeOtpGenerator(['004281']);
+  const otpHasher = new FakeOtpHasher();
+  const refreshTokenRepository = new InMemoryRefreshTokenRepository();
+
+  const sessionIssuer = new SessionIssuer({
+    accessTokenService: new FakeAccessTokenService({
+      token: 'access-token',
+      expiresAt: new Date('2026-01-01T00:15:00.000Z'),
+    }),
+    refreshTokenHasher: new SequentialRefreshTokenHasher(),
+    refreshTokenRepository,
+    idGenerator,
+    clock,
+    refreshTtlDays: 30,
+  });
+
+  const requestUseCase = new RequestOtpUseCase({
+    userRepository,
+    otpGenerator,
+    otpHasher,
+    otpRepository,
+    idGenerator,
+    clock,
+    logger: nullLogger,
+  });
+
+  const verifyUseCase = new VerifyOtpUseCase({
+    userRepository,
+    otpHasher,
+    otpRepository,
+    sessionIssuer,
+    clock,
+    logger: nullLogger,
+  });
+
+  return { verifyUseCase, requestUseCase, userRepository, otpRepository, otpHasher, clock };
+};
+
+describe('VerifyOtpUseCase', () => {
+  it('verifies a valid OTP, consumes it, activates the user, and issues a session', async () => {
+    const { verifyUseCase, requestUseCase, userRepository, otpRepository } = setup();
+    await requestUseCase.execute({ phone: PHONE });
+
+    const session = await verifyUseCase.execute({ phone: PHONE, code: '004281' });
+
+    expect(session.accessToken).toBe('access-token');
+    expect(session.user.status.name).toBe('ACTIVE');
+    expect(session.user.phoneVerifiedAt).toEqual(NOW);
+
+    const persistedUser = await userRepository.findByPhone(PhoneNumber.create(PHONE));
+    expect(persistedUser?.status.name).toBe('ACTIVE');
+    expect(persistedUser?.phoneVerifiedAt).toEqual(NOW);
+
+    // The OTP is now consumed, so it's no longer "active" for this user.
+    expect(await otpRepository.findActiveByUserId(persistedUser!.id)).toBeNull();
+  });
+
+  it('never returns the plaintext OTP', async () => {
+    const { verifyUseCase, requestUseCase } = setup();
+    await requestUseCase.execute({ phone: PHONE });
+
+    const session = await verifyUseCase.execute({ phone: PHONE, code: '004281' });
+
+    expect(JSON.stringify(session)).not.toContain('004281');
+  });
+
+  it('rejects a wrong code, records a failed attempt, and does not verify the user', async () => {
+    const { verifyUseCase, requestUseCase, userRepository, otpRepository } = setup();
+    await requestUseCase.execute({ phone: PHONE });
+
+    await expect(verifyUseCase.execute({ phone: PHONE, code: '999999' })).rejects.toBeInstanceOf(
+      InvalidOtpError,
+    );
+
+    const user = await userRepository.findByPhone(PhoneNumber.create(PHONE));
+    expect(user?.status.name).toBe('PENDING');
+    expect(user?.phoneVerifiedAt).toBeNull();
+
+    const otp = await otpRepository.findActiveByUserId(user!.id);
+    expect(otp?.attempts).toBe(1);
+  });
+
+  it('does not call UserRepository.update() when the code is wrong', async () => {
+    const { verifyUseCase, requestUseCase, userRepository } = setup();
+    await requestUseCase.execute({ phone: PHONE });
+    const updateSpy = vi.spyOn(userRepository, 'update');
+
+    await expect(verifyUseCase.execute({ phone: PHONE, code: '999999' })).rejects.toThrow();
+
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects an expired OTP without calling the hasher', async () => {
+    const { verifyUseCase, userRepository, otpRepository, otpHasher, clock } = setup();
+    const user = User.registerWithPhone({
+      id: toUserId('00000000-0000-7000-8000-000000000040'),
+      phone: PhoneNumber.create(PHONE),
+      now: NOW,
+    });
+    await userRepository.create(user);
+    const otp = Otp.issue({
+      id: toOtpId('00000000-0000-7000-8000-000000000041'),
+      userId: user.id,
+      codeHash: 'hashed:004281',
+      now: NOW,
+    });
+    await otpRepository.create(otp);
+    clock.advanceMs(6 * 60_000); // past the 5-minute validity window
+    const verifySpy = vi.spyOn(otpHasher, 'verify');
+
+    await expect(verifyUseCase.execute({ phone: PHONE, code: '004281' })).rejects.toBeInstanceOf(
+      ExpiredOtpError,
+    );
+    expect(verifySpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects an already-consumed OTP without calling the hasher', async () => {
+    const { verifyUseCase, requestUseCase, userRepository, otpRepository, otpHasher } = setup();
+    await requestUseCase.execute({ phone: PHONE });
+    const user = await userRepository.findByPhone(PhoneNumber.create(PHONE));
+    const otp = await otpRepository.findActiveByUserId(user!.id);
+    await otpRepository.update(otp!.consume(NOW));
+    const verifySpy = vi.spyOn(otpHasher, 'verify');
+
+    await expect(verifyUseCase.execute({ phone: PHONE, code: '004281' })).rejects.toBeInstanceOf(
+      InvalidOtpError,
+    );
+    expect(verifySpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects an OTP that has exhausted its attempts without calling the hasher', async () => {
+    const { verifyUseCase, requestUseCase, userRepository, otpRepository, otpHasher } = setup();
+    await requestUseCase.execute({ phone: PHONE });
+    const user = await userRepository.findByPhone(PhoneNumber.create(PHONE));
+    let otp = (await otpRepository.findActiveByUserId(user!.id))!;
+    for (let i = 0; i < Otp.MAX_ATTEMPTS; i += 1) {
+      otp = otp.recordFailedAttempt(NOW);
+    }
+    await otpRepository.update(otp);
+    const verifySpy = vi.spyOn(otpHasher, 'verify');
+
+    await expect(verifyUseCase.execute({ phone: PHONE, code: '004281' })).rejects.toBeInstanceOf(
+      InvalidOtpError,
+    );
+    expect(verifySpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown phone without touching the OTP repository', async () => {
+    const { verifyUseCase, otpRepository } = setup();
+    const findSpy = vi.spyOn(otpRepository, 'findActiveByUserId');
+
+    await expect(
+      verifyUseCase.execute({ phone: '+919000000000', code: '004281' }),
+    ).rejects.toBeInstanceOf(InvalidOtpError);
+    expect(findSpy).not.toHaveBeenCalled();
+  });
+});

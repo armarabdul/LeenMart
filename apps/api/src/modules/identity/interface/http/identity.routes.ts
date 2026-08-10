@@ -4,6 +4,8 @@ import {
   logoutRequestSchema,
   refreshSessionRequestSchema,
   registerCustomerRequestSchema,
+  requestOtpRequestSchema,
+  verifyOtpRequestSchema,
 } from '@leen-mart/contracts';
 import { asyncHandler } from '../../../../shared/interface/http/middleware/async-handler.js';
 import { validate } from '../../../../shared/interface/http/middleware/validate.js';
@@ -24,6 +26,16 @@ export const createIdentityRouter = (controller: IdentityController): Router => 
     asyncHandler(controller.refresh),
   );
   router.post('/logout', validate({ body: logoutRequestSchema }), asyncHandler(controller.logout));
+  router.post(
+    '/otp/request',
+    validate({ body: requestOtpRequestSchema }),
+    asyncHandler(controller.requestOtp),
+  );
+  router.post(
+    '/otp/verify',
+    validate({ body: verifyOtpRequestSchema }),
+    asyncHandler(controller.verifyOtp),
+  );
 
   return router;
 };
