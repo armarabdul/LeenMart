@@ -91,6 +91,7 @@ model User {
 
   refreshTokens RefreshToken[]
   otps          Otp[]
+  vendorProfile VendorProfile?
 
   @@map("users")
 }
@@ -139,6 +140,46 @@ model Otp {
 
   @@index([userId], map: "idx_otps_user")
   @@map("otps")
+}
+
+/// Vendor module (SDD 5, module 3).
+///
+/// The onboarding lifecycle of SDD 15.1. Deliberately not `UserStatus`: a
+/// vendor answers a longer, KYC-driven question than a user account ever
+/// does, and one shared type would make impossible states (a `LOCKED`
+/// vendor, a `KYC_UNDER_REVIEW` user) representable.
+enum VendorStatus {
+  REGISTERED
+  KYC_SUBMITTED
+  KYC_UNDER_REVIEW
+  KYC_REJECTED
+  KYC_APPROVED
+  ACTIVE
+  SUSPENDED
+  TERMINATED
+}
+
+/// A vendor's onboarding record (SDD 15.1).
+///
+/// `user_id` is unique: a single account may hold at most one vendor
+/// profile, which is what makes the application's `findByUserId` duplicate
+/// guard a database guarantee rather than a race-prone check. The foreign
+/// key to `users` is one of the two module-crossing keys SDD 6.7 explicitly
+/// permits (`users`/`vendors` are the shared identity anchors).
+///
+/// Only the columns registration actually writes exist here. KYC documents,
+/// shops, business hours and trust scores (SDD 5, module 3) arrive with the
+/// chunks that implement them.
+model VendorProfile {
+  id        String       @id @db.Uuid
+  userId    String       @unique @map("user_id") @db.Uuid
+  status    VendorStatus @default(REGISTERED)
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("vendors")
 }
 
 /// Immutable admin action log (SDD 18.4).

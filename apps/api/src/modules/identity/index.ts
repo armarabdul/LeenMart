@@ -13,6 +13,12 @@ export type { RoleName } from './domain/index.js';
 // place deliberately; the `vendor` module consumes it through this interface.
 export type { UserId, VendorId } from './domain/index.js';
 
+// Their constructors, needed by any module that rehydrates its own rows into
+// branded ids at the persistence boundary (the `vendor` module's repository
+// does exactly this). Value exports rather than type-only: `toDomain` has to
+// call them at runtime.
+export { toUserId, toVendorId } from './domain/index.js';
+
 // Minimal cross-cutting surface: the shared authentication middleware
 // (SDD 7.4 step 1) is parameterised by this module's AccessTokenService and
 // produces a Principal from its verified claims.
