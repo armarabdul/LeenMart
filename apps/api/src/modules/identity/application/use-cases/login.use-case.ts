@@ -31,6 +31,18 @@ export class LoginUseCase {
       throw new InvalidCredentialsError();
     }
 
+    // Administrators authenticate on their own surface, where TOTP is
+    // mandatory (SDD 7.1). Refusing them here is what stops this endpoint
+    // from becoming an MFA bypass. The rejection is deliberately identical
+    // to the unknown-email case — telling the caller "this is an admin, use
+    // the admin console" would be an account-enumeration oracle (SEC-15) —
+    // and it happens before the password is checked, so this surface reveals
+    // nothing about an administrator's credentials either.
+    if (user.role.isAdmin()) {
+      logger.warn({ userId: user.id }, 'Login refused: admin accounts must use the admin surface');
+      throw new InvalidCredentialsError();
+    }
+
     const passwordValid = await passwordHasher.verify(user.passwordHash, input.password);
     if (!passwordValid) {
       logger.warn({ userId: user.id }, 'Login failed: wrong password');

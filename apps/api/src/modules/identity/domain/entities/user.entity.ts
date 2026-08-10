@@ -39,6 +39,38 @@ export class User {
     });
   }
 
+  /**
+   * Creates an administrator (SDD 8.1's admin-family roles). Not a
+   * self-service path — there is no HTTP surface that reaches this; the
+   * caller is the operator-run bootstrap, and later a SUPER_ADMIN-gated
+   * admin-management flow.
+   *
+   * Rejecting a non-admin role throws `TypeError` rather than a domain
+   * error: no client input can reach this, so a wrong role here is a
+   * programming mistake, matching how `Role.fromName()` treats an unknown
+   * role name.
+   */
+  static registerAdmin(props: {
+    id: UserId;
+    email: string;
+    passwordHash: PasswordHash;
+    role: Role;
+    now: Date;
+  }): User {
+    if (!props.role.isAdmin()) {
+      throw new TypeError(`Not an admin role: "${props.role.name}"`);
+    }
+    return new User({
+      id: props.id,
+      email: props.email,
+      passwordHash: props.passwordHash,
+      role: props.role,
+      status: UserStatus.ACTIVE,
+      createdAt: props.now,
+      updatedAt: props.now,
+    });
+  }
+
   /** Phone+OTP sign-up (SDD 7.1's primary customer path). Unverified until `verifyPhone()`. */
   static registerWithPhone(props: { id: UserId; phone: PhoneNumber; now: Date }): User {
     return new User({

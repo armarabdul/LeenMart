@@ -3,6 +3,7 @@ import type { SessionId } from '../../../../../src/modules/identity/domain/value
 import type { UserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 import type { OtpId } from '../../../../../src/modules/identity/domain/value-objects/otp-id.value-object.js';
 import type { PhoneNumber } from '../../../../../src/modules/identity/domain/value-objects/phone-number.value-object.js';
+import type { RoleName } from '../../../../../src/modules/identity/domain/value-objects/role.value-object.js';
 import type {
   AccessTokenClaims,
   AccessTokenService,
@@ -50,6 +51,13 @@ export class InMemoryUserRepository implements UserRepository {
 
   findById(id: UserId): Promise<User | null> {
     return Promise.resolve(this.byId.get(id) ?? null);
+  }
+
+  existsWithAnyRole(roles: readonly RoleName[]): Promise<boolean> {
+    for (const user of this.byId.values()) {
+      if (roles.includes(user.role.name)) return Promise.resolve(true);
+    }
+    return Promise.resolve(false);
   }
 }
 

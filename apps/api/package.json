@@ -15,6 +15,7 @@
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "test:watch": "vitest --project unit",
+    "bootstrap:admin": "tsx src/cli/bootstrap-admin.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",

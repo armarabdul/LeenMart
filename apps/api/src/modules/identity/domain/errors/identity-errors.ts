@@ -38,7 +38,10 @@ export class InvalidRefreshTokenError extends UnauthenticatedError {
 
 export class InvalidEmailError extends ValidationError {
   constructor(options: AppErrorOptions = {}) {
-    super('The provided value is not a valid email address.', { ...options, code: 'INVALID_EMAIL' });
+    super('The provided value is not a valid email address.', {
+      ...options,
+      code: 'INVALID_EMAIL',
+    });
   }
 }
 
@@ -58,6 +61,30 @@ export class InvalidOtpError extends ValidationError {
 export class ExpiredOtpError extends UnauthenticatedError {
   constructor(options: AppErrorOptions = {}) {
     super('This OTP has expired.', { ...options, code: 'EXPIRED_OTP' });
+  }
+}
+
+/**
+ * The bootstrap creates the *first* administrator only. Once any
+ * admin-family account exists, further admins must come from the
+ * SUPER_ADMIN-gated management flow, so a second bootstrap is refused.
+ */
+export class AdminAlreadyExistsError extends ConflictError {
+  constructor(options: AppErrorOptions = {}) {
+    super('An administrator account already exists.', {
+      ...options,
+      code: 'ADMIN_ALREADY_EXISTS',
+    });
+  }
+}
+
+/** SDD 7.5's password policy, applied to administrators (minimum 10 characters). */
+export class WeakAdminPasswordError extends ValidationError {
+  constructor(options: AppErrorOptions = {}) {
+    super('The administrator password does not meet the minimum length.', {
+      ...options,
+      code: 'WEAK_ADMIN_PASSWORD',
+    });
   }
 }
 
@@ -94,7 +121,10 @@ export class AccountSuspendedError extends ForbiddenError {
 /** Rejects a malformed or empty password hash — never a plaintext-password complaint (SDD 6.1: hashing is infrastructure's job). */
 export class InvalidPasswordError extends ValidationError {
   constructor(options: AppErrorOptions = {}) {
-    super('The provided value is not a valid password hash.', { ...options, code: 'INVALID_PASSWORD' });
+    super('The provided value is not a valid password hash.', {
+      ...options,
+      code: 'INVALID_PASSWORD',
+    });
   }
 }
 
@@ -108,6 +138,10 @@ export class UnauthorizedError extends ForbiddenError {
 /** A valid action, blocked by an unmet business rule — a vendor cannot become ACTIVE before KYC approval. */
 export class KycPendingError extends DomainRuleError {
   constructor(options: AppErrorOptions = {}) {
-    super('VENDOR_KYC_PENDING', 'This vendor cannot become active until KYC has been approved.', options);
+    super(
+      'VENDOR_KYC_PENDING',
+      'This vendor cannot become active until KYC has been approved.',
+      options,
+    );
   }
 }

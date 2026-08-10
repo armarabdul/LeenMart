@@ -10,6 +10,21 @@ export type RoleName =
   | 'SUPPORT_AGENT';
 
 /**
+ * The admin-family roles of SDD 8.1's hierarchy. Kept here as the single
+ * source of truth because three separate concerns need the same answer:
+ * which roles `registerAdmin()` may create, which roles the customer login
+ * surface must refuse (SDD 7.1 makes admin TOTP mandatory), and which roles
+ * the bootstrap checks for before creating the first administrator.
+ */
+export const ADMIN_ROLE_NAMES = [
+  'SUPER_ADMIN',
+  'CATALOGUE_MODERATOR',
+  'FINANCE_ADMIN',
+  'RISK_ANALYST',
+  'SUPPORT_AGENT',
+] as const satisfies readonly RoleName[];
+
+/**
  * The platform's nine fixed roles (SDD 8.1's role hierarchy).
  *
  * A value object rather than a database-backed roles table: each user holds
@@ -53,5 +68,10 @@ export class Role {
 
   equals(other: Role): boolean {
     return this.name === other.name;
+  }
+
+  /** True for the five admin-family roles (SDD 8.1) — the roles SDD 7.1 requires TOTP for. */
+  isAdmin(): boolean {
+    return (ADMIN_ROLE_NAMES as readonly string[]).includes(this.name);
   }
 }

@@ -1,5 +1,6 @@
 import type { UserId } from '../value-objects/user-id.value-object.js';
 import type { PhoneNumber } from '../value-objects/phone-number.value-object.js';
+import type { RoleName } from '../value-objects/role.value-object.js';
 import type { User } from '../entities/user.entity.js';
 
 /**
@@ -16,4 +17,10 @@ export interface UserRepository {
   findById(id: UserId): Promise<User | null>;
   findByEmail(email: string): Promise<User | null>;
   findByPhone(phone: PhoneNumber): Promise<User | null>;
+  /**
+   * Existence only — the bootstrap needs to know *whether* an administrator
+   * exists, never which one. Deliberately narrower than a general
+   * find-by-role query, which nothing needs yet.
+   */
+  existsWithAnyRole(roles: readonly RoleName[]): Promise<boolean>;
 }

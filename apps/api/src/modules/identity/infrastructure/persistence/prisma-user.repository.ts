@@ -1,7 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
 import { toUserId, type UserId } from '../../domain/value-objects/user-id.value-object.js';
 import type { UserRepository } from '../../application/ports/user-repository.port.js';
-import { Role } from '../../domain/value-objects/role.value-object.js';
+import { Role, type RoleName } from '../../domain/value-objects/role.value-object.js';
 import { User } from '../../domain/entities/user.entity.js';
 import { PasswordHash } from '../../domain/value-objects/password-hash.value-object.js';
 import { PhoneNumber } from '../../domain/value-objects/phone-number.value-object.js';
@@ -78,5 +78,15 @@ export class PrismaUserRepository implements UserRepository {
   async findById(id: UserId): Promise<User | null> {
     const row = await this.prisma.user.findFirst({ where: { id, deletedAt: null } });
     return row ? toDomain(row) : null;
+  }
+
+  async existsWithAnyRole(roles: readonly RoleName[]): Promise<boolean> {
+    // `findFirst` with a bare id selection rather than `count`: the caller
+    // only asks whether one exists, and Postgres can stop at the first row.
+    const row = await this.prisma.user.findFirst({
+      where: { role: { in: [...roles] }, deletedAt: null },
+      select: { id: true },
+    });
+    return row !== null;
   }
 }
