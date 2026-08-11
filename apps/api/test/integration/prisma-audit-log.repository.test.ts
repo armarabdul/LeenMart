@@ -30,6 +30,15 @@ import { toUserId } from '../../src/modules/identity/domain/value-objects/user-i
  * who acted (BR-16), so the actor id is an unenforced reference by design.
  * This suite relies on that, and would fail if a foreign key were ever added.
  */
+/**
+ * Note on lookups: `audit_logs` is range-partitioned on `created_at`
+ * (SDD 6.4/6.5), and PostgreSQL requires a partitioned table's primary key to
+ * contain every partition-key column — so the key is `(id, created_at)` and
+ * `id` alone is no longer a unique selector. Read-backs here use `findFirst`;
+ * the two statements that genuinely need a unique selector use the compound
+ * key. `id` remains the domain identity, and no production query looks a row
+ * up by primary key at all.
+ */
 describe('PrismaAuditLogRepository', () => {
   const prisma = new PrismaClient();
   const repository = new PrismaAuditLogRepository(prisma);
@@ -83,7 +92,7 @@ describe('PrismaAuditLogRepository', () => {
       actor: { actorId, actorRole: 'SUPPORT_AGENT', impersonatedBy: impersonatorId },
     });
 
-    const row = await prisma.auditLog.findUniqueOrThrow({ where: { id: entry.id } });
+    const row = await prisma.auditLog.findFirstOrThrow({ where: { id: entry.id } });
     expect(row.actorId).toBe(actorId);
     expect(row.actorRole).toBe('SUPPORT_AGENT');
     expect(row.impersonatedBy).toBe(impersonatorId);
@@ -107,7 +116,7 @@ describe('PrismaAuditLogRepository', () => {
     const recordedAt = new Date('2025-06-15T09:30:00.000Z');
     const entry = await append({ now: recordedAt });
 
-    const row = await prisma.auditLog.findUniqueOrThrow({ where: { id: entry.id } });
+    const row = await prisma.auditLog.findFirstOrThrow({ where: { id: entry.id } });
     expect(row.createdAt).toEqual(recordedAt);
   });
 
@@ -121,7 +130,7 @@ describe('PrismaAuditLogRepository', () => {
       context: { ipAddress: null, userAgent: null, requestId: null },
     });
 
-    const row = await prisma.auditLog.findUniqueOrThrow({ where: { id: entry.id } });
+    const row = await prisma.auditLog.findFirstOrThrow({ where: { id: entry.id } });
     expect(row.actorId).toBeNull();
     expect(row.impersonatedBy).toBeNull();
     expect(row.entityId).toBeNull();
@@ -153,7 +162,7 @@ describe('PrismaAuditLogRepository', () => {
 
       const entry = await append({ before, after });
 
-      const row = await prisma.auditLog.findUniqueOrThrow({ where: { id: entry.id } });
+      const row = await prisma.auditLog.findFirstOrThrow({ where: { id: entry.id } });
       expect(row.before).toEqual(before);
       expect(row.after).toEqual(after);
 
@@ -165,7 +174,7 @@ describe('PrismaAuditLogRepository', () => {
     it('distinguishes an absent snapshot from one holding a JSON null', async () => {
       const entry = await append({ before: null, after: { reviewedBy: null } });
 
-      const row = await prisma.auditLog.findUniqueOrThrow({ where: { id: entry.id } });
+      const row = await prisma.auditLog.findFirstOrThrow({ where: { id: entry.id } });
       expect(row.before).toBeNull();
       expect(row.after).toEqual({ reviewedBy: null });
     });
@@ -175,14 +184,14 @@ describe('PrismaAuditLogRepository', () => {
     it('round-trips an IPv4 address', async () => {
       const entry = await append({ context: { ...context, ipAddress: '198.51.100.42' } });
 
-      const row = await prisma.auditLog.findUniqueOrThrow({ where: { id: entry.id } });
+      const row = await prisma.auditLog.findFirstOrThrow({ where: { id: entry.id } });
       expect(row.ipAddress).toBe('198.51.100.42');
     });
 
     it('round-trips an IPv6 address', async () => {
       const entry = await append({ context: { ...context, ipAddress: '2001:db8::8a2e:370:7334' } });
 
-      const row = await prisma.auditLog.findUniqueOrThrow({ where: { id: entry.id } });
+      const row = await prisma.auditLog.findFirstOrThrow({ where: { id: entry.id } });
       expect(row.ipAddress).toBe('2001:db8::8a2e:370:7334');
     });
 
@@ -246,10 +255,13 @@ describe('PrismaAuditLogRepository', () => {
       const entry = await append({ action: 'UPDATE_TARGET' });
 
       await expect(
-        prisma.auditLog.update({ where: { id: entry.id }, data: { reason: 'tampered' } }),
+        prisma.auditLog.update({
+          where: { id_createdAt: { id: entry.id, createdAt: entry.createdAt } },
+          data: { reason: 'tampered' },
+        }),
       ).rejects.toThrow();
 
-      const row = await prisma.auditLog.findUniqueOrThrow({ where: { id: entry.id } });
+      const row = await prisma.auditLog.findFirstOrThrow({ where: { id: entry.id } });
       expect(row.reason).toBe('PAN and bank proof verified');
     });
 
@@ -267,10 +279,14 @@ describe('PrismaAuditLogRepository', () => {
     it('rejects a DELETE', async () => {
       const entry = await append({ action: 'DELETE_TARGET' });
 
-      await expect(prisma.auditLog.delete({ where: { id: entry.id } })).rejects.toThrow();
+      await expect(
+        prisma.auditLog.delete({
+          where: { id_createdAt: { id: entry.id, createdAt: entry.createdAt } },
+        }),
+      ).rejects.toThrow();
       await expect(prisma.auditLog.deleteMany({ where: { id: entry.id } })).rejects.toThrow();
 
-      const survivor = await prisma.auditLog.findUnique({ where: { id: entry.id } });
+      const survivor = await prisma.auditLog.findFirst({ where: { id: entry.id } });
       expect(survivor).not.toBeNull();
     });
 
@@ -281,7 +297,7 @@ describe('PrismaAuditLogRepository', () => {
         prisma.$executeRawUnsafe(`DELETE FROM "audit_logs" WHERE "id" = $1`, entry.id),
       ).rejects.toThrow();
 
-      const survivor = await prisma.auditLog.findUnique({ where: { id: entry.id } });
+      const survivor = await prisma.auditLog.findFirst({ where: { id: entry.id } });
       expect(survivor).not.toBeNull();
     });
 
@@ -290,7 +306,7 @@ describe('PrismaAuditLogRepository', () => {
 
       await expect(prisma.$executeRawUnsafe('TRUNCATE TABLE "audit_logs"')).rejects.toThrow();
 
-      const survivor = await prisma.auditLog.findUnique({ where: { id: entry.id } });
+      const survivor = await prisma.auditLog.findFirst({ where: { id: entry.id } });
       expect(survivor).not.toBeNull();
     });
   });

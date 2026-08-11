@@ -31,8 +31,14 @@ datasource db {
 /// relayed asynchronously by the worker. This is what guarantees "if the order
 /// committed, the notification will eventually send" without a distributed
 /// transaction.
+///
+/// **Range-partitioned monthly on `created_at`** (SDD 6.4/6.5), applied in
+/// `20260811233000_partition_audit_and_outbox`. The composite primary key is
+/// forced by PostgreSQL for the same reason as `AuditLog`'s: a partitioned
+/// table's primary key must contain every partition-key column. Nothing reads
+/// this table yet, so no query is affected.
 model OutboxEvent {
-  id            String    @id @db.Uuid
+  id            String    @db.Uuid
   aggregateType String    @map("aggregate_type") @db.VarChar(100)
   aggregateId   String    @map("aggregate_id") @db.Uuid
   eventType     String    @map("event_type") @db.VarChar(150)
@@ -46,8 +52,13 @@ model OutboxEvent {
 
   // Partial index: the relay only ever scans unprocessed rows, so the index
   // stays small no matter how large the table grows.
+  @@id([id, createdAt])
   @@index([processedAt, occurredAt], map: "idx_outbox_unprocessed")
   @@index([aggregateType, aggregateId], map: "idx_outbox_aggregate")
+  // SDD 6.4 lists `(created_at)` for this table alongside `audit_logs`; it was
+  // absent until now. Partitioning makes it earn its place twice over — it is
+  // also the column every partition-pruned scan filters on.
+  @@index([createdAt], map: "idx_outbox_created_at")
   @@map("outbox_events")
 }
 
@@ -302,8 +313,20 @@ model Address {
 /// in `20260811120000_audit_log_immutability`, not here — Prisma's schema DSL
 /// cannot express a trigger, so the migration is the only place this control
 /// can live. Corrections are new rows describing the correction, never edits.
+///
+/// **Range-partitioned monthly on `created_at`** (SDD 6.4/6.5), applied in
+/// `20260811233000_partition_audit_and_outbox`. Prisma cannot express
+/// `PARTITION BY RANGE` either, so that migration is likewise the only place
+/// the partitioning itself lives — this model describes the resulting shape so
+/// the generated client stays accurate.
+///
+/// The composite primary key is a consequence, not a choice: PostgreSQL
+/// requires every unique or primary key on a partitioned table to contain all
+/// partition-key columns, so `(id)` necessarily becomes `(id, created_at)`.
+/// `id` remains the domain identity — no repository query looks a row up by
+/// primary key, so nothing in the application observes the difference.
 model AuditLog {
-  id             String   @id @db.Uuid
+  id             String   @db.Uuid
   actorId        String?  @map("actor_id") @db.Uuid
   actorRole      String   @map("actor_role") @db.VarChar(50)
   impersonatedBy String?  @map("impersonated_by") @db.Uuid
@@ -318,6 +341,7 @@ model AuditLog {
   requestId      String?  @map("request_id") @db.VarChar(128)
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  @@id([id, createdAt])
   @@index([actorId, createdAt], map: "idx_audit_actor")
   @@index([entityType, entityId, createdAt], map: "idx_audit_entity")
   @@index([createdAt], map: "idx_audit_created_at")
