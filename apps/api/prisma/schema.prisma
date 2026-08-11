@@ -94,6 +94,7 @@ model User {
   vendorProfile VendorProfile?
   mfaSecret     MfaSecret?
   mfaChallenges MfaChallenge[]
+  addresses     Address[]
 
   @@map("users")
 }
@@ -232,6 +233,49 @@ model VendorProfile {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("vendors")
+}
+
+/// A customer's saved delivery address (SDD Stage 1: "customer profile and
+/// address book"). No `customer` FR elaborates a distinct schema, so the
+/// field list follows the standard e-commerce address-book shape SDD's
+/// architecture already anticipates (Pincode as a first-class concept).
+///
+/// No lat/lng columns: no geocoding provider is configured yet, and
+/// unpopulated nullable columns would be exactly the kind of speculative
+/// field this schema otherwise avoids — added when the geocoding chunk
+/// actually needs them.
+///
+/// Soft delete via `deleted_at`, per this schema's own stated convention
+/// (top of file) — an address a customer has used on a past order must
+/// remain resolvable, not vanish out from under order history.
+///
+/// `is_default` is enforced to at most one **active** row per user by
+/// `idx_addresses_one_default_per_user`, a partial unique index added by
+/// hand in this model's migration (Prisma's schema DSL has no `WHERE`
+/// clause for indexes) — the same "database is the final arbiter of a
+/// concurrent race" pattern `mfa_challenges.consumeIfActive` already
+/// established, not a new one.
+model Address {
+  id            String    @id @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  recipientName String    @map("recipient_name") @db.VarChar(100)
+  phone         String    @db.VarChar(20)
+  line1         String    @map("line_1") @db.VarChar(200)
+  line2         String?   @map("line_2") @db.VarChar(200)
+  city          String    @db.VarChar(100)
+  state         String    @db.VarChar(100)
+  pincode       String    @db.VarChar(6)
+  landmark      String?   @db.VarChar(200)
+  label         String    @db.VarChar(50)
+  isDefault     Boolean   @default(false) @map("is_default")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt     DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "idx_addresses_user")
+  @@map("addresses")
 }
 
 /// Immutable admin action log (SDD 18.4).

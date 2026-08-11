@@ -11,8 +11,36 @@ import {
   createNotFoundHandler,
 } from './shared/interface/http/middleware/error-handler.js';
 import { createHealthRouter } from './shared/interface/http/routes/health.routes.js';
-import { createIdentityModule } from './modules/identity/index.js';
+import { createCustomerModule } from './modules/customer/index.js';
+import { createIdentityModule, type AccessTokenService } from './modules/identity/index.js';
 import { createVendorModule } from './modules/vendor/index.js';
+
+/**
+ * Mounts every module beyond `identity` itself. Split out of `createApp`
+ * purely to stay under this file's max-lines-per-function budget — each of
+ * these modules shares identity's token verifier rather than minting a
+ * second one (SDD 5), which is why `accessTokenService` is threaded through
+ * rather than each module constructing its own.
+ */
+const mountBusinessModules = (
+  app: Express,
+  params: {
+    prisma: Container['prisma'];
+    accessTokenService: AccessTokenService;
+    clock: Container['clock'];
+    idGenerator: Container['idGenerator'];
+    logger: Container['logger'];
+  },
+): void => {
+  const vendorModule = createVendorModule(params);
+  app.use('/api/v1/vendors', vendorModule.router);
+
+  const customerModule = createCustomerModule(params);
+  app.use('/api/v1/me', customerModule.router);
+
+  // Further business modules mount here as they are built, e.g.
+  //   app.use('/api/v1/catalogue', createCatalogueRouter(container));
+};
 
 /**
  * Builds the Express application.
@@ -86,18 +114,13 @@ export const createApp = (container: Container): Express => {
   app.use('/api/v1/identity', identityModule.router);
   app.use('/api/v1/admin', identityModule.adminAuthRouter);
 
-  // Shares identity's token verifier rather than minting a second one (SDD 5).
-  const vendorModule = createVendorModule({
+  mountBusinessModules(app, {
     prisma,
     accessTokenService: identityModule.accessTokenService,
     clock,
     idGenerator,
     logger,
   });
-  app.use('/api/v1/vendors', vendorModule.router);
-
-  // Further business modules mount here as they are built, e.g.
-  //   app.use('/api/v1/catalogue', createCatalogueRouter(container));
 
   app.use(createNotFoundHandler(clock));
   app.use(createErrorHandler(rootLogger, clock));
