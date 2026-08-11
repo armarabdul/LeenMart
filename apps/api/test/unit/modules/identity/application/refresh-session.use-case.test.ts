@@ -15,6 +15,7 @@ import {
   FakeAccessTokenService,
   FakePasswordHasher,
   InMemoryRefreshTokenRepository,
+  InMemorySessionDenylist,
   InMemoryUserRepository,
   SequentialRefreshTokenHasher,
   nullLogger,
@@ -22,18 +23,23 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** Mirrors `JWT_ACCESS_TTL_SECONDS`; the bound every denylist entry must respect (SDD 7.2). */
+const ACCESS_TOKEN_TTL_SECONDS = 600;
+
 const setup = (): {
   registerUseCase: RegisterCustomerUseCase;
   refreshUseCase: RefreshSessionUseCase;
   logoutUseCase: LogoutUseCase;
   refreshTokenRepository: InMemoryRefreshTokenRepository;
   userRepository: InMemoryUserRepository;
+  sessionDenylist: InMemorySessionDenylist;
   clock: FixedClock;
 } => {
   const clock = new FixedClock(new Date('2026-01-01T00:00:00.000Z'));
   const idGenerator = new UuidV4Generator();
   const userRepository = new InMemoryUserRepository();
   const refreshTokenRepository = new InMemoryRefreshTokenRepository();
+  const sessionDenylist = new InMemorySessionDenylist();
   const refreshTokenHasher = new SequentialRefreshTokenHasher();
   const sessionIssuer = new SessionIssuer({
     accessTokenService: new FakeAccessTokenService({
@@ -62,12 +68,16 @@ const setup = (): {
     refreshTokenRepository,
     refreshTokenHasher,
     sessionIssuer,
+    sessionDenylist,
+    accessTokenTtlSeconds: ACCESS_TOKEN_TTL_SECONDS,
     clock,
     logger: nullLogger,
   });
   const logoutUseCase = new LogoutUseCase({
     refreshTokenRepository,
     refreshTokenHasher,
+    sessionDenylist,
+    accessTokenTtlSeconds: ACCESS_TOKEN_TTL_SECONDS,
     clock,
     logger: nullLogger,
   });
@@ -78,6 +88,7 @@ const setup = (): {
     logoutUseCase,
     refreshTokenRepository,
     userRepository,
+    sessionDenylist,
     clock,
   };
 };
@@ -378,6 +389,96 @@ describe('RefreshSessionUseCase', () => {
       const rotated = await refreshUseCase.execute({ refreshToken: initial.refreshToken });
 
       expect(rotated.refreshToken).not.toBe(initial.refreshToken);
+    });
+  });
+
+  describe('reuse detection denies the family’s access tokens (SDD 7.2)', () => {
+    const PASSWORD = 'correct horse battery';
+
+    it('denies every session in the family it revokes', async () => {
+      // Killing the refresh rows bounds future rotations; denying each `sid`
+      // is what stops the access tokens those sessions already handed out.
+      const { registerUseCase, refreshUseCase, sessionDenylist } = setup();
+      const first = await registerUseCase.execute({ email: 'a@example.com', password: PASSWORD });
+      const second = await refreshUseCase.execute({ refreshToken: first.refreshToken });
+
+      // Replaying the already-rotated token is the theft signal.
+      await expect(
+        refreshUseCase.execute({ refreshToken: first.refreshToken }),
+      ).rejects.toBeInstanceOf(InvalidRefreshTokenError);
+
+      expect(await sessionDenylist.isDenied(second.refreshTokenId)).toBe(true);
+    });
+
+    it('denies the whole lineage, not just the newest session', async () => {
+      const { registerUseCase, refreshUseCase, sessionDenylist } = setup();
+      const first = await registerUseCase.execute({ email: 'a@example.com', password: PASSWORD });
+      const second = await refreshUseCase.execute({ refreshToken: first.refreshToken });
+      const third = await refreshUseCase.execute({ refreshToken: second.refreshToken });
+
+      await expect(
+        refreshUseCase.execute({ refreshToken: first.refreshToken }),
+      ).rejects.toBeInstanceOf(InvalidRefreshTokenError);
+
+      expect(await sessionDenylist.isDenied(third.refreshTokenId)).toBe(true);
+    });
+
+    it('bounds every entry by the access-token lifetime', async () => {
+      const { registerUseCase, refreshUseCase, sessionDenylist } = setup();
+      const first = await registerUseCase.execute({ email: 'a@example.com', password: PASSWORD });
+      await refreshUseCase.execute({ refreshToken: first.refreshToken });
+
+      await expect(
+        refreshUseCase.execute({ refreshToken: first.refreshToken }),
+      ).rejects.toBeInstanceOf(InvalidRefreshTokenError);
+
+      for (const ttl of sessionDenylist.denied.values()) {
+        expect(ttl).toBe(ACCESS_TOKEN_TTL_SECONDS);
+      }
+    });
+
+    it('leaves an unrelated session’s access token authenticating', async () => {
+      // A second device is a separate family; one device’s compromise must
+      // not sign the other out.
+      const { registerUseCase, refreshUseCase, sessionDenylist } = setup();
+      const victim = await registerUseCase.execute({ email: 'a@example.com', password: PASSWORD });
+      const bystander = await registerUseCase.execute({
+        email: 'b@example.com',
+        password: PASSWORD,
+      });
+      await refreshUseCase.execute({ refreshToken: victim.refreshToken });
+
+      await expect(
+        refreshUseCase.execute({ refreshToken: victim.refreshToken }),
+      ).rejects.toBeInstanceOf(InvalidRefreshTokenError);
+
+      expect(await sessionDenylist.isDenied(bystander.refreshTokenId)).toBe(false);
+    });
+
+    it('denies nothing on an ordinary rotation', async () => {
+      // Rotation is legitimate: the same holder gets the replacement, so the
+      // outgoing session’s access token is not a compromise.
+      const { registerUseCase, refreshUseCase, sessionDenylist } = setup();
+      const first = await registerUseCase.execute({ email: 'a@example.com', password: PASSWORD });
+
+      await refreshUseCase.execute({ refreshToken: first.refreshToken });
+
+      expect(sessionDenylist.denied.size).toBe(0);
+    });
+
+    it('denies nothing for a token that was merely expired or logged out', async () => {
+      const { registerUseCase, refreshUseCase, logoutUseCase, sessionDenylist } = setup();
+      const session = await registerUseCase.execute({ email: 'a@example.com', password: PASSWORD });
+      await logoutUseCase.execute({ refreshToken: session.refreshToken });
+      const afterLogout = sessionDenylist.denied.size;
+
+      await expect(
+        refreshUseCase.execute({ refreshToken: session.refreshToken }),
+      ).rejects.toBeInstanceOf(InvalidRefreshTokenError);
+
+      // A logged-out token carries no replacement, so it is a stale client,
+      // not theft — no extra family revocation, no extra denials.
+      expect(sessionDenylist.denied.size).toBe(afterLogout);
     });
   });
 });

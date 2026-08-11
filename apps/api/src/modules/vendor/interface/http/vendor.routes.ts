@@ -3,7 +3,7 @@ import { registerVendorRequestSchema } from '@leen-mart/contracts';
 import { asyncHandler } from '../../../../shared/interface/http/middleware/async-handler.js';
 import { authenticate } from '../../../../shared/interface/http/middleware/authenticate.js';
 import { validate } from '../../../../shared/interface/http/middleware/validate.js';
-import type { AccessTokenService } from '../../../identity/index.js';
+import type { AccessTokenService, SessionDenylist } from '../../../identity/index.js';
 import type { VendorController } from './vendor.controller.js';
 
 /**
@@ -17,12 +17,13 @@ import type { VendorController } from './vendor.controller.js';
 export const createVendorRouter = (
   controller: VendorController,
   accessTokenService: AccessTokenService,
+  sessionDenylist: SessionDenylist,
 ): Router => {
   const router = Router();
 
   router.post(
     '/',
-    authenticate(accessTokenService),
+    authenticate(accessTokenService, sessionDenylist),
     validate({ body: registerVendorRequestSchema }),
     asyncHandler(controller.register),
   );

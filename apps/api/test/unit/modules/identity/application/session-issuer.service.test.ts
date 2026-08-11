@@ -24,14 +24,16 @@ const setup = (): {
   issuer: SessionIssuer;
   clock: FixedClock;
   repository: InMemoryRefreshTokenRepository;
+  accessTokenService: FakeAccessTokenService;
 } => {
   const clock = new FixedClock(NOW);
   const repository = new InMemoryRefreshTokenRepository();
+  const accessTokenService = new FakeAccessTokenService({
+    token: 'access-token',
+    expiresAt: new Date('2026-01-01T00:10:00.000Z'),
+  });
   const issuer = new SessionIssuer({
-    accessTokenService: new FakeAccessTokenService({
-      token: 'access-token',
-      expiresAt: new Date('2026-01-01T00:10:00.000Z'),
-    }),
+    accessTokenService,
     refreshTokenHasher: new SequentialRefreshTokenHasher(),
     refreshTokenRepository: repository,
     idGenerator: new UuidV4Generator(),
@@ -39,7 +41,7 @@ const setup = (): {
     refreshTtlDays: 30,
     adminIdleTimeoutMinutes: 30,
   });
-  return { issuer, clock, repository };
+  return { issuer, clock, repository, accessTokenService };
 };
 
 const userWithRole = (roleName: RoleName): User =>
@@ -137,6 +139,56 @@ describe('SessionIssuer', () => {
       const rotated = await issuer.issueFor(admin, first.refreshTokenFamilyId);
 
       expect(rotated.refreshTokenFamilyId).toBe(first.refreshTokenFamilyId);
+    });
+  });
+
+  describe('session binding (SDD 7.2)', () => {
+    it('signs the access token with the sid of the session it persists', async () => {
+      // `sid` is what revocation keys on: if the token named a different
+      // session than the one stored, denying that session would have no
+      // effect on the token it issued.
+      const { issuer, repository, accessTokenService } = setup();
+
+      const session = await issuer.issueFor(userWithRole('CUSTOMER'));
+
+      const [persisted] = repository.all();
+      expect(persisted).toBeDefined();
+      expect(accessTokenService.signed).toHaveLength(1);
+      expect(accessTokenService.signed[0]?.sid).toBe(persisted?.id);
+      expect(session.refreshTokenId).toBe(persisted?.id);
+    });
+
+    it('signs each new session with its own distinct sid', async () => {
+      const { issuer, accessTokenService } = setup();
+      const user = userWithRole('CUSTOMER');
+
+      await issuer.issueFor(user);
+      await issuer.issueFor(user);
+
+      const sids = accessTokenService.signed.map((subject) => subject.sid);
+      expect(new Set(sids).size).toBe(2);
+    });
+
+    it('signs the token with the subject and role of the user it is issued for', async () => {
+      const { issuer, accessTokenService } = setup();
+      const user = userWithRole('SUPER_ADMIN');
+
+      await issuer.issueFor(user);
+
+      expect(accessTokenService.signed[0]?.sub).toBe(user.id);
+      expect(accessTokenService.signed[0]?.role).toBe('SUPER_ADMIN');
+    });
+
+    it('still continues the family it is handed, unchanged by sid binding', async () => {
+      const { issuer, repository } = setup();
+      const user = userWithRole('CUSTOMER');
+      const first = await issuer.issueFor(user);
+
+      const second = await issuer.issueFor(user, first.refreshTokenFamilyId);
+
+      expect(second.refreshTokenFamilyId).toBe(first.refreshTokenFamilyId);
+      expect(second.refreshTokenId).not.toBe(first.refreshTokenId);
+      expect(repository.all()).toHaveLength(2);
     });
   });
 });

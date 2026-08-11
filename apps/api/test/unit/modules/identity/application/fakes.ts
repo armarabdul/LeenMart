@@ -9,8 +9,10 @@ import type { RoleName } from '../../../../../src/modules/identity/domain/value-
 import type {
   AccessTokenClaims,
   AccessTokenService,
+  AccessTokenSubject,
   SignedAccessToken,
 } from '../../../../../src/modules/identity/application/ports/access-token.port.js';
+import type { SessionDenylist } from '../../../../../src/modules/identity/application/ports/session-denylist.port.js';
 import type { PasswordHasher } from '../../../../../src/modules/identity/application/ports/password-hasher.port.js';
 import type { RefreshTokenHasher } from '../../../../../src/modules/identity/application/ports/refresh-token-hasher.port.js';
 import type { RefreshTokenRepository } from '../../../../../src/modules/identity/application/ports/refresh-token-repository.port.js';
@@ -89,13 +91,13 @@ export class InMemoryRefreshTokenRepository implements RefreshTokenRepository {
     return Promise.resolve(null);
   }
 
-  /** Mirrors the Prisma adapter: only live rows are touched, and the count is what actually died. */
-  revokeFamily(familyId: SessionId, now: Date): Promise<number> {
-    let revoked = 0;
+  /** Mirrors the Prisma adapter: only live rows are touched, and the returned ids are what actually died. */
+  revokeFamily(familyId: SessionId, now: Date): Promise<readonly SessionId[]> {
+    const revoked: SessionId[] = [];
     for (const [id, token] of this.byId) {
       if (token.familyId === familyId && !token.isRevoked()) {
         this.byId.set(id, token.revoke(now));
-        revoked += 1;
+        revoked.push(id);
       }
     }
     return Promise.resolve(revoked);
@@ -119,14 +121,36 @@ export class FakePasswordHasher implements PasswordHasher {
 }
 
 export class FakeAccessTokenService implements AccessTokenService {
+  /** Every subject this service was asked to sign, so tests can assert on `sid`/`jti` wiring. */
+  readonly signed: AccessTokenSubject[] = [];
+
   constructor(private readonly signedToken: SignedAccessToken) {}
 
-  sign(_claims: AccessTokenClaims): SignedAccessToken {
+  sign(subject: AccessTokenSubject): SignedAccessToken {
+    this.signed.push(subject);
     return this.signedToken;
   }
 
   verify(): AccessTokenClaims {
     throw new Error('Not implemented: no identity use case verifies an access token today.');
+  }
+}
+
+/**
+ * In-memory `SessionDenylist`. Records the TTL each session was denied with,
+ * so tests can assert SDD 7.2's "never longer than the remaining access-token
+ * life" bound without reaching for a real Redis.
+ */
+export class InMemorySessionDenylist implements SessionDenylist {
+  readonly denied = new Map<SessionId, number>();
+
+  deny(sessionId: SessionId, ttlSeconds: number): Promise<void> {
+    this.denied.set(sessionId, ttlSeconds);
+    return Promise.resolve();
+  }
+
+  isDenied(sessionId: SessionId): Promise<boolean> {
+    return Promise.resolve(this.denied.has(sessionId));
   }
 }
 

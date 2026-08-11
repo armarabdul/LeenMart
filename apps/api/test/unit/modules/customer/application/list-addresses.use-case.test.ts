@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FixedClock, UuidV7Generator } from '@leen-mart/domain-kit';
 import { toUserId, type Principal } from '../../../../../src/modules/identity/index.js';
+import { toSessionId } from '../../../../../src/modules/identity/domain/value-objects/session-id.value-object.js';
 import { AddAddressUseCase } from '../../../../../src/modules/customer/application/use-cases/add-address.use-case.js';
 import { ListAddressesUseCase } from '../../../../../src/modules/customer/application/use-cases/list-addresses.use-case.js';
 import type { AddressDetails } from '../../../../../src/modules/customer/domain/entities/address.entity.js';
@@ -8,7 +9,8 @@ import { InMemoryAddressRepository, nullLogger } from './fakes.js';
 
 const NOW = new Date('2026-01-01T00:00:00.000Z');
 const userId = toUserId('00000000-0000-7000-8000-0000000000d1');
-const principal: Principal = { userId, role: 'CUSTOMER' };
+const sessionId = toSessionId('00000000-0000-7000-8000-00000000e5d0');
+const principal: Principal = { userId, sessionId, role: 'CUSTOMER' };
 
 const details: AddressDetails = {
   recipientName: 'Asha Rao',
@@ -53,7 +55,10 @@ describe('ListAddressesUseCase', () => {
     const { addUseCase, listUseCase } = setup();
     const otherUserId = toUserId('00000000-0000-7000-8000-0000000000d2');
     await addUseCase.execute({ principal, details });
-    await addUseCase.execute({ principal: { userId: otherUserId, role: 'CUSTOMER' }, details });
+    await addUseCase.execute({
+      principal: { userId: otherUserId, sessionId, role: 'CUSTOMER' },
+      details,
+    });
 
     const addresses = await listUseCase.execute({ principal });
 

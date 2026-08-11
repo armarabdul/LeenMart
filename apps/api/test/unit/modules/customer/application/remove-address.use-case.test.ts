@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FixedClock, UuidV7Generator } from '@leen-mart/domain-kit';
 import { toUserId, type Principal } from '../../../../../src/modules/identity/index.js';
+import { toSessionId } from '../../../../../src/modules/identity/domain/value-objects/session-id.value-object.js';
 import { AddAddressUseCase } from '../../../../../src/modules/customer/application/use-cases/add-address.use-case.js';
 import { RemoveAddressUseCase } from '../../../../../src/modules/customer/application/use-cases/remove-address.use-case.js';
 import { AddressNotFoundError } from '../../../../../src/modules/customer/domain/errors/customer-errors.js';
@@ -11,7 +12,8 @@ import { InMemoryAddressRepository, nullLogger } from './fakes.js';
 const NOW = new Date('2026-01-01T00:00:00.000Z');
 const userId = toUserId('00000000-0000-7000-8000-0000000000f1');
 const otherUserId = toUserId('00000000-0000-7000-8000-0000000000f2');
-const principal: Principal = { userId, role: 'CUSTOMER' };
+const sessionId = toSessionId('00000000-0000-7000-8000-00000000e5d0');
+const principal: Principal = { userId, sessionId, role: 'CUSTOMER' };
 
 const details: AddressDetails = {
   recipientName: 'Asha Rao',
@@ -73,7 +75,10 @@ describe('RemoveAddressUseCase', () => {
       .execute({ principal, addressId: toAddressId('00000000-0000-7000-8000-0000000000f9') })
       .catch((error: unknown) => error);
     const crossOwnerError: unknown = await removeUseCase
-      .execute({ principal: { userId: otherUserId, role: 'CUSTOMER' }, addressId: address.id })
+      .execute({
+        principal: { userId: otherUserId, sessionId, role: 'CUSTOMER' },
+        addressId: address.id,
+      })
       .catch((error: unknown) => error);
 
     expect(unknownError).toBeInstanceOf(AddressNotFoundError);
@@ -87,7 +92,7 @@ describe('RemoveAddressUseCase', () => {
 
     await expect(
       removeUseCase.execute({
-        principal: { userId: otherUserId, role: 'CUSTOMER' },
+        principal: { userId: otherUserId, sessionId, role: 'CUSTOMER' },
         addressId: address.id,
       }),
     ).rejects.toBeInstanceOf(AddressNotFoundError);

@@ -8,6 +8,8 @@ import {
   type AuthRateLimiters,
 } from '../../shared/interface/http/middleware/auth-rate-limit.js';
 import type { AccessTokenService } from './application/ports/access-token.port.js';
+import type { SessionDenylist } from './application/ports/session-denylist.port.js';
+import { RedisSessionDenylist } from './infrastructure/cache/redis-session-denylist.js';
 import { AesGcmMfaSecretCipher } from './infrastructure/security/aes-gcm-mfa-secret-cipher.service.js';
 import { Argon2OtpHasher } from './infrastructure/security/argon2-otp-hasher.js';
 import { Argon2PasswordHasher } from './infrastructure/security/argon2-password-hasher.js';
@@ -58,6 +60,12 @@ export interface IdentityModule {
    * makes this module the sole owner of tokens.
    */
   readonly accessTokenService: AccessTokenService;
+  /**
+   * Published alongside `accessTokenService` for the same reason: every
+   * authenticated route in every module must consult the *same* denylist, or
+   * a session revoked here would keep authenticating there (SDD 7.2).
+   */
+  readonly sessionDenylist: SessionDenylist;
 }
 
 interface AuthUseCaseDeps {
@@ -66,6 +74,8 @@ interface AuthUseCaseDeps {
   readonly passwordHasher: Argon2PasswordHasher;
   readonly refreshTokenHasher: CryptoRefreshTokenHasher;
   readonly sessionIssuer: SessionIssuer;
+  readonly sessionDenylist: SessionDenylist;
+  readonly accessTokenTtlSeconds: number;
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
   readonly logger: Logger;
@@ -86,6 +96,8 @@ const buildAuthUseCases = (deps: AuthUseCaseDeps): AuthUseCases => {
     passwordHasher,
     refreshTokenHasher,
     sessionIssuer,
+    sessionDenylist,
+    accessTokenTtlSeconds,
     idGenerator,
     clock,
     logger,
@@ -105,12 +117,16 @@ const buildAuthUseCases = (deps: AuthUseCaseDeps): AuthUseCases => {
     refreshTokenRepository,
     refreshTokenHasher,
     sessionIssuer,
+    sessionDenylist,
+    accessTokenTtlSeconds,
     clock,
     logger,
   });
   const logoutUseCase = new LogoutUseCase({
     refreshTokenRepository,
     refreshTokenHasher,
+    sessionDenylist,
+    accessTokenTtlSeconds,
     clock,
     logger,
   });
@@ -223,17 +239,19 @@ interface IdentityInfrastructure {
   readonly totpService: OtplibTotpService;
   readonly mfaSecretCipher: AesGcmMfaSecretCipher;
   readonly accessTokenService: JsonWebTokenAccessTokenService;
+  readonly sessionDenylist: RedisSessionDenylist;
   readonly sessionIssuer: SessionIssuer;
 }
 
 /** Split out of `createIdentityModule` purely to stay under this file's max-lines-per-function budget. */
 const buildInfrastructure = (deps: {
   prisma: PrismaClient;
+  redis: Redis;
   env: Env;
   clock: Clock;
   idGenerator: IdGenerator;
 }): IdentityInfrastructure => {
-  const { prisma, env, clock, idGenerator } = deps;
+  const { prisma, redis, env, clock, idGenerator } = deps;
 
   const userRepository = new PrismaUserRepository(prisma);
   const refreshTokenRepository = new PrismaRefreshTokenRepository(prisma);
@@ -255,10 +273,13 @@ const buildInfrastructure = (deps: {
     {
       secret: env.JWT_ACCESS_SECRET,
       issuer: env.SERVICE_NAME,
+      audience: env.JWT_AUDIENCE,
       ttlSeconds: env.JWT_ACCESS_TTL_SECONDS,
     },
     clock,
+    idGenerator,
   );
+  const sessionDenylist = new RedisSessionDenylist(redis);
   const sessionIssuer = new SessionIssuer({
     accessTokenService,
     refreshTokenHasher,
@@ -283,6 +304,7 @@ const buildInfrastructure = (deps: {
     totpService,
     mfaSecretCipher,
     accessTokenService,
+    sessionDenylist,
     sessionIssuer,
   };
 };
@@ -305,6 +327,7 @@ const buildRouters = (params: {
   adminMfaEnrollUseCase: AdminMfaEnrollUseCase;
   adminMfaEnrollConfirmUseCase: AdminMfaEnrollConfirmUseCase;
   accessTokenService: AccessTokenService;
+  sessionDenylist: SessionDenylist;
   rateLimiters: AuthRateLimiters;
 }): IdentityRouters => {
   const controller = createIdentityController({
@@ -323,7 +346,12 @@ const buildRouters = (params: {
   });
 
   return {
-    router: createIdentityRouter(controller, params.accessTokenService, params.rateLimiters),
+    router: createIdentityRouter(
+      controller,
+      params.accessTokenService,
+      params.sessionDenylist,
+      params.rateLimiters,
+    ),
     adminAuthRouter: createAdminAuthRouter(adminAuthController),
   };
 };
@@ -337,10 +365,16 @@ export const createIdentityModule = (deps: IdentityModuleDeps): IdentityModule =
   const { prisma, redis, env, clock, idGenerator, logger } = deps;
   const moduleLogger = logger.child({ module: 'identity' });
 
-  const infra = buildInfrastructure({ prisma, env, clock, idGenerator });
+  const infra = buildInfrastructure({ prisma, redis, env, clock, idGenerator });
 
   const { registerCustomerUseCase, loginUseCase, refreshSessionUseCase, logoutUseCase } =
-    buildAuthUseCases({ ...infra, idGenerator, clock, logger: moduleLogger });
+    buildAuthUseCases({
+      ...infra,
+      accessTokenTtlSeconds: env.JWT_ACCESS_TTL_SECONDS,
+      idGenerator,
+      clock,
+      logger: moduleLogger,
+    });
   const { requestOtpUseCase, verifyOtpUseCase } = buildOtpUseCases({
     ...infra,
     idGenerator,
@@ -371,6 +405,7 @@ export const createIdentityModule = (deps: IdentityModuleDeps): IdentityModule =
     adminMfaEnrollUseCase,
     adminMfaEnrollConfirmUseCase,
     accessTokenService: infra.accessTokenService,
+    sessionDenylist: infra.sessionDenylist,
     rateLimiters: createAuthRateLimiters(redis, env),
   });
   return {
@@ -379,5 +414,6 @@ export const createIdentityModule = (deps: IdentityModuleDeps): IdentityModule =
     requestOtpUseCase,
     verifyOtpUseCase,
     accessTokenService: infra.accessTokenService,
+    sessionDenylist: infra.sessionDenylist,
   };
 };

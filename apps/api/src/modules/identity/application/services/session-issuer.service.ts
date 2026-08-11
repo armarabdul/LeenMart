@@ -75,12 +75,22 @@ export class SessionIssuer {
       this.deps;
 
     const now = clock.now();
-    const accessToken = accessTokenService.sign({ sub: user.id, role: user.role.name });
+
+    // The session id is minted *before* the access token so the token can
+    // carry it as SDD 7.2's `sid`. Signing first — as this did — would leave
+    // the access token unable to name the session it belongs to, and
+    // revocation has nothing to key on.
+    const sessionId = toSessionId(idGenerator.generate());
+    const accessToken = accessTokenService.sign({
+      sub: user.id,
+      sid: sessionId,
+      role: user.role.name,
+    });
 
     const rawRefreshToken = refreshTokenHasher.generate();
     const refreshTokenExpiresAt = new Date(now.getTime() + this.refreshWindowMs(user));
     const refreshTokenEntity = RefreshToken.issue({
-      id: toSessionId(idGenerator.generate()),
+      id: sessionId,
       userId: user.id,
       tokenHash: refreshTokenHasher.hash(rawRefreshToken),
       expiresAt: refreshTokenExpiresAt,

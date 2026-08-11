@@ -12,7 +12,11 @@ import {
 } from './shared/interface/http/middleware/error-handler.js';
 import { createHealthRouter } from './shared/interface/http/routes/health.routes.js';
 import { createCustomerModule } from './modules/customer/index.js';
-import { createIdentityModule, type AccessTokenService } from './modules/identity/index.js';
+import {
+  createIdentityModule,
+  type AccessTokenService,
+  type SessionDenylist,
+} from './modules/identity/index.js';
 import { createVendorModule } from './modules/vendor/index.js';
 
 /**
@@ -37,15 +41,18 @@ const EXPOSED_HEADERS = [
 /**
  * Mounts every module beyond `identity` itself. Split out of `createApp`
  * purely to stay under this file's max-lines-per-function budget — each of
- * these modules shares identity's token verifier rather than minting a
- * second one (SDD 5), which is why `accessTokenService` is threaded through
- * rather than each module constructing its own.
+ * these modules shares identity's token verifier *and* its session denylist
+ * rather than minting a second one (SDD 5), which is why both are threaded
+ * through rather than each module constructing its own — a second denylist
+ * instance would mean a session revoked at logout kept authenticating on
+ * these routes (SDD 7.2).
  */
 const mountBusinessModules = (
   app: Express,
   params: {
     prisma: Container['prisma'];
     accessTokenService: AccessTokenService;
+    sessionDenylist: SessionDenylist;
     clock: Container['clock'];
     idGenerator: Container['idGenerator'];
     logger: Container['logger'];
@@ -136,6 +143,7 @@ export const createApp = (container: Container): Express => {
   mountBusinessModules(app, {
     prisma,
     accessTokenService: identityModule.accessTokenService,
+    sessionDenylist: identityModule.sessionDenylist,
     clock,
     idGenerator,
     logger,

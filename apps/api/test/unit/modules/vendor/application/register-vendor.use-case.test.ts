@@ -10,6 +10,7 @@ import {
 import type { VendorRepository } from '../../../../../src/modules/vendor/domain/repositories/vendor.repository.js';
 import type { Principal } from '../../../../../src/modules/identity/application/ports/principal.js';
 import type { RoleName } from '../../../../../src/modules/identity/domain/value-objects/role.value-object.js';
+import { toSessionId } from '../../../../../src/modules/identity/domain/value-objects/session-id.value-object.js';
 import { toUserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 import type { VendorId } from '../../../../../src/modules/identity/domain/value-objects/vendor-id.value-object.js';
 import type { UserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
@@ -42,7 +43,13 @@ class InMemoryVendorRepository implements VendorRepository {
 const NOW = new Date('2026-01-01T00:00:00.000Z');
 const customerId = toUserId('00000000-0000-7000-8000-0000000000b1');
 
-const principalOf = (role: RoleName, userId: UserId = customerId): Principal => ({ userId, role });
+const sessionId = toSessionId('00000000-0000-7000-8000-00000000e5d0');
+
+const principalOf = (role: RoleName, userId: UserId = customerId): Principal => ({
+  userId,
+  sessionId,
+  role,
+});
 
 const setup = (): {
   useCase: RegisterVendorUseCase;

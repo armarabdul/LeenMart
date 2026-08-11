@@ -12,6 +12,7 @@ import { authenticate } from '../../../../shared/interface/http/middleware/authe
 import type { AuthRateLimiters } from '../../../../shared/interface/http/middleware/auth-rate-limit.js';
 import { validate } from '../../../../shared/interface/http/middleware/validate.js';
 import type { AccessTokenService } from '../../application/ports/access-token.port.js';
+import type { SessionDenylist } from '../../application/ports/session-denylist.port.js';
 import type { IdentityController } from './identity.controller.js';
 
 /**
@@ -22,6 +23,7 @@ import type { IdentityController } from './identity.controller.js';
 export const createIdentityRouter = (
   controller: IdentityController,
   accessTokenService: AccessTokenService,
+  sessionDenylist: SessionDenylist,
   rateLimiters: AuthRateLimiters,
 ): Router => {
   const router = Router();
@@ -55,7 +57,7 @@ export const createIdentityRouter = (
     validate({ body: verifyOtpRequestSchema }),
     asyncHandler(controller.verifyOtp),
   );
-  router.get('/me', authenticate(accessTokenService), controller.me);
+  router.get('/me', authenticate(accessTokenService, sessionDenylist), controller.me);
 
   return router;
 };

@@ -2,6 +2,7 @@ import type { Clock, Logger } from '@leen-mart/domain-kit';
 import { InvalidRefreshTokenError } from '../../domain/errors/identity-errors.js';
 import type { RefreshTokenHasher } from '../ports/refresh-token-hasher.port.js';
 import type { RefreshTokenRepository } from '../ports/refresh-token-repository.port.js';
+import type { SessionDenylist } from '../ports/session-denylist.port.js';
 import type { UserRepository } from '../ports/user-repository.port.js';
 import type { AuthSession, SessionIssuer } from '../services/session-issuer.service.js';
 
@@ -14,6 +15,9 @@ export interface RefreshSessionDeps {
   readonly refreshTokenRepository: RefreshTokenRepository;
   readonly refreshTokenHasher: RefreshTokenHasher;
   readonly sessionIssuer: SessionIssuer;
+  readonly sessionDenylist: SessionDenylist;
+  /** The access-token TTL, which bounds how long each denylist entry must live (SDD 7.2). */
+  readonly accessTokenTtlSeconds: number;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -46,6 +50,8 @@ export class RefreshSessionUseCase {
       refreshTokenRepository,
       refreshTokenHasher,
       sessionIssuer,
+      sessionDenylist,
+      accessTokenTtlSeconds,
       clock,
       logger,
     } = this.deps;
@@ -60,13 +66,25 @@ export class RefreshSessionUseCase {
       // nothing at all. Treating either as theft would revoke a family every
       // time someone double-tapped logout.
       if (existing?.wasRotatedAway()) {
-        const revokedCount = await refreshTokenRepository.revokeFamily(existing.familyId, now);
+        const revokedSessionIds = await refreshTokenRepository.revokeFamily(existing.familyId, now);
+
+        // Killing the refresh rows bounds the thief's *future* rotations but
+        // not their present access: every session in the family may still
+        // hold a signature-valid access token. Denying each `sid` is what
+        // makes the revocation take effect now rather than up to one
+        // access-token lifetime from now.
+        await Promise.all(
+          revokedSessionIds.map((sessionId) =>
+            sessionDenylist.deny(sessionId, accessTokenTtlSeconds),
+          ),
+        );
+
         logger.warn(
           {
             userId: existing.userId,
-            tokenId: existing.id,
+            sessionId: existing.id,
             familyId: existing.familyId,
-            revokedCount,
+            revokedCount: revokedSessionIds.length,
           },
           'Refresh token reuse detected: session family revoked (SDD 7.2)',
         );

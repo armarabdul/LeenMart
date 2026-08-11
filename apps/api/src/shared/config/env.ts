@@ -75,6 +75,13 @@ const envSchema = z
      * silently widens that window everywhere it is not overridden.
      */
     JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(600),
+    /**
+     * SDD 7.2's `aud` claim, verified on every access token. Defaults to the
+     * service's own name because that is precisely what the claim asserts —
+     * the token was minted for *this* API. Set explicitly once a second
+     * audience exists, so one service's tokens cannot be replayed at another.
+     */
+    JWT_AUDIENCE: z.string().min(1).default('leen-mart-api'),
     JWT_REFRESH_TTL_DAYS: z.coerce.number().int().positive().default(30),
     /**
      * SDD 7.5's admin-console "30-minute idle timeout", expressed as the

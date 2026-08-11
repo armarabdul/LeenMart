@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import jwt from 'jsonwebtoken';
 import type { Express } from 'express';
 import { createApp } from '../../src/app.js';
 import { type Container, createContainer } from '../../src/container.js';
@@ -706,6 +707,182 @@ describe('identity endpoints', () => {
         .send({ email, password: PASSWORD })
         .expect(200);
       await request(app).post('/api/v1/identity/refresh').send({ refreshToken }).expect(200);
+    });
+  });
+
+  describe('session-bound access tokens and revocation (SDD 7.2)', () => {
+    const PASSWORD = 'correct horse battery staple';
+
+    const me = (accessToken: string): request.Test =>
+      request(app).get('/api/v1/identity/me').set('Authorization', `Bearer ${accessToken}`);
+
+    /** Reads the payload of a token the test already holds; never logged. */
+    const payloadOf = (accessToken: string): Record<string, unknown> =>
+      JSON.parse(
+        Buffer.from(accessToken.split('.')[1] ?? '', 'base64url').toString('utf8'),
+      ) as Record<string, unknown>;
+
+    it('carries the full claim set SDD 7.2 requires', async () => {
+      const registered = await registerCustomer(app, uniqueEmail('claims'), PASSWORD).expect(201);
+      const { accessToken } = (registered.body as AuthSessionBody).data;
+
+      const payload = payloadOf(accessToken);
+
+      for (const claim of ['sub', 'sid', 'jti', 'role', 'iss', 'aud', 'exp', 'iat']) {
+        expect(payload).toHaveProperty(claim);
+      }
+    });
+
+    it('binds the token sid to the session actually persisted', async () => {
+      const registered = await registerCustomer(app, uniqueEmail('sid-binding'), PASSWORD).expect(
+        201,
+      );
+      const body = registered.body as AuthSessionBody;
+
+      const sid = payloadOf(body.data.accessToken).sid as string;
+      const stored = await container.prisma.refreshToken.findUnique({ where: { id: sid } });
+
+      expect(stored).not.toBeNull();
+      expect(stored?.userId).toBe(body.data.user.id);
+    });
+
+    it('login: the access token authenticates', async () => {
+      const registered = await registerCustomer(app, uniqueEmail('live'), PASSWORD).expect(201);
+      const { accessToken } = (registered.body as AuthSessionBody).data;
+
+      await me(accessToken).expect(200);
+    });
+
+    it('logout: the same access token stops authenticating immediately', async () => {
+      // The defect this chunk closes. Before the denylist, this token kept
+      // working for the rest of its 10-minute life after logout.
+      const registered = await registerCustomer(app, uniqueEmail('logout-denies'), PASSWORD).expect(
+        201,
+      );
+      const { accessToken, refreshToken } = (registered.body as AuthSessionBody).data;
+      await me(accessToken).expect(200);
+
+      await request(app).post('/api/v1/identity/logout').send({ refreshToken }).expect(200);
+
+      const response = await me(accessToken).expect(401);
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_ACCESS_TOKEN');
+    });
+
+    it('logout leaves an unrelated session authenticating', async () => {
+      const victim = await registerCustomer(app, uniqueEmail('logout-mine'), PASSWORD).expect(201);
+      const bystander = await registerCustomer(app, uniqueEmail('logout-other'), PASSWORD).expect(
+        201,
+      );
+      const victimBody = (victim.body as AuthSessionBody).data;
+      const bystanderBody = (bystander.body as AuthSessionBody).data;
+
+      await request(app)
+        .post('/api/v1/identity/logout')
+        .send({ refreshToken: victimBody.refreshToken })
+        .expect(200);
+
+      await me(victimBody.accessToken).expect(401);
+      await me(bystanderBody.accessToken).expect(200);
+    });
+
+    it('refresh-token reuse: the revoked family stops authenticating', async () => {
+      const registered = await registerCustomer(app, uniqueEmail('reuse-denies'), PASSWORD).expect(
+        201,
+      );
+      const first = (registered.body as AuthSessionBody).data;
+
+      const rotated = await request(app)
+        .post('/api/v1/identity/refresh')
+        .send({ refreshToken: first.refreshToken })
+        .expect(200);
+      const second = (rotated.body as AuthSessionBody).data;
+      await me(second.accessToken).expect(200);
+
+      // Replaying the already-rotated token is definitionally theft (SDD 7.2).
+      await request(app)
+        .post('/api/v1/identity/refresh')
+        .send({ refreshToken: first.refreshToken })
+        .expect(401);
+
+      const response = await me(second.accessToken).expect(401);
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_ACCESS_TOKEN');
+    });
+
+    it('reuse detection leaves a different device session authenticating', async () => {
+      const email = uniqueEmail('reuse-bystander');
+      const registered = await registerCustomer(app, email, PASSWORD).expect(201);
+      const deviceA = (registered.body as AuthSessionBody).data;
+
+      // A second login roots a separate family, i.e. a second device.
+      const secondLogin = await request(app)
+        .post('/api/v1/identity/login')
+        .send({ email, password: PASSWORD })
+        .expect(200);
+      const deviceB = (secondLogin.body as AuthSessionBody).data;
+
+      await request(app)
+        .post('/api/v1/identity/refresh')
+        .send({ refreshToken: deviceA.refreshToken })
+        .expect(200);
+      await request(app)
+        .post('/api/v1/identity/refresh')
+        .send({ refreshToken: deviceA.refreshToken })
+        .expect(401);
+
+      await me(deviceB.accessToken).expect(200);
+    });
+
+    it('an ordinary rotation does not revoke the outgoing access token', async () => {
+      // Rotation is legitimate: the same holder receives the replacement.
+      const registered = await registerCustomer(app, uniqueEmail('rotate-ok'), PASSWORD).expect(
+        201,
+      );
+      const first = (registered.body as AuthSessionBody).data;
+
+      const rotated = await request(app)
+        .post('/api/v1/identity/refresh')
+        .send({ refreshToken: first.refreshToken })
+        .expect(200);
+
+      await me((rotated.body as AuthSessionBody).data.accessToken).expect(200);
+      await me(first.accessToken).expect(200);
+    });
+
+    it('rejects a token minted for a different audience', async () => {
+      const registered = await registerCustomer(app, uniqueEmail('aud'), PASSWORD).expect(201);
+      const { user } = (registered.body as AuthSessionBody).data;
+      const foreign = jwt.sign(
+        { role: 'CUSTOMER', sid: '00000000-0000-7000-8000-0000000000ff' },
+        container.env.JWT_ACCESS_SECRET,
+        {
+          subject: user.id,
+          issuer: container.env.SERVICE_NAME,
+          audience: 'some-other-audience',
+          jwtid: '00000000-0000-7000-8000-0000000000fe',
+          expiresIn: 600,
+        },
+      );
+
+      const response = await me(foreign).expect(401);
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_ACCESS_TOKEN');
+    });
+
+    it('stops denying once the denylist entry expires', async () => {
+      const registered = await registerCustomer(app, uniqueEmail('expiry'), PASSWORD).expect(201);
+      const { accessToken, refreshToken } = (registered.body as AuthSessionBody).data;
+      const sid = payloadOf(accessToken).sid as string;
+
+      await request(app).post('/api/v1/identity/logout').send({ refreshToken }).expect(200);
+      await me(accessToken).expect(401);
+
+      // Expire the entry directly rather than waiting out the TTL. In
+      // production the access token has outlived its own `exp` by this point,
+      // so the denylist has nothing left to protect.
+      await container.redis.del(`denied-session:${sid}`);
+
+      // The token is still within its 10-minute life here, which is what
+      // makes this a real assertion that the denial lapsed.
+      await me(accessToken).expect(200);
     });
   });
 });

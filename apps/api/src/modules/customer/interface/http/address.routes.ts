@@ -8,7 +8,7 @@ import {
 import { asyncHandler } from '../../../../shared/interface/http/middleware/async-handler.js';
 import { authenticate } from '../../../../shared/interface/http/middleware/authenticate.js';
 import { validate } from '../../../../shared/interface/http/middleware/validate.js';
-import type { AccessTokenService } from '../../../identity/index.js';
+import type { AccessTokenService, SessionDenylist } from '../../../identity/index.js';
 import type { AddressController } from './address.controller.js';
 
 const addressParamsSchema = z.object({ id: uuidSchema }).strict();
@@ -21,9 +21,10 @@ const addressParamsSchema = z.object({ id: uuidSchema }).strict();
 export const createAddressRouter = (
   controller: AddressController,
   accessTokenService: AccessTokenService,
+  sessionDenylist: SessionDenylist,
 ): Router => {
   const router = Router();
-  const requireAuth = authenticate(accessTokenService);
+  const requireAuth = authenticate(accessTokenService, sessionDenylist);
 
   router.post(
     '/addresses',

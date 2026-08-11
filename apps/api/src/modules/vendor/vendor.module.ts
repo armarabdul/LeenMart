@@ -1,7 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
 import type { Router } from 'express';
 import type { Clock, IdGenerator, Logger } from '@leen-mart/domain-kit';
-import type { AccessTokenService } from '../identity/index.js';
+import type { AccessTokenService, SessionDenylist } from '../identity/index.js';
 import { PrismaVendorRepository } from './infrastructure/persistence/prisma-vendor.repository.js';
 import { RegisterVendorUseCase } from './application/use-cases/register-vendor.use-case.js';
 import { createVendorController } from './interface/http/vendor.controller.js';
@@ -16,6 +16,13 @@ export interface VendorModuleDeps {
    * minting a second signer.
    */
   readonly accessTokenService: AccessTokenService;
+  /**
+   * The one shared denylist (SDD 7.2). Injected for the same reason
+   * `accessTokenService` is: a session revoked at logout must stop
+   * authenticating on *this* module's routes too, which only holds if every
+   * module consults the same instance.
+   */
+  readonly sessionDenylist: SessionDenylist;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
   readonly logger: Logger;
@@ -31,7 +38,7 @@ export interface VendorModule {
  * lifecycle — it hands over the shared container's ports and gets a router.
  */
 export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
-  const { prisma, accessTokenService, clock, idGenerator, logger } = deps;
+  const { prisma, accessTokenService, sessionDenylist, clock, idGenerator, logger } = deps;
   const moduleLogger = logger.child({ module: 'vendor' });
 
   const vendorRepository = new PrismaVendorRepository(prisma);
@@ -44,6 +51,6 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
   });
 
   const controller = createVendorController({ registerVendorUseCase });
-  const router = createVendorRouter(controller, accessTokenService);
+  const router = createVendorRouter(controller, accessTokenService, sessionDenylist);
   return { router };
 };

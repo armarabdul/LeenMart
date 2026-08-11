@@ -60,17 +60,31 @@ export class PrismaRefreshTokenRepository implements RefreshTokenRepository {
     return row ? toDomain(row) : null;
   }
 
-  async revokeFamily(familyId: SessionId, now: Date): Promise<number> {
-    // One conditional UPDATE over `idx_refresh_tokens_family`, not a walk of
-    // `replaced_by_id`. `revokedAt: null` in the WHERE clause keeps the write
-    // to rows that are actually still live, so the returned count is the
-    // number of sessions this call killed rather than the family's size, and
-    // a second replay of the same stolen token reports zero instead of
+  async revokeFamily(familyId: SessionId, now: Date): Promise<readonly SessionId[]> {
+    // Select-then-update inside one transaction, rather than a bare
+    // `updateMany`: Prisma's `updateMany` reports only a count, and the
+    // caller needs the actual ids to deny each dead session's access token
+    // (SDD 7.2). The transaction is what keeps the two statements agreeing —
+    // without it a concurrent rotation could insert a row between them, which
+    // the UPDATE would then kill without the caller ever learning its id, and
+    // that session's access token would keep authenticating.
+    //
+    // Both statements filter `revokedAt: null` over `idx_refresh_tokens_family`,
+    // so a replay of the same stolen token returns empty instead of
     // re-stamping tokens that already died.
-    const result = await this.prisma.refreshToken.updateMany({
-      where: { familyId, revokedAt: null },
-      data: { revokedAt: now },
+    return this.prisma.$transaction(async (tx) => {
+      const live = await tx.refreshToken.findMany({
+        where: { familyId, revokedAt: null },
+        select: { id: true },
+      });
+      if (live.length === 0) return [];
+
+      const ids = live.map((row) => row.id);
+      await tx.refreshToken.updateMany({
+        where: { id: { in: ids }, revokedAt: null },
+        data: { revokedAt: now },
+      });
+      return ids.map(toSessionId);
     });
-    return result.count;
   }
 }

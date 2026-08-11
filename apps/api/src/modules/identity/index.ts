@@ -21,6 +21,10 @@ export { toUserId, toVendorId } from './domain/index.js';
 
 // Minimal cross-cutting surface: the shared authentication middleware
 // (SDD 7.4 step 1) is parameterised by this module's AccessTokenService and
-// produces a Principal from its verified claims.
+// SessionDenylist, and produces a Principal from its verified claims. The
+// denylist is published for the same reason the token service is — every
+// authenticated route must consult the *same* one, or a session revoked here
+// would still authenticate over there (SDD 7.2).
 export type { AccessTokenService } from './application/ports/access-token.port.js';
+export type { SessionDenylist } from './application/ports/session-denylist.port.js';
 export type { Principal } from './application/ports/principal.js';

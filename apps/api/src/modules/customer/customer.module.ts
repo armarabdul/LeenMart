@@ -1,7 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
 import type { Router } from 'express';
 import type { Clock, IdGenerator, Logger } from '@leen-mart/domain-kit';
-import type { AccessTokenService } from '../identity/index.js';
+import type { AccessTokenService, SessionDenylist } from '../identity/index.js';
 import { PrismaAddressRepository } from './infrastructure/persistence/prisma-address.repository.js';
 import { AddAddressUseCase } from './application/use-cases/add-address.use-case.js';
 import { ListAddressesUseCase } from './application/use-cases/list-addresses.use-case.js';
@@ -20,6 +20,13 @@ export interface CustomerModuleDeps {
    * minting a second signer.
    */
   readonly accessTokenService: AccessTokenService;
+  /**
+   * The one shared denylist (SDD 7.2). Injected for the same reason
+   * `accessTokenService` is: a session revoked at logout must stop
+   * authenticating on *this* module's routes too, which only holds if every
+   * module consults the same instance.
+   */
+  readonly sessionDenylist: SessionDenylist;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
   readonly logger: Logger;
@@ -35,7 +42,7 @@ export interface CustomerModule {
  * book — it hands over the shared container's ports and gets back a router.
  */
 export const createCustomerModule = (deps: CustomerModuleDeps): CustomerModule => {
-  const { prisma, accessTokenService, clock, idGenerator, logger } = deps;
+  const { prisma, accessTokenService, sessionDenylist, clock, idGenerator, logger } = deps;
   const moduleLogger = logger.child({ module: 'customer' });
 
   const addressRepository = new PrismaAddressRepository(prisma);
@@ -70,6 +77,6 @@ export const createCustomerModule = (deps: CustomerModuleDeps): CustomerModule =
     removeAddressUseCase,
     setDefaultAddressUseCase,
   });
-  const router = createAddressRouter(controller, accessTokenService);
+  const router = createAddressRouter(controller, accessTokenService, sessionDenylist);
   return { router };
 };
