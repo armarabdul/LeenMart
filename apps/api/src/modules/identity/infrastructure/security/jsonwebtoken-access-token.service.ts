@@ -34,6 +34,15 @@ const isRoleName = (value: unknown): value is RoleName =>
   typeof value === 'string' && (ROLE_NAMES as readonly string[]).includes(value);
 
 /**
+ * The one algorithm this service will sign or accept.
+ *
+ * Named once and used on both sides so the two can never drift apart — a
+ * verifier that accepts more than the signer emits is exactly the gap
+ * algorithm-confusion attacks live in.
+ */
+const ALGORITHM = 'HS256';
+
+/**
  * JWT-backed access tokens (SDD 6.1 / 7.2), issuer- and audience-scoped.
  *
  * Carries SDD 7.2's full claim set: `sub`, `sid`, `role`, `jti`, `exp`, `iat`,
@@ -41,10 +50,21 @@ const isRoleName = (value: unknown): value is RoleName =>
  * optional in the SDD and no endpoint reads it yet, so emitting it would put a
  * value in a signed credential that nothing validates.
  *
+ * Both `sign` and `verify` pin the algorithm explicitly (SDD 24, OWASP A02:
+ * "no algorithm confusion"). Left to its defaults, `jwt.verify` decides what
+ * to accept from the *token's own* `alg` header — that is, from attacker-
+ * controlled input. Two concrete attacks that pinning closes: a token with
+ * `alg: none` and no signature at all, and — once this service moves to an
+ * asymmetric key — a token the attacker HMAC-signs using the freely readable
+ * *public* key as the secret, which a verifier willing to consider HS256
+ * would accept as genuine.
+ *
  * Still **HS256**, not SDD 7.2's EdDSA/Ed25519. That migration also requires
  * key storage, a `kid`-keyed JWKS and a quarterly rotation window, none of
- * which this chunk establishes — recorded here as an open discrepancy rather
- * than half-done.
+ * which the SDD specifies — recorded here as an open discrepancy rather than
+ * half-done. Pinning the algorithm now is the precondition for making that
+ * switch safely: it turns the eventual change into a one-line edit whose
+ * verifier cannot silently keep accepting the old symmetric algorithm.
  */
 export class JsonWebTokenAccessTokenService implements AccessTokenService {
   constructor(
@@ -59,6 +79,7 @@ export class JsonWebTokenAccessTokenService implements AccessTokenService {
     // issued token (SDD 7.2) is then a property of this service rather than a
     // convention every call site has to remember.
     const token = jwt.sign({ role: subject.role, sid: subject.sid }, this.config.secret, {
+      algorithm: ALGORITHM,
       subject: subject.sub,
       issuer: this.config.issuer,
       audience: this.config.audience,
@@ -72,6 +93,9 @@ export class JsonWebTokenAccessTokenService implements AccessTokenService {
   verify(token: string): AccessTokenClaims {
     try {
       const payload = jwt.verify(token, this.config.secret, {
+        // Not a restatement of `sign`'s option: this is the one that refuses
+        // a token whose header names any *other* algorithm, including `none`.
+        algorithms: [ALGORITHM],
         issuer: this.config.issuer,
         audience: this.config.audience,
       });

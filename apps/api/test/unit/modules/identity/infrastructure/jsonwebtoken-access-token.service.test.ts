@@ -178,4 +178,116 @@ describe('JsonWebTokenAccessTokenService', () => {
 
     expect(new Set(messages).size).toBe(1);
   });
+
+  describe('algorithm allowlist (SDD 24 / OWASP A02)', () => {
+    /** Builds a token bypassing the service, so the header names whatever we choose. */
+    const forge = (options: jwt.SignOptions, secret: jwt.Secret = SECRET): string =>
+      jwt.sign({ role: 'CUSTOMER', sid: sessionId }, secret, {
+        subject: userId,
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        jwtid: 'forged-token-id',
+        expiresIn: 900,
+        ...options,
+      });
+
+    it('accepts the HS256 token it issues itself', () => {
+      const service = buildService();
+
+      const claims = service.verify(service.sign(subject).token);
+
+      expect(claims.sub).toBe(userId);
+    });
+
+    it('stamps HS256 in the header of every token it signs', () => {
+      const service = buildService();
+
+      const header = JSON.parse(
+        Buffer.from(service.sign(subject).token.split('.')[0] ?? '', 'base64url').toString('utf8'),
+      ) as { alg: string };
+
+      expect(header.alg).toBe('HS256');
+    });
+
+    it('rejects an unsigned alg:none token', () => {
+      // The classic bypass: strip the signature and claim no algorithm was
+      // used. `jsonwebtoken` will honour that header unless pinned.
+      const service = buildService();
+      const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
+      const payload = Buffer.from(
+        JSON.stringify({
+          sub: userId,
+          sid: sessionId,
+          jti: 'forged',
+          role: 'SUPER_ADMIN',
+          iss: ISSUER,
+          aud: AUDIENCE,
+          exp: Math.floor(Date.now() / 1000) + 900,
+        }),
+      ).toString('base64url');
+
+      expect(() => service.verify(`${header}.${payload}.`)).toThrow(
+        /Invalid or expired access token/,
+      );
+    });
+
+    it.each(['HS384', 'HS512'] as const)('rejects a token signed with %s', (algorithm) => {
+      // Same secret, same issuer, same audience — only the algorithm differs.
+      const service = buildService();
+
+      expect(() => service.verify(forge({ algorithm }))).toThrow(/Invalid or expired access token/);
+    });
+
+    it('rejects a privilege-escalating token that differs only by algorithm', () => {
+      // Proves the allowlist is what refuses it, not some other check: the
+      // token is internally consistent and would otherwise mint an admin.
+      const service = buildService();
+      const escalated = jwt.sign({ role: 'SUPER_ADMIN', sid: sessionId }, SECRET, {
+        algorithm: 'HS512',
+        subject: userId,
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        jwtid: 'forged-admin',
+        expiresIn: 900,
+      });
+
+      expect(() => service.verify(escalated)).toThrow(/Invalid or expired access token/);
+    });
+
+    it('answers a wrong-algorithm token with the same uniform error as any other failure (SEC-15)', () => {
+      const service = buildService();
+
+      const messages = [
+        forge({ algorithm: 'HS512' }),
+        buildService({ audience: 'elsewhere' }).sign(subject).token,
+        'not-a-jwt',
+      ].map((token) => {
+        try {
+          service.verify(token);
+          throw new Error('expected verification to fail');
+        } catch (error) {
+          return (error as Error).message;
+        }
+      });
+
+      expect(new Set(messages).size).toBe(1);
+    });
+
+    it('still enforces issuer, audience and expiry alongside the algorithm', () => {
+      // Pinning the algorithm must not have displaced the other checks.
+      const service = buildService();
+
+      expect(() => service.verify(forge({ issuer: 'someone-else' }))).toThrow(
+        /Invalid or expired access token/,
+      );
+      expect(() => service.verify(forge({ audience: 'someone-else' }))).toThrow(
+        /Invalid or expired access token/,
+      );
+      expect(() => service.verify(forge({ expiresIn: -60 }))).toThrow(
+        /Invalid or expired access token/,
+      );
+      // ...and a correctly-algorithmed token with all three right still passes.
+      expect(() => service.verify(forge({}))).not.toThrow();
+    });
+  });
 });
