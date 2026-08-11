@@ -36,6 +36,7 @@
     "helmet": "8.0.0",
     "ioredis": "5.4.2",
     "jsonwebtoken": "9.0.2",
+    "otplib": "13.4.1",
     "pino": "9.6.0",
     "pino-http": "10.4.0",
     "rate-limit-redis": "4.2.0",

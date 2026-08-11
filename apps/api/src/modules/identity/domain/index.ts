@@ -52,3 +52,5 @@ export * from './services/otp-generator.service.js';
 export * from './services/otp-hasher.service.js';
 export * from './services/token-generator.service.js';
 export * from './services/token-hasher.service.js';
+export * from './services/totp.service.js';
+export * from './services/mfa-secret-cipher.service.js';

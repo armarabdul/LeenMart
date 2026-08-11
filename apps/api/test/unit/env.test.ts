@@ -73,6 +73,45 @@ describe('environment configuration', () => {
     ).toThrow(/CORS_ALLOWED_ORIGINS/);
   });
 
+  it('applies the insecure MFA_ENCRYPTION_KEY default outside production', () => {
+    const env = loadEnv({ ...validEnv });
+    expect(env.MFA_ENCRYPTION_KEY).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('rejects an MFA_ENCRYPTION_KEY that is not 64 hex characters', () => {
+    expect(() => loadEnv({ ...validEnv, MFA_ENCRYPTION_KEY: 'not-hex-and-too-short' })).toThrow(
+      /MFA_ENCRYPTION_KEY/,
+    );
+  });
+
+  it('rejects an MFA_ENCRYPTION_KEY of the right length but non-hex characters', () => {
+    expect(() => loadEnv({ ...validEnv, MFA_ENCRYPTION_KEY: 'z'.repeat(64) })).toThrow(
+      /MFA_ENCRYPTION_KEY/,
+    );
+  });
+
+  it('forbids the insecure default MFA_ENCRYPTION_KEY in production', () => {
+    expect(() =>
+      loadEnv({
+        ...validEnv,
+        NODE_ENV: 'production',
+        CORS_ALLOWED_ORIGINS: 'https://leenmart.in',
+        JWT_ACCESS_SECRET: 'a-real-production-secret-that-is-long-enough',
+      }),
+    ).toThrow(/MFA_ENCRYPTION_KEY/);
+  });
+
+  it('accepts a real MFA_ENCRYPTION_KEY in production', () => {
+    const env = loadEnv({
+      ...validEnv,
+      NODE_ENV: 'production',
+      CORS_ALLOWED_ORIGINS: 'https://leenmart.in',
+      JWT_ACCESS_SECRET: 'a-real-production-secret-that-is-long-enough',
+      MFA_ENCRYPTION_KEY: 'f'.repeat(64),
+    });
+    expect(env.MFA_ENCRYPTION_KEY).toBe('f'.repeat(64));
+  });
+
   it('memoises the parsed environment', () => {
     expect(loadEnv({ ...validEnv })).toBe(loadEnv({ ...validEnv, PORT: '9999' }));
   });

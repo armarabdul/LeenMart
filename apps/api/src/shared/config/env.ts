@@ -22,6 +22,14 @@ const booleanFromString = z
  */
 const INSECURE_DEV_JWT_ACCESS_SECRET = 'dev-only-insecure-jwt-access-secret-change-me-please';
 
+/**
+ * Same purpose as `INSECURE_DEV_JWT_ACCESS_SECRET`, but must itself be a
+ * valid 64-character hex string (32 bytes) — the schema below has no
+ * separate escape hatch for a human-readable placeholder, since the value
+ * has to decode to a real AES-256-GCM key even in development.
+ */
+const INSECURE_DEV_MFA_ENCRYPTION_KEY = 'deadbeef'.repeat(8);
+
 const envSchema = z
   .object({
     // --- runtime ---
@@ -60,6 +68,12 @@ const envSchema = z
     JWT_ACCESS_SECRET: z.string().min(32).default(INSECURE_DEV_JWT_ACCESS_SECRET),
     JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(900),
     JWT_REFRESH_TTL_DAYS: z.coerce.number().int().positive().default(30),
+
+    // --- identity (Milestone 3 Step 5C: AES-256-GCM encryption for admin MFA secrets) ---
+    MFA_ENCRYPTION_KEY: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/i, 'must be a 64-character hexadecimal string (32 bytes)')
+      .default(INSECURE_DEV_MFA_ENCRYPTION_KEY),
   })
   .superRefine((env, ctx) => {
     // Guard rails that only apply once real users are involved.
@@ -83,6 +97,13 @@ const envSchema = z
           code: z.ZodIssueCode.custom,
           path: ['JWT_ACCESS_SECRET'],
           message: 'A real JWT_ACCESS_SECRET must be set in production.',
+        });
+      }
+      if (env.MFA_ENCRYPTION_KEY === INSECURE_DEV_MFA_ENCRYPTION_KEY) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['MFA_ENCRYPTION_KEY'],
+          message: 'A real MFA_ENCRYPTION_KEY must be set in production.',
         });
       }
     }
