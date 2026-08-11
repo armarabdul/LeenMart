@@ -14,6 +14,8 @@ export interface AuthSession {
   readonly refreshTokenExpiresAt: Date;
   /** Internal id of the persisted refresh token, used to link rotation. Not exposed on the wire. */
   readonly refreshTokenId: SessionId;
+  /** The rotation lineage this session belongs to (SDD 7.2). Internal, never on the wire. */
+  readonly refreshTokenFamilyId: SessionId;
 }
 
 export interface SessionIssuerDeps {
@@ -35,7 +37,13 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 export class SessionIssuer {
   constructor(private readonly deps: SessionIssuerDeps) {}
 
-  async issueFor(user: User): Promise<AuthSession> {
+  /**
+   * @param familyId The rotation lineage to continue (SDD 7.2). Only the
+   * refresh path passes it; every other caller is a fresh login and roots its
+   * own family, which is what keeps one device's compromise from reaching
+   * another device's session.
+   */
+  async issueFor(user: User, familyId?: SessionId): Promise<AuthSession> {
     const {
       accessTokenService,
       refreshTokenHasher,
@@ -56,6 +64,7 @@ export class SessionIssuer {
       tokenHash: refreshTokenHasher.hash(rawRefreshToken),
       expiresAt: refreshTokenExpiresAt,
       now,
+      ...(familyId === undefined ? {} : { familyId }),
     });
     await refreshTokenRepository.create(refreshTokenEntity);
 
@@ -66,6 +75,7 @@ export class SessionIssuer {
       refreshToken: rawRefreshToken,
       refreshTokenExpiresAt,
       refreshTokenId: refreshTokenEntity.id,
+      refreshTokenFamilyId: refreshTokenEntity.familyId,
     };
   }
 }

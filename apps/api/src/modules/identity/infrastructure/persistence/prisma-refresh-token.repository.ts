@@ -1,12 +1,13 @@
 import type { PrismaClient } from '@prisma/client';
 import type { RefreshTokenRepository } from '../../application/ports/refresh-token-repository.port.js';
 import { RefreshToken } from '../../domain/entities/refresh-token.entity.js';
-import { toSessionId } from '../../domain/value-objects/session-id.value-object.js';
+import { toSessionId, type SessionId } from '../../domain/value-objects/session-id.value-object.js';
 import { toUserId } from '../../domain/value-objects/user-id.value-object.js';
 
 interface RefreshTokenRow {
   readonly id: string;
   readonly userId: string;
+  readonly familyId: string;
   readonly tokenHash: string;
   readonly expiresAt: Date;
   readonly revokedAt: Date | null;
@@ -18,6 +19,7 @@ const toDomain = (row: RefreshTokenRow): RefreshToken =>
   RefreshToken.reconstitute({
     id: toSessionId(row.id),
     userId: toUserId(row.userId),
+    familyId: toSessionId(row.familyId),
     tokenHash: row.tokenHash,
     expiresAt: row.expiresAt,
     revokedAt: row.revokedAt,
@@ -34,6 +36,7 @@ export class PrismaRefreshTokenRepository implements RefreshTokenRepository {
       data: {
         id: token.id,
         userId: token.userId,
+        familyId: token.familyId,
         tokenHash: token.tokenHash,
         expiresAt: token.expiresAt,
         revokedAt: token.revokedAt,
@@ -55,5 +58,19 @@ export class PrismaRefreshTokenRepository implements RefreshTokenRepository {
   async findByTokenHash(tokenHash: string): Promise<RefreshToken | null> {
     const row = await this.prisma.refreshToken.findUnique({ where: { tokenHash } });
     return row ? toDomain(row) : null;
+  }
+
+  async revokeFamily(familyId: SessionId, now: Date): Promise<number> {
+    // One conditional UPDATE over `idx_refresh_tokens_family`, not a walk of
+    // `replaced_by_id`. `revokedAt: null` in the WHERE clause keeps the write
+    // to rows that are actually still live, so the returned count is the
+    // number of sessions this call killed rather than the family's size, and
+    // a second replay of the same stolen token reports zero instead of
+    // re-stamping tokens that already died.
+    const result = await this.prisma.refreshToken.updateMany({
+      where: { familyId, revokedAt: null },
+      data: { revokedAt: now },
+    });
+    return result.count;
   }
 }

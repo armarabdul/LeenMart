@@ -6,6 +6,7 @@ import { toUserId } from '../../../../../src/modules/identity/domain/value-objec
 const tokenId = toSessionId('00000000-0000-7000-8000-000000000010');
 const userId = toUserId('00000000-0000-7000-8000-000000000011');
 const replacementId = toSessionId('00000000-0000-7000-8000-000000000012');
+const otherFamilyId = toSessionId('00000000-0000-7000-8000-000000000013');
 
 const issue = (now: Date, expiresAt: Date): RefreshToken =>
   RefreshToken.issue({ id: tokenId, userId, tokenHash: 'hash', expiresAt, now });
@@ -51,5 +52,77 @@ describe('RefreshToken', () => {
 
     expect(revoked.isRevoked()).toBe(true);
     expect(revoked.replacedByTokenId).toBeNull();
+  });
+
+  describe('session family (SDD 7.2)', () => {
+    const now = new Date('2026-01-01T00:00:00.000Z');
+    const expiresAt = new Date('2026-02-01T00:00:00.000Z');
+
+    it('roots a fresh login at its own id, so every session has exactly one family', () => {
+      expect(issue(now, expiresAt).familyId).toBe(tokenId);
+    });
+
+    it('continues an existing family when one is supplied', () => {
+      const rotated = RefreshToken.issue({
+        id: replacementId,
+        userId,
+        tokenHash: 'hash-2',
+        expiresAt,
+        now,
+        familyId: otherFamilyId,
+      });
+
+      expect(rotated.familyId).toBe(otherFamilyId);
+      expect(rotated.id).toBe(replacementId);
+    });
+
+    it('carries the family through revocation', () => {
+      const token = issue(now, expiresAt);
+
+      expect(token.revoke(now, replacementId).familyId).toBe(tokenId);
+      expect(token.revoke(now).familyId).toBe(tokenId);
+    });
+
+    it('carries the family through reconstitution, without defaulting it to the id', () => {
+      const rehydrated = RefreshToken.reconstitute({
+        id: tokenId,
+        userId,
+        familyId: otherFamilyId,
+        tokenHash: 'hash',
+        expiresAt,
+        revokedAt: null,
+        replacedByTokenId: null,
+        createdAt: now,
+      });
+
+      expect(rehydrated.familyId).toBe(otherFamilyId);
+    });
+  });
+
+  describe('wasRotatedAway — the theft signal SDD 7.2 acts on', () => {
+    const now = new Date('2026-01-01T00:00:00.000Z');
+    const expiresAt = new Date('2026-02-01T00:00:00.000Z');
+
+    it('is false for a live token', () => {
+      expect(issue(now, expiresAt).wasRotatedAway()).toBe(false);
+    });
+
+    it('is true once the token has been exchanged for a replacement', () => {
+      expect(issue(now, expiresAt).revoke(now, replacementId).wasRotatedAway()).toBe(true);
+    });
+
+    it('is false for a logout-revoked token, which is a stale client and not a thief', () => {
+      const loggedOut = issue(now, expiresAt).revoke(now);
+
+      expect(loggedOut.isRevoked()).toBe(true);
+      expect(loggedOut.wasRotatedAway()).toBe(false);
+    });
+
+    it('is false for a merely expired token', () => {
+      const expired = issue(now, expiresAt);
+
+      expect(expired.isExpired(expiresAt)).toBe(true);
+      expect(expired.wasRotatedAway()).toBe(false);
+    });
   });
 });

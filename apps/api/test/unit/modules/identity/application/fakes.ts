@@ -88,6 +88,23 @@ export class InMemoryRefreshTokenRepository implements RefreshTokenRepository {
     }
     return Promise.resolve(null);
   }
+
+  /** Mirrors the Prisma adapter: only live rows are touched, and the count is what actually died. */
+  revokeFamily(familyId: SessionId, now: Date): Promise<number> {
+    let revoked = 0;
+    for (const [id, token] of this.byId) {
+      if (token.familyId === familyId && !token.isRevoked()) {
+        this.byId.set(id, token.revoke(now));
+        revoked += 1;
+      }
+    }
+    return Promise.resolve(revoked);
+  }
+
+  /** Test-only view of stored state, so assertions can inspect a whole family. */
+  all(): readonly RefreshToken[] {
+    return [...this.byId.values()];
+  }
 }
 
 /** Deliberately not a real hash — fast and inspectable for assertions. */

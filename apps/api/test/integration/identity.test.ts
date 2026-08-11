@@ -140,6 +140,85 @@ describe('identity endpoints', () => {
     expect((reused.body as ErrorBody).error.code).toBe('INVALID_REFRESH_TOKEN');
   });
 
+  it('revokes the whole session family when a rotated-away token is replayed (SDD 7.2)', async () => {
+    const email = uniqueEmail('reuse-family');
+    const registered = await registerCustomer(app, email, 'correct horse battery staple').expect(
+      201,
+    );
+    const r1 = (registered.body as AuthSessionBody).data.refreshToken;
+
+    // R1 → R2. R2 is the live token a thief would be holding after refreshing
+    // ahead of the victim.
+    const rotated = await request(app)
+      .post('/api/v1/identity/refresh')
+      .send({ refreshToken: r1 })
+      .expect(200);
+    const r2 = (rotated.body as AuthSessionBody).data.refreshToken;
+
+    // Replaying R1 is definitionally theft: the holder of R1 should already
+    // have exchanged it.
+    const replay = await request(app)
+      .post('/api/v1/identity/refresh')
+      .send({ refreshToken: r1 })
+      .expect(401);
+    expect((replay.body as ErrorBody).error.code).toBe('INVALID_REFRESH_TOKEN');
+
+    // The point of the chunk: R2 died with the rest of its family, so the
+    // compromise is bounded rather than permanent.
+    const r2AfterReplay = await request(app)
+      .post('/api/v1/identity/refresh')
+      .send({ refreshToken: r2 })
+      .expect(401);
+    expect((r2AfterReplay.body as ErrorBody).error.code).toBe('INVALID_REFRESH_TOKEN');
+
+    // Every row in that family is revoked in the database, not just rejected.
+    const rows = await container.prisma.refreshToken.findMany({
+      where: { user: { email } },
+      select: { familyId: true, revokedAt: true },
+    });
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((row) => row.familyId)).size).toBe(1);
+    expect(rows.every((row) => row.revokedAt !== null)).toBe(true);
+  });
+
+  it('keeps a separate login alive when another family is compromised (SDD 7.2)', async () => {
+    const email = uniqueEmail('two-devices');
+    const password = 'correct horse battery staple';
+    const registered = await registerCustomer(app, email, password).expect(201);
+    const deviceA1 = (registered.body as AuthSessionBody).data.refreshToken;
+
+    // A second login is a second family — the same user on another device.
+    const secondLogin = await request(app)
+      .post('/api/v1/identity/login')
+      .send({ email, password })
+      .expect(200);
+    const deviceB1 = (secondLogin.body as AuthSessionBody).data.refreshToken;
+
+    await request(app)
+      .post('/api/v1/identity/refresh')
+      .send({ refreshToken: deviceA1 })
+      .expect(200);
+    await request(app)
+      .post('/api/v1/identity/refresh')
+      .send({ refreshToken: deviceA1 })
+      .expect(401);
+
+    // Device B is untouched: SDD 7.2 revokes a family, not a user. Signing a
+    // user out everywhere is a different trigger (suspension, password change,
+    // "log out all devices").
+    await request(app)
+      .post('/api/v1/identity/refresh')
+      .send({ refreshToken: deviceB1 })
+      .expect(200);
+
+    const families = await container.prisma.refreshToken.groupBy({
+      by: ['familyId'],
+      where: { user: { email } },
+      _count: { _all: true },
+    });
+    expect(families).toHaveLength(2);
+  });
+
   it('logs out and invalidates the refresh token', async () => {
     const email = uniqueEmail('logout');
     const registered = await registerCustomer(app, email, 'correct horse battery staple').expect(

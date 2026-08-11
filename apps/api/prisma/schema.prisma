@@ -106,9 +106,19 @@ model User {
 /// that is already 256 bits of randomness. `replacedById` records rotation so
 /// a replayed, already-rotated token is a detectable signal, not just a
 /// rejected one.
+///
+/// `family_id` is the rotation lineage that signal acts on (SDD 7.2: on
+/// reuse detection "the entire session family is revoked"). A fresh login
+/// roots a family at its own id and every rotation carries it forward, so a
+/// family is exactly one login and its descendants — not every session the
+/// user holds, which SDD 7.2 revokes under different triggers entirely.
+/// Not a foreign key to itself: the root row can be deleted by retention
+/// long before its descendants, and a family id that outlives its root is
+/// correct rather than dangling.
 model RefreshToken {
   id           String    @id @db.Uuid
   userId       String    @map("user_id") @db.Uuid
+  familyId     String    @map("family_id") @db.Uuid
   tokenHash    String    @unique @map("token_hash") @db.VarChar(64)
   expiresAt    DateTime  @map("expires_at") @db.Timestamptz(6)
   revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(6)
@@ -118,6 +128,11 @@ model RefreshToken {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId], map: "idx_refresh_tokens_user")
+  // Serves the one-statement family revocation on reuse detection. Plain
+  // rather than partial: `family_id` is high-cardinality, so a family lookup
+  // is already a handful of rows before the `revoked_at IS NULL` filter
+  // narrows it to the single live one.
+  @@index([familyId], map: "idx_refresh_tokens_family")
   @@map("refresh_tokens")
 }
 
