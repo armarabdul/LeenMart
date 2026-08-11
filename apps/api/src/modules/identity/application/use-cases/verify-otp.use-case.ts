@@ -46,6 +46,32 @@ export class VerifyOtpUseCase {
       throw new InvalidOtpError();
     }
 
+    // Administrators authenticate on their own surface, where TOTP is
+    // mandatory and unconditional (SDD 7.1 gives Admin "Email + password"
+    // with no secondary method at all). Refusing them here is what stops this
+    // endpoint from becoming an MFA bypass, exactly as `LoginUseCase` refuses
+    // them on the customer password path for the same reason.
+    //
+    // The rejection is `InvalidOtpError` — the same error, code and status
+    // every other failure on this endpoint produces — and it happens before
+    // the OTP is looked up, so nothing about the account is observable. Using
+    // this path's uniform error rather than login's `InvalidCredentialsError`
+    // is deliberate: the two are a 400 `INVALID_OTP` and a 401
+    // `INVALID_CREDENTIALS` respectively, so borrowing login's would make an
+    // administrator's phone number identifiable by a single request — the
+    // very enumeration oracle (SEC-15) this guard is written to avoid.
+    //
+    // No admin account can hold a phone today: `User.registerWithPhone` is the
+    // only path that sets one and it hardcodes `Role.CUSTOMER`. This is the
+    // guard that keeps that true if a phone-change flow (FR-07) ever lands.
+    if (user.role.isAdmin()) {
+      logger.warn(
+        { userId: user.id },
+        'OTP verification refused: admin accounts must use the admin surface',
+      );
+      throw new InvalidOtpError();
+    }
+
     const otp = await otpRepository.findActiveByUserId(user.id);
     if (!otp) {
       throw new InvalidOtpError();

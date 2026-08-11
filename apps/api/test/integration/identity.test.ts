@@ -444,6 +444,48 @@ describe('identity endpoints', () => {
       });
     };
 
+    it('refuses an admin account on the customer OTP path (SDD 7.1)', async () => {
+      // An administrator must never obtain a session without TOTP. No
+      // production path can give an admin a phone today, so the state is
+      // constructed directly — this asserts the guard that keeps the OTP
+      // endpoint from becoming an MFA bypass if one ever can.
+      const phone = uniquePhone();
+      const email = uniqueEmail('otp-admin');
+      const code = '135790';
+      const userId = container.idGenerator.generate();
+
+      await container.prisma.user.create({
+        data: {
+          id: userId,
+          email,
+          phone,
+          role: 'SUPER_ADMIN',
+          status: 'ACTIVE',
+          passwordHash: 'hashed:not-a-real-password-hash-value',
+        },
+      });
+      await container.prisma.otp.create({
+        data: {
+          id: container.idGenerator.generate(),
+          userId,
+          codeHash: await otpHasher.hash(code),
+          expiresAt: new Date(Date.now() + 5 * 60_000),
+        },
+      });
+
+      const response = await verifyOtp(app, phone, code).expect(400);
+
+      // Identical to every other failure on this endpoint: an attacker
+      // submitting phone numbers cannot identify an administrator (SEC-15).
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_OTP');
+
+      // No session was issued, and the admin's OTP was left untouched.
+      expect(await container.prisma.refreshToken.findMany({ where: { userId } })).toHaveLength(0);
+      const otp = await container.prisma.otp.findFirstOrThrow({ where: { userId } });
+      expect(otp.consumedAt).toBeNull();
+      expect(otp.attempts).toBe(0);
+    });
+
     it('requests an OTP and creates a pending customer for a new phone', async () => {
       const phone = uniquePhone();
 
