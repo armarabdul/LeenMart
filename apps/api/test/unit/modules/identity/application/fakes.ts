@@ -20,6 +20,8 @@ import type { OtpHasher } from '../../../../../src/modules/identity/domain/servi
 import type { OtpRepository } from '../../../../../src/modules/identity/domain/repositories/otp.repository.js';
 import type { MfaSecretRepository } from '../../../../../src/modules/identity/domain/repositories/mfa-secret.repository.js';
 import type { MfaChallengeRepository } from '../../../../../src/modules/identity/domain/repositories/mfa-challenge.repository.js';
+import type { TotpService } from '../../../../../src/modules/identity/domain/services/totp.service.js';
+import type { MfaSecretCipher } from '../../../../../src/modules/identity/domain/services/mfa-secret-cipher.service.js';
 import type { RefreshToken } from '../../../../../src/modules/identity/domain/entities/refresh-token.entity.js';
 import type { User } from '../../../../../src/modules/identity/domain/entities/user.entity.js';
 import type { Otp } from '../../../../../src/modules/identity/domain/entities/otp.entity.js';
@@ -224,6 +226,43 @@ export class InMemoryMfaChallengeRepository implements MfaChallengeRepository {
       if (challenge.tokenHash === tokenHash) return Promise.resolve(challenge);
     }
     return Promise.resolve(null);
+  }
+
+  /** Single-threaded JS makes this trivially atomic — the real assertion of DB-level atomicity lives in the Postgres integration test. */
+  consumeIfActive(id: MfaChallengeId, now: Date): Promise<boolean> {
+    const challenge = this.byId.get(id);
+    if (!challenge?.isActive(now)) {
+      return Promise.resolve(false);
+    }
+    this.byId.set(id, challenge.consume(now));
+    return Promise.resolve(true);
+  }
+}
+
+/** Deliberately not real TOTP — checks the submitted code against a fixed expected value, ignoring `secret`/`now`. Real TOTP correctness is `OtplibTotpService`'s own test's job. */
+export class FakeTotpService implements TotpService {
+  constructor(private readonly validCode = '123456') {}
+
+  generateSecret(): string {
+    return 'FAKESECRETFAKESECRETFAKE';
+  }
+
+  verify(params: { secret: string; token: string; now: Date }): Promise<boolean> {
+    return Promise.resolve(params.token === this.validCode);
+  }
+}
+
+/** Deliberately not real encryption — a recognisable prefix, fast and inspectable for assertions. */
+export class FakeMfaSecretCipher implements MfaSecretCipher {
+  encrypt(plaintext: string): string {
+    return `encrypted:${plaintext}`;
+  }
+
+  decrypt(ciphertext: string): string {
+    if (!ciphertext.startsWith('encrypted:')) {
+      throw new Error('FakeMfaSecretCipher: not a value this fake encrypted');
+    }
+    return ciphertext.slice('encrypted:'.length);
   }
 }
 

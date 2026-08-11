@@ -1,7 +1,10 @@
 import type { PrismaClient } from '@prisma/client';
 import type { MfaChallengeRepository } from '../../domain/repositories/mfa-challenge.repository.js';
 import { MfaChallenge } from '../../domain/entities/mfa-challenge.entity.js';
-import { toMfaChallengeId } from '../../domain/value-objects/mfa-challenge-id.value-object.js';
+import {
+  toMfaChallengeId,
+  type MfaChallengeId,
+} from '../../domain/value-objects/mfa-challenge-id.value-object.js';
 import { toUserId } from '../../domain/value-objects/user-id.value-object.js';
 
 interface MfaChallengeRow {
@@ -55,5 +58,23 @@ export class PrismaMfaChallengeRepository implements MfaChallengeRepository {
   async findByTokenHash(tokenHash: string): Promise<MfaChallenge | null> {
     const row = await this.prisma.mfaChallenge.findUnique({ where: { tokenHash } });
     return row ? toDomain(row) : null;
+  }
+
+  async consumeIfActive(id: MfaChallengeId, now: Date): Promise<boolean> {
+    // One conditional UPDATE, not a read-then-write: the WHERE clause is the
+    // atomicity guarantee. Two concurrent callers racing this statement can
+    // each match at most a disjoint view of the row — only one `UPDATE` can
+    // actually flip `consumed_at` from null, so `count` tells the caller,
+    // unambiguously, whether *this* call was the one that won.
+    const result = await this.prisma.mfaChallenge.updateMany({
+      where: {
+        id,
+        consumedAt: null,
+        attempts: { lt: MfaChallenge.MAX_ATTEMPTS },
+        expiresAt: { gt: now },
+      },
+      data: { consumedAt: now },
+    });
+    return result.count === 1;
   }
 }

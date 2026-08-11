@@ -45,7 +45,7 @@ export interface IdentityControllerDeps {
   readonly verifyOtpUseCase: VerifyOtpUseCase;
 }
 
-const toSessionResponse = (session: AuthSession): AuthSessionResponse => ({
+export const toSessionResponse = (session: AuthSession): AuthSessionResponse => ({
   user: { id: session.user.id, email: session.user.email, role: session.user.role.name },
   accessToken: session.accessToken,
   accessTokenExpiresAt: session.accessTokenExpiresAt.toISOString(),

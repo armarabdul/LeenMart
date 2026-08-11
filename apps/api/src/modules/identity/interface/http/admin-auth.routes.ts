@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { adminLoginStepOneRequestSchema } from '@leen-mart/contracts';
+import { adminLoginStepOneRequestSchema, adminMfaVerifyRequestSchema } from '@leen-mart/contracts';
 import { asyncHandler } from '../../../../shared/interface/http/middleware/async-handler.js';
 import { validate } from '../../../../shared/interface/http/middleware/validate.js';
 import type { AdminAuthController } from './admin-auth.controller.js';
@@ -17,6 +17,11 @@ export const createAdminAuthRouter = (controller: AdminAuthController): Router =
     '/login',
     validate({ body: adminLoginStepOneRequestSchema }),
     asyncHandler(controller.login),
+  );
+  router.post(
+    '/mfa/verify',
+    validate({ body: adminMfaVerifyRequestSchema }),
+    asyncHandler(controller.verifyMfa),
   );
 
   return router;

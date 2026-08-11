@@ -3,11 +3,13 @@ import type { Router } from 'express';
 import type { Clock, IdGenerator, Logger } from '@leen-mart/domain-kit';
 import type { Env } from '../../shared/config/env.js';
 import type { AccessTokenService } from './application/ports/access-token.port.js';
+import { AesGcmMfaSecretCipher } from './infrastructure/security/aes-gcm-mfa-secret-cipher.service.js';
 import { Argon2OtpHasher } from './infrastructure/security/argon2-otp-hasher.js';
 import { Argon2PasswordHasher } from './infrastructure/security/argon2-password-hasher.js';
 import { CryptoOtpGenerator } from './infrastructure/security/crypto-otp-generator.js';
 import { CryptoRefreshTokenHasher } from './infrastructure/security/crypto-refresh-token-hasher.js';
 import { JsonWebTokenAccessTokenService } from './infrastructure/security/jsonwebtoken-access-token.service.js';
+import { OtplibTotpService } from './infrastructure/security/otplib-totp.service.js';
 import { PrismaMfaChallengeRepository } from './infrastructure/persistence/prisma-mfa-challenge.repository.js';
 import { PrismaMfaSecretRepository } from './infrastructure/persistence/prisma-mfa-secret.repository.js';
 import { PrismaOtpRepository } from './infrastructure/persistence/prisma-otp.repository.js';
@@ -15,6 +17,7 @@ import { PrismaRefreshTokenRepository } from './infrastructure/persistence/prism
 import { PrismaUserRepository } from './infrastructure/persistence/prisma-user.repository.js';
 import { SessionIssuer } from './application/services/session-issuer.service.js';
 import { AdminLoginStepOneUseCase } from './application/use-cases/admin-login-step-one.use-case.js';
+import { AdminLoginStepTwoUseCase } from './application/use-cases/admin-login-step-two.use-case.js';
 import { LoginUseCase } from './application/use-cases/login.use-case.js';
 import { LogoutUseCase } from './application/use-cases/logout.use-case.js';
 import { RefreshSessionUseCase } from './application/use-cases/refresh-session.use-case.js';
@@ -159,21 +162,30 @@ interface AdminAuthUseCaseDeps {
   readonly mfaSecretRepository: PrismaMfaSecretRepository;
   readonly mfaChallengeRepository: PrismaMfaChallengeRepository;
   readonly challengeTokenHasher: CryptoRefreshTokenHasher;
+  readonly totpService: OtplibTotpService;
+  readonly mfaSecretCipher: AesGcmMfaSecretCipher;
+  readonly sessionIssuer: SessionIssuer;
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
   readonly logger: Logger;
 }
 
+interface AdminAuthUseCases {
+  readonly adminLoginStepOneUseCase: AdminLoginStepOneUseCase;
+  readonly adminLoginStepTwoUseCase: AdminLoginStepTwoUseCase;
+}
+
 /** Split out of `createIdentityModule` purely to stay under this file's max-lines-per-function budget. */
-const buildAdminAuthUseCases = (
-  deps: AdminAuthUseCaseDeps,
-): { adminLoginStepOneUseCase: AdminLoginStepOneUseCase } => {
+const buildAdminAuthUseCases = (deps: AdminAuthUseCaseDeps): AdminAuthUseCases => {
   const {
     userRepository,
     passwordHasher,
     mfaSecretRepository,
     mfaChallengeRepository,
     challengeTokenHasher,
+    totpService,
+    mfaSecretCipher,
+    sessionIssuer,
     idGenerator,
     clock,
     logger,
@@ -193,8 +205,19 @@ const buildAdminAuthUseCases = (
     clock,
     logger,
   });
+  const adminLoginStepTwoUseCase = new AdminLoginStepTwoUseCase({
+    userRepository,
+    mfaSecretRepository,
+    mfaChallengeRepository,
+    challengeTokenHasher,
+    totpService,
+    mfaSecretCipher,
+    sessionIssuer,
+    clock,
+    logger,
+  });
 
-  return { adminLoginStepOneUseCase };
+  return { adminLoginStepOneUseCase, adminLoginStepTwoUseCase };
 };
 
 interface IdentityInfrastructure {
@@ -208,6 +231,8 @@ interface IdentityInfrastructure {
   readonly challengeTokenHasher: CryptoRefreshTokenHasher;
   readonly otpHasher: Argon2OtpHasher;
   readonly otpGenerator: CryptoOtpGenerator;
+  readonly totpService: OtplibTotpService;
+  readonly mfaSecretCipher: AesGcmMfaSecretCipher;
   readonly accessTokenService: JsonWebTokenAccessTokenService;
   readonly sessionIssuer: SessionIssuer;
 }
@@ -235,6 +260,8 @@ const buildInfrastructure = (deps: {
   const challengeTokenHasher = new CryptoRefreshTokenHasher();
   const otpHasher = new Argon2OtpHasher();
   const otpGenerator = new CryptoOtpGenerator();
+  const totpService = new OtplibTotpService();
+  const mfaSecretCipher = new AesGcmMfaSecretCipher(Buffer.from(env.MFA_ENCRYPTION_KEY, 'hex'));
   const accessTokenService = new JsonWebTokenAccessTokenService(
     {
       secret: env.JWT_ACCESS_SECRET,
@@ -263,6 +290,8 @@ const buildInfrastructure = (deps: {
     challengeTokenHasher,
     otpHasher,
     otpGenerator,
+    totpService,
+    mfaSecretCipher,
     accessTokenService,
     sessionIssuer,
   };
@@ -282,6 +311,7 @@ const buildRouters = (params: {
   requestOtpUseCase: RequestOtpUseCase;
   verifyOtpUseCase: VerifyOtpUseCase;
   adminLoginStepOneUseCase: AdminLoginStepOneUseCase;
+  adminLoginStepTwoUseCase: AdminLoginStepTwoUseCase;
   accessTokenService: AccessTokenService;
 }): IdentityRouters => {
   const controller = createIdentityController({
@@ -294,6 +324,7 @@ const buildRouters = (params: {
   });
   const adminAuthController = createAdminAuthController({
     adminLoginStepOneUseCase: params.adminLoginStepOneUseCase,
+    adminLoginStepTwoUseCase: params.adminLoginStepTwoUseCase,
   });
 
   return {
@@ -311,48 +342,18 @@ export const createIdentityModule = (deps: IdentityModuleDeps): IdentityModule =
   const { prisma, env, clock, idGenerator, logger } = deps;
   const moduleLogger = logger.child({ module: 'identity' });
 
-  const {
-    userRepository,
-    refreshTokenRepository,
-    otpRepository,
-    mfaSecretRepository,
-    mfaChallengeRepository,
-    passwordHasher,
-    refreshTokenHasher,
-    challengeTokenHasher,
-    otpHasher,
-    otpGenerator,
-    accessTokenService,
-    sessionIssuer,
-  } = buildInfrastructure({ prisma, env, clock, idGenerator });
+  const infra = buildInfrastructure({ prisma, env, clock, idGenerator });
 
   const { registerCustomerUseCase, loginUseCase, refreshSessionUseCase, logoutUseCase } =
-    buildAuthUseCases({
-      userRepository,
-      refreshTokenRepository,
-      passwordHasher,
-      refreshTokenHasher,
-      sessionIssuer,
-      idGenerator,
-      clock,
-      logger: moduleLogger,
-    });
+    buildAuthUseCases({ ...infra, idGenerator, clock, logger: moduleLogger });
   const { requestOtpUseCase, verifyOtpUseCase } = buildOtpUseCases({
-    userRepository,
-    otpRepository,
-    otpGenerator,
-    otpHasher,
-    sessionIssuer,
+    ...infra,
     idGenerator,
     clock,
     logger: moduleLogger,
   });
-  const { adminLoginStepOneUseCase } = buildAdminAuthUseCases({
-    userRepository,
-    passwordHasher,
-    mfaSecretRepository,
-    mfaChallengeRepository,
-    challengeTokenHasher,
+  const { adminLoginStepOneUseCase, adminLoginStepTwoUseCase } = buildAdminAuthUseCases({
+    ...infra,
     idGenerator,
     clock,
     logger: moduleLogger,
@@ -365,7 +366,14 @@ export const createIdentityModule = (deps: IdentityModuleDeps): IdentityModule =
     requestOtpUseCase,
     verifyOtpUseCase,
     adminLoginStepOneUseCase,
-    accessTokenService,
+    adminLoginStepTwoUseCase,
+    accessTokenService: infra.accessTokenService,
   });
-  return { router, adminAuthRouter, requestOtpUseCase, verifyOtpUseCase, accessTokenService };
+  return {
+    router,
+    adminAuthRouter,
+    requestOtpUseCase,
+    verifyOtpUseCase,
+    accessTokenService: infra.accessTokenService,
+  };
 };

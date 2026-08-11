@@ -71,6 +71,14 @@ export const adminLoginStepOneResponseSchema = z.object({
   mfaChallengeTokenExpiresAt: isoDateTimeSchema,
 });
 
+/** POST /api/v1/admin/mfa/verify — step 2 of admin sign-in: the opaque challenge from step 1 plus a TOTP code, completing authentication (SDD 7.1). Success returns `authSessionResponseSchema`, same as any other login — this is the only point that ever issues an admin session. */
+export const adminMfaVerifyRequestSchema = z
+  .object({
+    mfaChallengeToken: z.string().min(1),
+    totpCode: z.string().regex(/^\d{6}$/, 'Must be a 6-digit numeric code'),
+  })
+  .strict();
+
 export const authUserSchema = z.object({
   id: uuidSchema,
   email: emailSchema.optional(),
@@ -111,6 +119,7 @@ export type RegisterCustomerRequest = z.infer<typeof registerCustomerRequestSche
 export type LoginRequest = z.infer<typeof loginRequestSchema>;
 export type AdminLoginStepOneRequest = z.infer<typeof adminLoginStepOneRequestSchema>;
 export type AdminLoginStepOneResponse = z.infer<typeof adminLoginStepOneResponseSchema>;
+export type AdminMfaVerifyRequest = z.infer<typeof adminMfaVerifyRequestSchema>;
 export type RefreshSessionRequest = z.infer<typeof refreshSessionRequestSchema>;
 export type LogoutRequest = z.infer<typeof logoutRequestSchema>;
 export type RequestOtpRequest = z.infer<typeof requestOtpRequestSchema>;
