@@ -52,6 +52,7 @@ const setup = (): {
     idGenerator,
     clock,
     refreshTtlDays: 30,
+    adminIdleTimeoutMinutes: 30,
   });
 
   const requestUseCase = new RequestOtpUseCase({

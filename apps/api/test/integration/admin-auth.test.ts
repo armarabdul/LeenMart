@@ -305,6 +305,36 @@ describe('admin auth endpoints', () => {
       expect((me.body as MeBody).data.role).toBe('SUPER_ADMIN');
     });
 
+    it('issues a session that idles out in 30 minutes, not 30 days (SDD 7.5)', async () => {
+      const { email, secret } = await seedEnrolledAdminWithKnownSecret('step2-idle-timeout');
+      const stepOne = await adminLoginStepOne(app, email, ADMIN_PASSWORD).expect(200);
+      const { mfaChallengeToken } = (stepOne.body as StepOneBody).data;
+
+      const before = Date.now();
+      const response = await adminMfaVerify(
+        app,
+        mfaChallengeToken,
+        await currentTotpCode(secret),
+      ).expect(200);
+      const after = Date.now();
+
+      // The admin console is the highest-value surface in the system (SEC-08),
+      // so its session must not outlive the person at the keyboard.
+      const expiresAt = new Date(
+        (response.body as StepTwoBody).data.refreshTokenExpiresAt,
+      ).getTime();
+      const THIRTY_MINUTES_MS = 30 * 60 * 1000;
+      expect(expiresAt).toBeGreaterThanOrEqual(before + THIRTY_MINUTES_MS);
+      expect(expiresAt).toBeLessThanOrEqual(after + THIRTY_MINUTES_MS);
+
+      // And the shortened window is what was actually stored, not just reported.
+      const stored = await container.prisma.refreshToken.findFirstOrThrow({
+        where: { user: { email } },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(stored.expiresAt.getTime()).toBe(expiresAt);
+    });
+
     it('consumes the challenge and persists exactly one session', async () => {
       const { email, secret } = await seedEnrolledAdminWithKnownSecret('step2-consume');
       const stepOne = await adminLoginStepOne(app, email, ADMIN_PASSWORD).expect(200);

@@ -41,6 +41,7 @@ const setup = (): {
     idGenerator,
     clock,
     refreshTtlDays: 30,
+    adminIdleTimeoutMinutes: 30,
   });
   const passwordHasher = new FakePasswordHasher();
 

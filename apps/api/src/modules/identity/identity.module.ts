@@ -266,6 +266,7 @@ const buildInfrastructure = (deps: {
     idGenerator,
     clock,
     refreshTtlDays: env.JWT_REFRESH_TTL_DAYS,
+    adminIdleTimeoutMinutes: env.ADMIN_SESSION_IDLE_TIMEOUT_MINUTES,
   });
 
   return {

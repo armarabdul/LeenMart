@@ -76,6 +76,15 @@ const envSchema = z
      */
     JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(600),
     JWT_REFRESH_TTL_DAYS: z.coerce.number().int().positive().default(30),
+    /**
+     * SDD 7.5's admin-console "30-minute idle timeout", expressed as the
+     * sliding window an admin refresh token gets instead of
+     * `JWT_REFRESH_TTL_DAYS`. Because SDD 7.2 already makes refresh tokens
+     * sliding, a short window *is* an idle timeout: every rotation restarts
+     * it, so an admin who keeps working stays signed in and one who stops for
+     * this long has to re-authenticate with password and TOTP.
+     */
+    ADMIN_SESSION_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(30),
 
     // --- identity (Milestone 3 Step 5C: AES-256-GCM encryption for admin MFA secrets) ---
     MFA_ENCRYPTION_KEY: z

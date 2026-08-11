@@ -53,6 +53,7 @@ const setup = (): {
     idGenerator,
     clock,
     refreshTtlDays: 30,
+    adminIdleTimeoutMinutes: 30,
   });
 
   const useCase = new AdminMfaEnrollConfirmUseCase({
@@ -322,6 +323,7 @@ describe('AdminMfaEnrollConfirmUseCase', () => {
       idGenerator: new UuidV7Generator(),
       clock,
       refreshTtlDays: 30,
+      adminIdleTimeoutMinutes: 30,
     });
     const useCase = new AdminMfaEnrollConfirmUseCase({
       userRepository,
