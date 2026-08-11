@@ -64,6 +64,23 @@ export class ExpiredOtpError extends UnauthenticatedError {
   }
 }
 
+/** The MFA challenge has already been consumed or has exhausted its 5 verification attempts. */
+export class InvalidMfaChallengeError extends ValidationError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This MFA challenge is no longer valid.', {
+      ...options,
+      code: 'INVALID_MFA_CHALLENGE',
+    });
+  }
+}
+
+/** The MFA challenge existed and was well-formed, but its 5-minute validity window has passed. */
+export class ExpiredMfaChallengeError extends UnauthenticatedError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This MFA challenge has expired.', { ...options, code: 'EXPIRED_MFA_CHALLENGE' });
+  }
+}
+
 /**
  * The bootstrap creates the *first* administrator only. Once any
  * admin-family account exists, further admins must come from the

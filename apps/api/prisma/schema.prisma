@@ -93,6 +93,7 @@ model User {
   otps          Otp[]
   vendorProfile VendorProfile?
   mfaSecret     MfaSecret?
+  mfaChallenges MfaChallenge[]
 
   @@map("users")
 }
@@ -167,6 +168,30 @@ model MfaSecret {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("mfa_secrets")
+}
+
+/// The record of an admin who has passed step 1 (password) of login and now
+/// has one window to prove TOTP possession (SDD 7.1: mandatory TOTP, always).
+/// Same shape SDD 7.3 already specifies for phone-OTP challenges — hashed,
+/// 5-minute TTL, single use, max 5 attempts — applied here because the SDD
+/// gives no separate MFA-challenge spec of its own. `token_hash` is a
+/// high-entropy opaque bearer token's hash, the same pattern as
+/// `refresh_tokens.token_hash`, not a low-entropy code like `otps.code_hash`.
+/// No TOTP code or secret is ever stored here: verification is computed live
+/// against `mfa_secrets`, never persisted mid-flight.
+model MfaChallenge {
+  id         String    @id @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tokenHash  String    @unique @map("token_hash") @db.VarChar(64)
+  attempts   Int       @default(0)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "idx_mfa_challenges_user")
+  @@map("mfa_challenges")
 }
 
 /// Vendor module (SDD 5, module 3).

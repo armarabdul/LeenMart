@@ -12,6 +12,7 @@ export * from './entities/user.entity.js';
 export * from './entities/session.entity.js';
 export * from './entities/otp.entity.js';
 export * from './entities/mfa-secret.entity.js';
+export * from './entities/mfa-challenge.entity.js';
 
 // value objects
 export * from './value-objects/role.value-object.js';
@@ -20,6 +21,7 @@ export * from './value-objects/session-id.value-object.js';
 export * from './value-objects/vendor-id.value-object.js';
 export * from './value-objects/otp-id.value-object.js';
 export * from './value-objects/mfa-secret-id.value-object.js';
+export * from './value-objects/mfa-challenge-id.value-object.js';
 export * from './value-objects/email.value-object.js';
 export * from './value-objects/phone-number.value-object.js';
 export * from './value-objects/password-hash.value-object.js';
@@ -45,6 +47,7 @@ export * from './repositories/user.repository.js';
 export * from './repositories/session.repository.js';
 export * from './repositories/otp.repository.js';
 export * from './repositories/mfa-secret.repository.js';
+export * from './repositories/mfa-challenge.repository.js';
 
 // service interfaces
 export * from './services/password-hasher.service.js';
