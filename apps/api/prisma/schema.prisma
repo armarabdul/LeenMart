@@ -281,8 +281,12 @@ model Address {
 /// Immutable admin action log (SDD 18.4).
 ///
 /// A domain artefact rather than an application log: queryable by admins,
-/// retained eight years, and legally significant in a dispute. UPDATE and DELETE
-/// are blocked by a database trigger added in the first migration.
+/// retained eight years, and legally significant in a dispute.
+///
+/// Append-only: UPDATE, DELETE and TRUNCATE are all rejected by triggers added
+/// in `20260811120000_audit_log_immutability`, not here — Prisma's schema DSL
+/// cannot express a trigger, so the migration is the only place this control
+/// can live. Corrections are new rows describing the correction, never edits.
 model AuditLog {
   id             String   @id @db.Uuid
   actorId        String?  @map("actor_id") @db.Uuid
