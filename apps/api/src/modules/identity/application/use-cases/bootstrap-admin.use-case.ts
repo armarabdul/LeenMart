@@ -9,7 +9,12 @@ import { toUserId } from '../../domain/value-objects/user-id.value-object.js';
 import type { PasswordHasher } from '../ports/password-hasher.port.js';
 import type { UserRepository } from '../ports/user-repository.port.js';
 
-/** SDD 7.5's password policy. Applied to administrators only — the customer minimum is unchanged. */
+/**
+ * SDD 7.5's password policy. Enforced here rather than at a request schema
+ * because this path has none: bootstrap is an operator-run CLI, not an HTTP
+ * surface. The same floor is applied to customer registration by
+ * `PASSWORD_MIN_LENGTH` in the contracts package.
+ */
 export const ADMIN_PASSWORD_MIN_LENGTH = 10;
 
 export interface BootstrapAdminInput {

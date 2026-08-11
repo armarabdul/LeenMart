@@ -14,17 +14,35 @@ export const roleSchema = z.enum([
   'SUPPORT_AGENT',
 ]);
 
+/**
+ * SDD 7.5's password policy — "minimum 10 characters" — stated once, where
+ * the boundary that enforces it lives. The policy sentence is not scoped to
+ * any one role; the admin console's extra controls are a separate sentence,
+ * and `ADMIN_PASSWORD_MIN_LENGTH` applies the same floor on the admin
+ * bootstrap path, which has no HTTP schema to carry it.
+ */
+export const PASSWORD_MIN_LENGTH = 10;
+export const PASSWORD_MAX_LENGTH = 128;
+
 export const registerCustomerRequestSchema = z
   .object({
     email: emailSchema,
-    password: z.string().min(8).max(128),
+    password: z.string().min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH),
   })
   .strict();
 
+/**
+ * Login deliberately does **not** apply the policy minimum. It accepts any
+ * non-empty string and lets the credential check fail uniformly: rejecting a
+ * short password at the schema tells an attacker their guess was too short to
+ * be this account's password, which is a free bit of information about a
+ * stored credential (SEC-15). The same reasoning holds for every other
+ * password-bearing surface below.
+ */
 export const loginRequestSchema = z
   .object({
     email: emailSchema,
-    password: z.string().min(1).max(128),
+    password: z.string().min(1).max(PASSWORD_MAX_LENGTH),
   })
   .strict();
 
