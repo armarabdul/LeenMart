@@ -81,6 +81,38 @@ describe('OtplibTotpService', () => {
 
     await expect(service.verify({ secret: otherSecret, token, now: NOW })).resolves.toBe(false);
   });
+
+  describe('generateEnrollmentUri', () => {
+    it('produces an otpauth:// URI containing the secret, issuer, and account label', () => {
+      const service = new OtplibTotpService();
+      const secret = service.generateSecret();
+
+      const uri = service.generateEnrollmentUri({
+        secret,
+        accountLabel: 'ops@leenmart.in',
+        issuer: 'leen-mart-api',
+      });
+
+      expect(uri).toMatch(/^otpauth:\/\/totp\//);
+      expect(uri).toContain(`secret=${secret}`);
+      expect(uri).toContain('issuer=leen-mart-api');
+      expect(uri).toContain('ops%40leenmart.in');
+    });
+
+    it('embeds a secret that verify() actually accepts, proving the URI is internally consistent with the approved TOTP parameters (SHA-1, 6 digits, 30s)', async () => {
+      const service = new OtplibTotpService();
+      const secret = service.generateSecret();
+      const uri = service.generateEnrollmentUri({
+        secret,
+        accountLabel: 'ops@leenmart.in',
+        issuer: 'leen-mart-api',
+      });
+      const secretFromUri = new URL(uri).searchParams.get('secret');
+      const token = await generateToken(secretFromUri ?? '', NOW);
+
+      await expect(service.verify({ secret, token, now: NOW })).resolves.toBe(true);
+    });
+  });
 });
 
 /**

@@ -79,6 +79,29 @@ export const adminMfaVerifyRequestSchema = z
   })
   .strict();
 
+/** POST /api/v1/admin/mfa/enroll — starts MFA enrollment for an admin with no existing secret (SDD 7.1). Same request shape as `adminLoginStepOneRequestSchema`, kept distinct as a semantically different endpoint. */
+export const adminMfaEnrollRequestSchema = z
+  .object({
+    email: emailSchema,
+    password: z.string().min(1).max(128),
+  })
+  .strict();
+
+/** The plaintext secret and its `otpauth://` URI, returned exactly once — never re-shown by any other endpoint. */
+export const adminMfaEnrollResponseSchema = z.object({
+  secret: z.string(),
+  otpauthUri: z.string(),
+});
+
+/** POST /api/v1/admin/mfa/enroll/confirm — proves possession of the enrolled secret and activates it. Success returns `authSessionResponseSchema`, same as step 2 — a completed enrollment is a completed login. */
+export const adminMfaEnrollConfirmRequestSchema = z
+  .object({
+    email: emailSchema,
+    password: z.string().min(1).max(128),
+    totpCode: z.string().regex(/^\d{6}$/, 'Must be a 6-digit numeric code'),
+  })
+  .strict();
+
 export const authUserSchema = z.object({
   id: uuidSchema,
   email: emailSchema.optional(),
@@ -120,6 +143,9 @@ export type LoginRequest = z.infer<typeof loginRequestSchema>;
 export type AdminLoginStepOneRequest = z.infer<typeof adminLoginStepOneRequestSchema>;
 export type AdminLoginStepOneResponse = z.infer<typeof adminLoginStepOneResponseSchema>;
 export type AdminMfaVerifyRequest = z.infer<typeof adminMfaVerifyRequestSchema>;
+export type AdminMfaEnrollRequest = z.infer<typeof adminMfaEnrollRequestSchema>;
+export type AdminMfaEnrollResponse = z.infer<typeof adminMfaEnrollResponseSchema>;
+export type AdminMfaEnrollConfirmRequest = z.infer<typeof adminMfaEnrollConfirmRequestSchema>;
 export type RefreshSessionRequest = z.infer<typeof refreshSessionRequestSchema>;
 export type LogoutRequest = z.infer<typeof logoutRequestSchema>;
 export type RequestOtpRequest = z.infer<typeof requestOtpRequestSchema>;

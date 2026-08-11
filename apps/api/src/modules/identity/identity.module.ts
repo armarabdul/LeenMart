@@ -18,6 +18,8 @@ import { PrismaUserRepository } from './infrastructure/persistence/prisma-user.r
 import { SessionIssuer } from './application/services/session-issuer.service.js';
 import { AdminLoginStepOneUseCase } from './application/use-cases/admin-login-step-one.use-case.js';
 import { AdminLoginStepTwoUseCase } from './application/use-cases/admin-login-step-two.use-case.js';
+import { AdminMfaEnrollUseCase } from './application/use-cases/admin-mfa-enroll.use-case.js';
+import { AdminMfaEnrollConfirmUseCase } from './application/use-cases/admin-mfa-enroll-confirm.use-case.js';
 import { LoginUseCase } from './application/use-cases/login.use-case.js';
 import { LogoutUseCase } from './application/use-cases/logout.use-case.js';
 import { RefreshSessionUseCase } from './application/use-cases/refresh-session.use-case.js';
@@ -167,57 +169,37 @@ interface AdminAuthUseCaseDeps {
   readonly sessionIssuer: SessionIssuer;
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
+  /** The `otpauth://` URI's issuer label — same value as the JWT issuer. */
+  readonly issuer: string;
   readonly logger: Logger;
 }
 
 interface AdminAuthUseCases {
   readonly adminLoginStepOneUseCase: AdminLoginStepOneUseCase;
   readonly adminLoginStepTwoUseCase: AdminLoginStepTwoUseCase;
+  readonly adminMfaEnrollUseCase: AdminMfaEnrollUseCase;
+  readonly adminMfaEnrollConfirmUseCase: AdminMfaEnrollConfirmUseCase;
 }
 
 /** Split out of `createIdentityModule` purely to stay under this file's max-lines-per-function budget. */
 const buildAdminAuthUseCases = (deps: AdminAuthUseCaseDeps): AdminAuthUseCases => {
-  const {
-    userRepository,
-    passwordHasher,
-    mfaSecretRepository,
-    mfaChallengeRepository,
-    challengeTokenHasher,
-    totpService,
-    mfaSecretCipher,
-    sessionIssuer,
-    idGenerator,
-    clock,
-    logger,
-  } = deps;
-
   const adminLoginStepOneUseCase = new AdminLoginStepOneUseCase({
-    userRepository,
-    passwordHasher,
-    mfaSecretRepository,
-    mfaChallengeRepository,
+    ...deps,
     // Same generator/hasher pair refresh tokens use — a challenge token is
     // the same shape of thing (opaque, 256-bit, SHA-256 at rest), so this
     // reuses the existing primitive rather than inventing a second one.
-    challengeTokenGenerator: challengeTokenHasher,
-    challengeTokenHasher,
-    idGenerator,
-    clock,
-    logger,
+    challengeTokenGenerator: deps.challengeTokenHasher,
   });
-  const adminLoginStepTwoUseCase = new AdminLoginStepTwoUseCase({
-    userRepository,
-    mfaSecretRepository,
-    mfaChallengeRepository,
-    challengeTokenHasher,
-    totpService,
-    mfaSecretCipher,
-    sessionIssuer,
-    clock,
-    logger,
-  });
+  const adminLoginStepTwoUseCase = new AdminLoginStepTwoUseCase({ ...deps });
+  const adminMfaEnrollUseCase = new AdminMfaEnrollUseCase({ ...deps });
+  const adminMfaEnrollConfirmUseCase = new AdminMfaEnrollConfirmUseCase({ ...deps });
 
-  return { adminLoginStepOneUseCase, adminLoginStepTwoUseCase };
+  return {
+    adminLoginStepOneUseCase,
+    adminLoginStepTwoUseCase,
+    adminMfaEnrollUseCase,
+    adminMfaEnrollConfirmUseCase,
+  };
 };
 
 interface IdentityInfrastructure {
@@ -312,6 +294,8 @@ const buildRouters = (params: {
   verifyOtpUseCase: VerifyOtpUseCase;
   adminLoginStepOneUseCase: AdminLoginStepOneUseCase;
   adminLoginStepTwoUseCase: AdminLoginStepTwoUseCase;
+  adminMfaEnrollUseCase: AdminMfaEnrollUseCase;
+  adminMfaEnrollConfirmUseCase: AdminMfaEnrollConfirmUseCase;
   accessTokenService: AccessTokenService;
 }): IdentityRouters => {
   const controller = createIdentityController({
@@ -325,6 +309,8 @@ const buildRouters = (params: {
   const adminAuthController = createAdminAuthController({
     adminLoginStepOneUseCase: params.adminLoginStepOneUseCase,
     adminLoginStepTwoUseCase: params.adminLoginStepTwoUseCase,
+    adminMfaEnrollUseCase: params.adminMfaEnrollUseCase,
+    adminMfaEnrollConfirmUseCase: params.adminMfaEnrollConfirmUseCase,
   });
 
   return {
@@ -352,10 +338,16 @@ export const createIdentityModule = (deps: IdentityModuleDeps): IdentityModule =
     clock,
     logger: moduleLogger,
   });
-  const { adminLoginStepOneUseCase, adminLoginStepTwoUseCase } = buildAdminAuthUseCases({
+  const {
+    adminLoginStepOneUseCase,
+    adminLoginStepTwoUseCase,
+    adminMfaEnrollUseCase,
+    adminMfaEnrollConfirmUseCase,
+  } = buildAdminAuthUseCases({
     ...infra,
     idGenerator,
     clock,
+    issuer: env.SERVICE_NAME,
     logger: moduleLogger,
   });
   const { router, adminAuthRouter } = buildRouters({
@@ -367,6 +359,8 @@ export const createIdentityModule = (deps: IdentityModuleDeps): IdentityModule =
     verifyOtpUseCase,
     adminLoginStepOneUseCase,
     adminLoginStepTwoUseCase,
+    adminMfaEnrollUseCase,
+    adminMfaEnrollConfirmUseCase,
     accessTokenService: infra.accessTokenService,
   });
   return {

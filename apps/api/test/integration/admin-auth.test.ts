@@ -38,6 +38,10 @@ interface MeBody {
   data: { id: string; role: string };
 }
 
+interface EnrollBody {
+  data: { secret: string; otpauthUri: string };
+}
+
 const EMAIL_PREFIX = 'admin-auth-integration-';
 const ADMIN_PASSWORD = 'an-administrator-password';
 
@@ -49,6 +53,17 @@ const adminLoginStepOne = (app: Express, email: string, password: string): reque
 
 const adminMfaVerify = (app: Express, mfaChallengeToken: string, totpCode: string): request.Test =>
   request(app).post('/api/v1/admin/mfa/verify').send({ mfaChallengeToken, totpCode });
+
+const adminMfaEnroll = (app: Express, email: string, password: string): request.Test =>
+  request(app).post('/api/v1/admin/mfa/enroll').send({ email, password });
+
+const adminMfaEnrollConfirm = (
+  app: Express,
+  email: string,
+  password: string,
+  totpCode: string,
+): request.Test =>
+  request(app).post('/api/v1/admin/mfa/enroll/confirm').send({ email, password, totpCode });
 
 /** Generates a real, currently-valid TOTP code for a secret, independently of the app's own `TotpService`. */
 const currentTotpCode = async (base32Secret: string): Promise<string> => {
@@ -64,11 +79,12 @@ const currentTotpCode = async (base32Secret: string): Promise<string> => {
 
 /**
  * Integration test against real PostgreSQL, same conventions as
- * `identity.test.ts`. No enrollment endpoint exists yet (Milestone 3 Step
- * 5E is login-step-1 only), so admin fixtures with a confirmed MFA secret
- * are seeded directly through the repositories, exactly as
- * `bootstrap-admin.use-case.test.ts` seeds admins directly rather than
- * through an HTTP path.
+ * `identity.test.ts`. Fixtures that need a *confirmed* MFA secret for step
+ * 1/step 2 tests are still seeded directly through the repositories
+ * (mirroring `bootstrap-admin.use-case.test.ts`'s direct-seed convention),
+ * since that's the smallest way to set up those tests' preconditions; the
+ * enrollment describe block below exercises the real HTTP enroll → confirm
+ * path end to end instead.
  */
 describe('admin auth endpoints', () => {
   let container: Container;
@@ -413,6 +429,186 @@ describe('admin auth endpoints', () => {
         where: { userId: admin.id },
       });
       expect(sessions).toHaveLength(1);
+    });
+  });
+
+  describe('POST /api/v1/admin/mfa/enroll (+ /enroll/confirm)', () => {
+    it('completes the full enroll → confirm flow, issuing a session with a working access token', async () => {
+      const email = await seedUnenrolledAdmin('enroll-success');
+
+      const enrollResponse = await adminMfaEnroll(app, email, ADMIN_PASSWORD).expect(200);
+      const { secret } = (enrollResponse.body as EnrollBody).data;
+      const totpCode = await currentTotpCode(secret);
+
+      const confirmResponse = await adminMfaEnrollConfirm(
+        app,
+        email,
+        ADMIN_PASSWORD,
+        totpCode,
+      ).expect(200);
+      const body = confirmResponse.body as StepTwoBody;
+      expect(body.data.user.role).toBe('SUPER_ADMIN');
+      expect(body.data.accessToken).toEqual(expect.any(String));
+
+      const me = await request(app)
+        .get('/api/v1/identity/me')
+        .set('Authorization', `Bearer ${body.data.accessToken}`)
+        .expect(200);
+      expect((me.body as MeBody).data.role).toBe('SUPER_ADMIN');
+    });
+
+    it('returns the plaintext secret and otpauth URI only from enroll, never from confirm', async () => {
+      const email = await seedUnenrolledAdmin('enroll-secret-once');
+
+      const enrollResponse = await adminMfaEnroll(app, email, ADMIN_PASSWORD).expect(200);
+      const { secret, otpauthUri } = (enrollResponse.body as EnrollBody).data;
+      expect(secret).toEqual(expect.any(String));
+      expect(otpauthUri).toMatch(/^otpauth:\/\/totp\//);
+
+      const totpCode = await currentTotpCode(secret);
+      const confirmResponse = await adminMfaEnrollConfirm(
+        app,
+        email,
+        ADMIN_PASSWORD,
+        totpCode,
+      ).expect(200);
+      expect(confirmResponse.body).not.toHaveProperty('data.secret');
+      expect(confirmResponse.body).not.toHaveProperty('data.otpauthUri');
+      expect(JSON.stringify(confirmResponse.body)).not.toContain(secret);
+    });
+
+    it('persists the confirmed state after a successful confirm', async () => {
+      const email = await seedUnenrolledAdmin('enroll-persist');
+      const enrollResponse = await adminMfaEnroll(app, email, ADMIN_PASSWORD).expect(200);
+      const { secret } = (enrollResponse.body as EnrollBody).data;
+      const totpCode = await currentTotpCode(secret);
+
+      await adminMfaEnrollConfirm(app, email, ADMIN_PASSWORD, totpCode).expect(200);
+
+      const admin = await userRepository.findByEmail(email);
+      if (!admin) throw new Error('fixture admin was not persisted');
+      const rows = await container.prisma.mfaSecret.findMany({ where: { userId: admin.id } });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.confirmedAt).not.toBeNull();
+    });
+
+    it('a second enrollment attempt for the same admin is rejected', async () => {
+      const email = await seedUnenrolledAdmin('enroll-twice');
+      await adminMfaEnroll(app, email, ADMIN_PASSWORD).expect(200);
+
+      const second = await adminMfaEnroll(app, email, ADMIN_PASSWORD).expect(401);
+      expect((second.body as ErrorBody).error.code).toBe('INVALID_CREDENTIALS');
+
+      const admin = await userRepository.findByEmail(email);
+      if (!admin) throw new Error('fixture admin was not persisted');
+      const rows = await container.prisma.mfaSecret.findMany({ where: { userId: admin.id } });
+      expect(rows).toHaveLength(1);
+    });
+
+    it('wrong password at enroll creates no secret', async () => {
+      const email = await seedUnenrolledAdmin('enroll-wrong-password');
+
+      const response = await adminMfaEnroll(app, email, 'wrong-password').expect(401);
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_CREDENTIALS');
+
+      const admin = await userRepository.findByEmail(email);
+      if (!admin) throw new Error('fixture admin was not persisted');
+      const rows = await container.prisma.mfaSecret.findMany({ where: { userId: admin.id } });
+      expect(rows).toHaveLength(0);
+    });
+
+    it('wrong password at confirm does not confirm the secret or issue a session', async () => {
+      const email = await seedUnenrolledAdmin('enroll-confirm-wrong-password');
+      const enrollResponse = await adminMfaEnroll(app, email, ADMIN_PASSWORD).expect(200);
+      const { secret } = (enrollResponse.body as EnrollBody).data;
+      const totpCode = await currentTotpCode(secret);
+
+      const response = await adminMfaEnrollConfirm(app, email, 'wrong-password', totpCode).expect(
+        401,
+      );
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_CREDENTIALS');
+
+      const admin = await userRepository.findByEmail(email);
+      if (!admin) throw new Error('fixture admin was not persisted');
+      const rows = await container.prisma.mfaSecret.findMany({ where: { userId: admin.id } });
+      expect(rows[0]?.confirmedAt).toBeNull();
+    });
+
+    it('wrong TOTP at confirm does not confirm the secret or issue a session', async () => {
+      const email = await seedUnenrolledAdmin('enroll-confirm-wrong-totp');
+      const enrollResponse = await adminMfaEnroll(app, email, ADMIN_PASSWORD).expect(200);
+      const { secret } = (enrollResponse.body as EnrollBody).data;
+      const totpCode = await currentTotpCode(secret);
+      const wrongCode = totpCode === '000000' ? '111111' : '000000';
+
+      const response = await adminMfaEnrollConfirm(app, email, ADMIN_PASSWORD, wrongCode).expect(
+        401,
+      );
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_CREDENTIALS');
+
+      const admin = await userRepository.findByEmail(email);
+      if (!admin) throw new Error('fixture admin was not persisted');
+      const rows = await container.prisma.mfaSecret.findMany({ where: { userId: admin.id } });
+      expect(rows[0]?.confirmedAt).toBeNull();
+
+      const sessions = await container.prisma.refreshToken.findMany({
+        where: { userId: admin.id },
+      });
+      expect(sessions).toHaveLength(0);
+    });
+
+    it('rejects a customer account at enroll', async () => {
+      const email = uniqueEmail('enroll-customer');
+      const passwordHash = await passwordHasher.hash(ADMIN_PASSWORD);
+      await userRepository.create(
+        User.register({
+          id: toUserId(idGenerator.generate()),
+          email,
+          passwordHash,
+          now: clock.now(),
+        }),
+      );
+
+      const response = await adminMfaEnroll(app, email, ADMIN_PASSWORD).expect(401);
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_CREDENTIALS');
+    });
+
+    it('rejects a malformed enroll request with the validation envelope', async () => {
+      const response = await request(app)
+        .post('/api/v1/admin/mfa/enroll')
+        .send({ email: 'not-an-email' })
+        .expect(400);
+
+      expect((response.body as ErrorBody).error.code).toBe('VALIDATION_FAILED');
+    });
+
+    it('rejects a malformed confirm request (bad TOTP shape) with the validation envelope', async () => {
+      const response = await request(app)
+        .post('/api/v1/admin/mfa/enroll/confirm')
+        .send({ email: 'someone@leenmart.in', password: 'x', totpCode: 'abc' })
+        .expect(400);
+
+      expect((response.body as ErrorBody).error.code).toBe('VALIDATION_FAILED');
+    });
+
+    it('race: two concurrent enrollment attempts for the same admin produce exactly one secret, cleanly', async () => {
+      const email = await seedUnenrolledAdmin('enroll-race');
+
+      const [first, second] = await Promise.all([
+        adminMfaEnroll(app, email, ADMIN_PASSWORD),
+        adminMfaEnroll(app, email, ADMIN_PASSWORD),
+      ]);
+
+      const statuses = [first.status, second.status].sort((a, b) => a - b);
+      expect(statuses).toEqual([200, 401]);
+      // Cleanly rejected, not a raw unhandled/internal error.
+      const failed = first.status === 401 ? first : second;
+      expect((failed.body as ErrorBody).error.code).toBe('INVALID_CREDENTIALS');
+
+      const admin = await userRepository.findByEmail(email);
+      if (!admin) throw new Error('fixture admin was not persisted');
+      const rows = await container.prisma.mfaSecret.findMany({ where: { userId: admin.id } });
+      expect(rows).toHaveLength(1);
     });
   });
 });

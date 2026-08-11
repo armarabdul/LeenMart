@@ -17,4 +17,11 @@ export interface TotpService {
   /** A fresh, random, base32-encoded secret — never persisted as returned. */
   generateSecret(): string;
   verify(params: { secret: string; token: string; now: Date }): Promise<boolean>;
+  /**
+   * An `otpauth://` URI an authenticator app can scan (as a QR code) or
+   * import directly, encoding the same secret/algorithm/digits/period an
+   * admin's app needs to compute matching codes. Pure formatting — carries
+   * no state of its own, and doesn't touch encryption or persistence.
+   */
+  generateEnrollmentUri(params: { secret: string; accountLabel: string; issuer: string }): string;
 }

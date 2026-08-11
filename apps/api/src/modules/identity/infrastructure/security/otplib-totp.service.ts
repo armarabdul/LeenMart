@@ -37,4 +37,15 @@ export class OtplibTotpService implements TotpService {
       return false;
     }
   }
+
+  generateEnrollmentUri(params: { secret: string; accountLabel: string; issuer: string }): string {
+    return this.otp.generateURI({
+      secret: params.secret,
+      label: params.accountLabel,
+      issuer: params.issuer,
+      algorithm: ALGORITHM,
+      digits: DIGITS,
+      period: PERIOD_SECONDS,
+    });
+  }
 }

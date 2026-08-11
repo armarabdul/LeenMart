@@ -250,6 +250,10 @@ export class FakeTotpService implements TotpService {
   verify(params: { secret: string; token: string; now: Date }): Promise<boolean> {
     return Promise.resolve(params.token === this.validCode);
   }
+
+  generateEnrollmentUri(params: { secret: string; accountLabel: string; issuer: string }): string {
+    return `otpauth://totp/${params.issuer}:${params.accountLabel}?secret=${params.secret}&issuer=${params.issuer}`;
+  }
 }
 
 /** Deliberately not real encryption — a recognisable prefix, fast and inspectable for assertions. */

@@ -82,6 +82,24 @@ export class ExpiredMfaChallengeError extends UnauthenticatedError {
 }
 
 /**
+ * An admin may enroll MFA exactly once (rotation/reset is out of scope).
+ * Thrown by `PrismaMfaSecretRepository.create()` on the `userId` unique
+ * constraint — the database is the final arbiter for the race between two
+ * concurrent enrollment attempts, the same way `consumeIfActive` is for MFA
+ * challenges. The enrollment use case catches this and re-throws the
+ * uniform `InvalidCredentialsError`; this error exists for that internal
+ * translation, not to reach the client directly.
+ */
+export class MfaSecretAlreadyExistsError extends ConflictError {
+  constructor(options: AppErrorOptions = {}) {
+    super('An MFA secret already exists for this account.', {
+      ...options,
+      code: 'MFA_SECRET_ALREADY_EXISTS',
+    });
+  }
+}
+
+/**
  * The bootstrap creates the *first* administrator only. Once any
  * admin-family account exists, further admins must come from the
  * SUPER_ADMIN-gated management flow, so a second bootstrap is refused.

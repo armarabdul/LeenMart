@@ -1,5 +1,10 @@
 import { Router } from 'express';
-import { adminLoginStepOneRequestSchema, adminMfaVerifyRequestSchema } from '@leen-mart/contracts';
+import {
+  adminLoginStepOneRequestSchema,
+  adminMfaEnrollConfirmRequestSchema,
+  adminMfaEnrollRequestSchema,
+  adminMfaVerifyRequestSchema,
+} from '@leen-mart/contracts';
 import { asyncHandler } from '../../../../shared/interface/http/middleware/async-handler.js';
 import { validate } from '../../../../shared/interface/http/middleware/validate.js';
 import type { AdminAuthController } from './admin-auth.controller.js';
@@ -22,6 +27,16 @@ export const createAdminAuthRouter = (controller: AdminAuthController): Router =
     '/mfa/verify',
     validate({ body: adminMfaVerifyRequestSchema }),
     asyncHandler(controller.verifyMfa),
+  );
+  router.post(
+    '/mfa/enroll',
+    validate({ body: adminMfaEnrollRequestSchema }),
+    asyncHandler(controller.enrollMfa),
+  );
+  router.post(
+    '/mfa/enroll/confirm',
+    validate({ body: adminMfaEnrollConfirmRequestSchema }),
+    asyncHandler(controller.confirmMfaEnrollment),
   );
 
   return router;
