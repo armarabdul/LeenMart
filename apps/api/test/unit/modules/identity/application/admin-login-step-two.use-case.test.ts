@@ -23,6 +23,8 @@ import {
   InMemoryMfaSecretRepository,
   InMemoryRefreshTokenRepository,
   InMemoryUserRepository,
+  FailingAuditWriter,
+  RecordingAuditWriter,
   SequentialRefreshTokenHasher,
   nullLogger,
 } from './fakes.js';
@@ -41,6 +43,7 @@ const setup = (): {
   refreshTokenRepository: InMemoryRefreshTokenRepository;
   totpService: FakeTotpService;
   challengeTokenHasher: SequentialRefreshTokenHasher;
+  auditWriter: RecordingAuditWriter;
 } => {
   const userRepository = new InMemoryUserRepository();
   const mfaSecretRepository = new InMemoryMfaSecretRepository();
@@ -49,6 +52,7 @@ const setup = (): {
   const challengeTokenHasher = new SequentialRefreshTokenHasher();
   const totpService = new FakeTotpService(VALID_TOTP);
   const mfaSecretCipher = new FakeMfaSecretCipher();
+  const auditWriter = new RecordingAuditWriter();
   const clock = new FixedClock(NOW);
   const idGenerator = new UuidV7Generator();
 
@@ -73,6 +77,7 @@ const setup = (): {
     totpService,
     mfaSecretCipher,
     sessionIssuer,
+    auditWriter,
     clock,
     logger: nullLogger,
   });
@@ -85,6 +90,7 @@ const setup = (): {
     refreshTokenRepository,
     totpService,
     challengeTokenHasher,
+    auditWriter,
   };
 };
 
@@ -399,6 +405,7 @@ describe('AdminLoginStepTwoUseCase', () => {
       totpService: new FakeTotpService(VALID_TOTP),
       mfaSecretCipher: new FakeMfaSecretCipher(),
       sessionIssuer,
+      auditWriter: new RecordingAuditWriter(),
       clock,
       logger: recordingLogger,
     });
@@ -490,6 +497,176 @@ describe('AdminLoginStepTwoUseCase', () => {
       await expect(
         useCase.execute({ mfaChallengeToken: CHALLENGE_TOKEN, totpCode: VALID_TOTP }),
       ).rejects.toBeInstanceOf(InvalidCredentialsError);
+    });
+  });
+
+  describe('audit (SDD 18.4)', () => {
+    it('records exactly one entry for a successful admin login', async () => {
+      const { useCase, userRepository, mfaSecretRepository, mfaChallengeRepository, auditWriter } =
+        setup();
+      await seedAdminWithChallenge(userRepository, mfaSecretRepository, mfaChallengeRepository);
+
+      await useCase.execute({ mfaChallengeToken: CHALLENGE_TOKEN, totpCode: VALID_TOTP });
+
+      expect(auditWriter.entries).toHaveLength(1);
+    });
+
+    it('records the approved action, entity type, actor and entity id', async () => {
+      const { useCase, userRepository, mfaSecretRepository, mfaChallengeRepository, auditWriter } =
+        setup();
+      const { userId } = await seedAdminWithChallenge(
+        userRepository,
+        mfaSecretRepository,
+        mfaChallengeRepository,
+      );
+
+      await useCase.execute({ mfaChallengeToken: CHALLENGE_TOKEN, totpCode: VALID_TOTP });
+
+      const [entry] = auditWriter.entries;
+      expect(entry?.action).toBe('identity.admin.login');
+      expect(entry?.entityType).toBe('User');
+      expect(entry?.actorId).toBe(userId);
+      expect(entry?.actorRole).toBe('SUPER_ADMIN');
+      expect(entry?.entityId).toBe(userId);
+    });
+
+    it('records no credential material anywhere in the entry', async () => {
+      const { useCase, userRepository, mfaSecretRepository, mfaChallengeRepository, auditWriter } =
+        setup();
+      await seedAdminWithChallenge(userRepository, mfaSecretRepository, mfaChallengeRepository);
+
+      const session = await useCase.execute({
+        mfaChallengeToken: CHALLENGE_TOKEN,
+        totpCode: VALID_TOTP,
+      });
+
+      const serialised = JSON.stringify(auditWriter.entries);
+      expect(serialised).not.toContain(CHALLENGE_TOKEN);
+      expect(serialised).not.toContain(VALID_TOTP);
+      expect(serialised).not.toContain(session.accessToken);
+      expect(serialised).not.toContain(session.refreshToken);
+      expect(serialised).not.toContain('the-plaintext-secret');
+      expect(serialised).not.toContain('hashed:');
+      expect(serialised).not.toContain('hash:');
+    });
+
+    it('leaves before/after/reason unset — a login changes no entity state', async () => {
+      const { useCase, userRepository, mfaSecretRepository, mfaChallengeRepository, auditWriter } =
+        setup();
+      await seedAdminWithChallenge(userRepository, mfaSecretRepository, mfaChallengeRepository);
+
+      await useCase.execute({ mfaChallengeToken: CHALLENGE_TOKEN, totpCode: VALID_TOTP });
+
+      const [entry] = auditWriter.entries;
+      expect(entry?.before).toBeUndefined();
+      expect(entry?.after).toBeUndefined();
+      expect(entry?.reason).toBeUndefined();
+    });
+
+    it('records nothing when the TOTP is wrong', async () => {
+      const { useCase, userRepository, mfaSecretRepository, mfaChallengeRepository, auditWriter } =
+        setup();
+      await seedAdminWithChallenge(userRepository, mfaSecretRepository, mfaChallengeRepository);
+
+      await expect(
+        useCase.execute({ mfaChallengeToken: CHALLENGE_TOKEN, totpCode: '000000' }),
+      ).rejects.toBeInstanceOf(InvalidCredentialsError);
+
+      expect(auditWriter.entries).toHaveLength(0);
+    });
+
+    it('records nothing for an unknown challenge token', async () => {
+      const { useCase, auditWriter } = setup();
+
+      await expect(
+        useCase.execute({ mfaChallengeToken: 'never-issued', totpCode: VALID_TOTP }),
+      ).rejects.toBeInstanceOf(InvalidCredentialsError);
+
+      expect(auditWriter.entries).toHaveLength(0);
+    });
+
+    it('records nothing when the admin has no confirmed MFA secret', async () => {
+      const { useCase, userRepository, mfaChallengeRepository, auditWriter } = setup();
+      const userId = toUserId('00000000-0000-7000-8000-000000008801');
+      await userRepository.create(
+        User.registerAdmin({
+          id: userId,
+          email: 'unenrolled@leenmart.in',
+          passwordHash: PasswordHash.create('hashed:not-a-real-password-hash'),
+          role: Role.SUPER_ADMIN,
+          now: NOW,
+        }),
+      );
+      await mfaChallengeRepository.create(
+        MfaChallenge.issue({
+          id: toMfaChallengeId('00000000-0000-7000-8000-000000008802'),
+          userId,
+          tokenHash: CHALLENGE_TOKEN_HASH,
+          now: NOW,
+        }),
+      );
+
+      await expect(
+        useCase.execute({ mfaChallengeToken: CHALLENGE_TOKEN, totpCode: VALID_TOTP }),
+      ).rejects.toBeInstanceOf(InvalidCredentialsError);
+
+      expect(auditWriter.entries).toHaveLength(0);
+    });
+
+    it('records nothing for a replayed challenge', async () => {
+      const { useCase, userRepository, mfaSecretRepository, mfaChallengeRepository, auditWriter } =
+        setup();
+      await seedAdminWithChallenge(userRepository, mfaSecretRepository, mfaChallengeRepository);
+      await useCase.execute({ mfaChallengeToken: CHALLENGE_TOKEN, totpCode: VALID_TOTP });
+
+      await expect(
+        useCase.execute({ mfaChallengeToken: CHALLENGE_TOKEN, totpCode: VALID_TOTP }),
+      ).rejects.toBeInstanceOf(InvalidCredentialsError);
+
+      // Still just the one entry from the successful first call.
+      expect(auditWriter.entries).toHaveLength(1);
+    });
+
+    it('fails the login and issues no session when the audit write fails', async () => {
+      // SDD 18.4 makes the record legally significant; an administrator
+      // session that no entry accounts for is the outcome this prevents.
+      const {
+        userRepository,
+        mfaSecretRepository,
+        mfaChallengeRepository,
+        refreshTokenRepository,
+      } = setup();
+      await seedAdminWithChallenge(userRepository, mfaSecretRepository, mfaChallengeRepository);
+
+      const failing = new AdminLoginStepTwoUseCase({
+        userRepository,
+        mfaSecretRepository,
+        mfaChallengeRepository,
+        challengeTokenHasher: new SequentialRefreshTokenHasher(),
+        totpService: new FakeTotpService(VALID_TOTP),
+        mfaSecretCipher: new FakeMfaSecretCipher(),
+        sessionIssuer: new SessionIssuer({
+          accessTokenService: new FakeAccessTokenService({
+            token: 'access-token',
+            expiresAt: new Date('2026-01-01T00:15:00.000Z'),
+          }),
+          refreshTokenHasher: new SequentialRefreshTokenHasher(),
+          refreshTokenRepository,
+          idGenerator: new UuidV7Generator(),
+          clock: new FixedClock(NOW),
+          refreshTtlDays: 30,
+          adminIdleTimeoutMinutes: 30,
+        }),
+        auditWriter: new FailingAuditWriter(),
+        clock: new FixedClock(NOW),
+        logger: nullLogger,
+      });
+
+      await expect(
+        failing.execute({ mfaChallengeToken: CHALLENGE_TOKEN, totpCode: VALID_TOTP }),
+      ).rejects.toThrow(/audit log unavailable/);
+
+      expect(refreshTokenRepository.all()).toHaveLength(0);
     });
   });
 });

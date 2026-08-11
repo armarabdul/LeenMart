@@ -9,6 +9,8 @@ import {
 } from '../../shared/interface/http/middleware/auth-rate-limit.js';
 import type { AccessTokenService } from './application/ports/access-token.port.js';
 import type { SessionDenylist } from './application/ports/session-denylist.port.js';
+import { AmbientAuditWriter, type AuditWriter } from '../audit/index.js';
+import { PrismaAuditLogRepository } from '../audit/infrastructure/persistence/prisma-audit-log.repository.js';
 import { RedisSessionDenylist } from './infrastructure/cache/redis-session-denylist.js';
 import { AesGcmMfaSecretCipher } from './infrastructure/security/aes-gcm-mfa-secret-cipher.service.js';
 import { Argon2OtpHasher } from './infrastructure/security/argon2-otp-hasher.js';
@@ -75,6 +77,7 @@ interface AuthUseCaseDeps {
   readonly refreshTokenHasher: CryptoRefreshTokenHasher;
   readonly sessionIssuer: SessionIssuer;
   readonly sessionDenylist: SessionDenylist;
+  readonly auditWriter: AuditWriter;
   readonly accessTokenTtlSeconds: number;
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
@@ -97,6 +100,7 @@ const buildAuthUseCases = (deps: AuthUseCaseDeps): AuthUseCases => {
     refreshTokenHasher,
     sessionIssuer,
     sessionDenylist,
+    auditWriter,
     accessTokenTtlSeconds,
     idGenerator,
     clock,
@@ -123,9 +127,11 @@ const buildAuthUseCases = (deps: AuthUseCaseDeps): AuthUseCases => {
     logger,
   });
   const logoutUseCase = new LogoutUseCase({
+    userRepository,
     refreshTokenRepository,
     refreshTokenHasher,
     sessionDenylist,
+    auditWriter,
     accessTokenTtlSeconds,
     clock,
     logger,
@@ -190,6 +196,7 @@ interface AdminAuthUseCaseDeps {
   readonly totpService: OtplibTotpService;
   readonly mfaSecretCipher: AesGcmMfaSecretCipher;
   readonly sessionIssuer: SessionIssuer;
+  readonly auditWriter: AuditWriter;
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
   /** The `otpauth://` URI's issuer label — same value as the JWT issuer. */
@@ -240,8 +247,26 @@ interface IdentityInfrastructure {
   readonly mfaSecretCipher: AesGcmMfaSecretCipher;
   readonly accessTokenService: JsonWebTokenAccessTokenService;
   readonly sessionDenylist: RedisSessionDenylist;
+  readonly auditWriter: AmbientAuditWriter;
   readonly sessionIssuer: SessionIssuer;
 }
+
+/**
+ * SDD 5.1 lets any module call `audit` directly through its published
+ * interface, and SDD 5 gives `audit` no events — so a direct call is the shape
+ * the design intends rather than an event subscription. Split out for the same
+ * reason the builders around it are: this file's max-lines-per-function budget.
+ */
+const buildAuditWriter = (deps: {
+  prisma: PrismaClient;
+  idGenerator: IdGenerator;
+  clock: Clock;
+}): AmbientAuditWriter =>
+  new AmbientAuditWriter({
+    auditLogRepository: new PrismaAuditLogRepository(deps.prisma),
+    idGenerator: deps.idGenerator,
+    clock: deps.clock,
+  });
 
 /** Split out of `createIdentityModule` purely to stay under this file's max-lines-per-function budget. */
 const buildInfrastructure = (deps: {
@@ -280,6 +305,7 @@ const buildInfrastructure = (deps: {
     idGenerator,
   );
   const sessionDenylist = new RedisSessionDenylist(redis);
+  const auditWriter = buildAuditWriter({ prisma, idGenerator, clock });
   const sessionIssuer = new SessionIssuer({
     accessTokenService,
     refreshTokenHasher,
@@ -305,6 +331,7 @@ const buildInfrastructure = (deps: {
     mfaSecretCipher,
     accessTokenService,
     sessionDenylist,
+    auditWriter,
     sessionIssuer,
   };
 };

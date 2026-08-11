@@ -1,4 +1,7 @@
-import type { Clock, Logger } from '@leen-mart/domain-kit';
+import { toUuid, type Clock, type Logger } from '@leen-mart/domain-kit';
+import type { AuditWriter } from '../../../audit/index.js';
+import { IDENTITY_AUDIT_ACTIONS, IDENTITY_AUDIT_ENTITY_TYPES } from '../../domain/audit-actions.js';
+import type { User } from '../../domain/entities/user.entity.js';
 import { InvalidCredentialsError } from '../../domain/errors/identity-errors.js';
 import type { MfaChallengeRepository } from '../../domain/repositories/mfa-challenge.repository.js';
 import type { MfaSecretRepository } from '../../domain/repositories/mfa-secret.repository.js';
@@ -21,6 +24,7 @@ export interface AdminLoginStepTwoDeps {
   readonly totpService: TotpService;
   readonly mfaSecretCipher: MfaSecretCipher;
   readonly sessionIssuer: SessionIssuer;
+  readonly auditWriter: AuditWriter;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -121,7 +125,36 @@ export class AdminLoginStepTwoUseCase {
     // able to replay the same challenge, so it is burned either way.
     user.assertCanAuthenticate();
 
+    await this.recordLoginAudit(user);
+
     logger.info({ userId: user.id }, 'Admin login step 2 succeeded: session issued');
     return sessionIssuer.issueFor(user);
+  }
+
+  /**
+   * Records the completed sign-in (SDD 18.4: "every admin action" lands in an
+   * immutable, legally significant record). A failure to write aborts the
+   * login, because the alternative is an administrator session that no record
+   * accounts for — precisely what this control exists to prevent.
+   *
+   * Called *before* the session is issued. Auditing afterwards would leave
+   * that live session behind whenever the write failed; auditing first can
+   * instead leave a record for a login whose session issuance then failed,
+   * which is the recoverable direction. SDD 12.3 establishes the same ordering
+   * for the one audit case it specifies ("writes an audit record before
+   * returning the presigned URL").
+   *
+   * Authentication is already complete here: password verified in step one,
+   * TOTP verified, challenge burned, account status checked. The session is
+   * the *result* of that decision, not part of it.
+   */
+  private async recordLoginAudit(user: User): Promise<void> {
+    await this.deps.auditWriter.record({
+      actorId: user.id,
+      actorRole: user.role.name,
+      action: IDENTITY_AUDIT_ACTIONS.ADMIN_LOGIN,
+      entityType: IDENTITY_AUDIT_ENTITY_TYPES.USER,
+      entityId: toUuid(user.id),
+    });
   }
 }

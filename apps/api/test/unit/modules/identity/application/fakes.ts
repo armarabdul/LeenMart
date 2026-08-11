@@ -13,6 +13,10 @@ import type {
   SignedAccessToken,
 } from '../../../../../src/modules/identity/application/ports/access-token.port.js';
 import type { SessionDenylist } from '../../../../../src/modules/identity/application/ports/session-denylist.port.js';
+import type {
+  AuditWriter,
+  AuditWriterInput,
+} from '../../../../../src/modules/audit/application/ports/audit-writer.port.js';
 import type { PasswordHasher } from '../../../../../src/modules/identity/application/ports/password-hasher.port.js';
 import type { RefreshTokenHasher } from '../../../../../src/modules/identity/application/ports/refresh-token-hasher.port.js';
 import type { RefreshTokenRepository } from '../../../../../src/modules/identity/application/ports/refresh-token-repository.port.js';
@@ -321,3 +325,25 @@ export class FakeMfaSecretCipher implements MfaSecretCipher {
 }
 
 export const nullLogger = new NullLogger();
+
+/**
+ * Captures what each use case asked to audit. Deliberately does not read the
+ * ambient request context — that is `AmbientAuditWriter`'s job, covered by its
+ * own tests; these assertions are about *what* callers record, not how the
+ * transport facts are gathered.
+ */
+export class RecordingAuditWriter implements AuditWriter {
+  readonly entries: AuditWriterInput[] = [];
+
+  record(input: AuditWriterInput): Promise<void> {
+    this.entries.push(input);
+    return Promise.resolve();
+  }
+}
+
+/** An audit writer whose persistence always fails, for the fail-closed assertions. */
+export class FailingAuditWriter implements AuditWriter {
+  record(): Promise<void> {
+    return Promise.reject(new Error('audit log unavailable'));
+  }
+}

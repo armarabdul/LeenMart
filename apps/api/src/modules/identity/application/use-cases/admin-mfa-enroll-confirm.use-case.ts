@@ -1,4 +1,7 @@
-import type { Clock, Logger } from '@leen-mart/domain-kit';
+import { toUuid, type Clock, type Logger } from '@leen-mart/domain-kit';
+import type { AuditWriter } from '../../../audit/index.js';
+import { IDENTITY_AUDIT_ACTIONS, IDENTITY_AUDIT_ENTITY_TYPES } from '../../domain/audit-actions.js';
+import type { User } from '../../domain/entities/user.entity.js';
 import { InvalidCredentialsError } from '../../domain/errors/identity-errors.js';
 import type { MfaSecretRepository } from '../../domain/repositories/mfa-secret.repository.js';
 import type { TotpService } from '../../domain/services/totp.service.js';
@@ -20,6 +23,7 @@ export interface AdminMfaEnrollConfirmDeps {
   readonly totpService: TotpService;
   readonly mfaSecretCipher: MfaSecretCipher;
   readonly sessionIssuer: SessionIssuer;
+  readonly auditWriter: AuditWriter;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -111,10 +115,37 @@ export class AdminMfaEnrollConfirmUseCase {
 
     await mfaSecretRepository.update(mfaSecret.confirm(now));
 
+    await this.recordLoginAudit(user);
+
     logger.info(
       { userId: user.id },
       'Admin MFA enrollment confirmed: secret activated, session issued',
     );
     return sessionIssuer.issueFor(user);
+  }
+
+  /**
+   * The same `identity.admin.login` entry `AdminLoginStepTwoUseCase` writes,
+   * deliberately not a distinct enrollment action.
+   *
+   * This path issues a full admin session on exactly the two factors a normal
+   * login proves — password plus TOTP — so from the audit log's point of view
+   * it *is* an administrator signing in, and a separate action name would
+   * split one security-relevant event across two vocabularies. The enrollment
+   * itself is a side effect of the same request, not a different actor doing a
+   * different thing.
+   *
+   * Ordering matches the login path: after the authentication decision, before
+   * the session is issued, so a failed write leaves no unaudited session
+   * behind (SDD 18.4).
+   */
+  private async recordLoginAudit(user: User): Promise<void> {
+    await this.deps.auditWriter.record({
+      actorId: user.id,
+      actorRole: user.role.name,
+      action: IDENTITY_AUDIT_ACTIONS.ADMIN_LOGIN,
+      entityType: IDENTITY_AUDIT_ENTITY_TYPES.USER,
+      entityId: toUuid(user.id),
+    });
   }
 }

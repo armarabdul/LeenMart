@@ -8,7 +8,14 @@
 // rules key off the `**/modules/*/domain/**` path, so this placement is what
 // makes the published-interface rule machine-enforced here too.
 //
-// No `createAuditModule` yet: this chunk is persistence only. There is no
-// HTTP surface to mount and no composition to perform until a caller exists
-// (the same sequencing `MfaSecret`/`MfaChallenge` persistence followed).
+// Still no `createAuditModule`: this module has no HTTP surface of its own.
+// What it now publishes beyond persistence is the write port other modules
+// call directly — SDD 5.1 makes `audit` one of the four modules anything may
+// depend on, and SDD 5 gives it no published events, so a direct call is the
+// intended shape rather than an event subscription.
 export * from './domain/index.js';
+export type { AuditWriter, AuditWriterInput } from './application/ports/audit-writer.port.js';
+export {
+  AmbientAuditWriter,
+  type AmbientAuditWriterDeps,
+} from './infrastructure/ambient-audit-writer.js';

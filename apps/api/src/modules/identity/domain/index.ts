@@ -1,6 +1,9 @@
 // This module's single, intentional domain public surface. Application,
 // infrastructure, and interface code within this module should import from
 // here rather than reaching into individual entities/value-objects/errors/
+// audit vocabulary (SDD 18.4)
+export * from './audit-actions.js';
+
 // events/repositories/services files directly.
 //
 // Deliberately not re-exported: `refresh-token.entity.ts`, the

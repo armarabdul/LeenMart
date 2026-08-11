@@ -16,6 +16,7 @@ import {
   FakePasswordHasher,
   InMemoryRefreshTokenRepository,
   InMemorySessionDenylist,
+  RecordingAuditWriter,
   InMemoryUserRepository,
   SequentialRefreshTokenHasher,
   nullLogger,
@@ -40,6 +41,7 @@ const setup = (): {
   const userRepository = new InMemoryUserRepository();
   const refreshTokenRepository = new InMemoryRefreshTokenRepository();
   const sessionDenylist = new InMemorySessionDenylist();
+  const auditWriter = new RecordingAuditWriter();
   const refreshTokenHasher = new SequentialRefreshTokenHasher();
   const sessionIssuer = new SessionIssuer({
     accessTokenService: new FakeAccessTokenService({
@@ -74,6 +76,8 @@ const setup = (): {
     logger: nullLogger,
   });
   const logoutUseCase = new LogoutUseCase({
+    userRepository,
+    auditWriter,
     refreshTokenRepository,
     refreshTokenHasher,
     sessionDenylist,

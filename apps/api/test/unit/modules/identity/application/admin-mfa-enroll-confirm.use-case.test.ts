@@ -26,6 +26,7 @@ import {
   InMemoryMfaSecretRepository,
   InMemoryRefreshTokenRepository,
   InMemoryUserRepository,
+  RecordingAuditWriter,
   SequentialRefreshTokenHasher,
   nullLogger,
 } from './fakes.js';
@@ -40,10 +41,12 @@ const setup = (): {
   userRepository: InMemoryUserRepository;
   mfaSecretRepository: InMemoryMfaSecretRepository;
   refreshTokenRepository: InMemoryRefreshTokenRepository;
+  auditWriter: RecordingAuditWriter;
 } => {
   const userRepository = new InMemoryUserRepository();
   const mfaSecretRepository = new InMemoryMfaSecretRepository();
   const refreshTokenRepository = new InMemoryRefreshTokenRepository();
+  const auditWriter = new RecordingAuditWriter();
   const clock = new FixedClock(NOW);
   const idGenerator = new UuidV7Generator();
 
@@ -67,11 +70,12 @@ const setup = (): {
     totpService: new FakeTotpService(VALID_TOTP),
     mfaSecretCipher: new FakeMfaSecretCipher(),
     sessionIssuer,
+    auditWriter,
     clock,
     logger: nullLogger,
   });
 
-  return { useCase, userRepository, mfaSecretRepository, refreshTokenRepository };
+  return { useCase, userRepository, mfaSecretRepository, refreshTokenRepository, auditWriter };
 };
 
 let seq = 0;
@@ -336,6 +340,7 @@ describe('AdminMfaEnrollConfirmUseCase', () => {
       totpService: new FakeTotpService(VALID_TOTP),
       mfaSecretCipher: new FakeMfaSecretCipher(),
       sessionIssuer,
+      auditWriter: new RecordingAuditWriter(),
       clock,
       logger: recordingLogger,
     });
@@ -458,6 +463,144 @@ describe('AdminMfaEnrollConfirmUseCase', () => {
       expect(session.accessToken).toBe('access-token');
       const secret = await mfaSecretRepository.findByUserId(userId);
       expect(secret?.isConfirmed()).toBe(true);
+    });
+  });
+
+  describe('audit (SDD 18.4)', () => {
+    it('records exactly one entry for a successful confirmation', async () => {
+      const { useCase, userRepository, mfaSecretRepository, auditWriter } = setup();
+      const { email } = await seedAdminWithPendingSecret(userRepository, mfaSecretRepository);
+
+      await useCase.execute({ email, password: ADMIN_PASSWORD, totpCode: VALID_TOTP });
+
+      expect(auditWriter.entries).toHaveLength(1);
+    });
+
+    it('records the same identity.admin.login action as the normal login path', async () => {
+      // This path issues a full admin session on the same two factors a normal
+      // login proves, so it is the same event to an auditor — deliberately not
+      // a separate enrollment action.
+      const { useCase, userRepository, mfaSecretRepository, auditWriter } = setup();
+      const { userId, email } = await seedAdminWithPendingSecret(
+        userRepository,
+        mfaSecretRepository,
+      );
+
+      await useCase.execute({ email, password: ADMIN_PASSWORD, totpCode: VALID_TOTP });
+
+      const [entry] = auditWriter.entries;
+      expect(entry?.action).toBe('identity.admin.login');
+      expect(entry?.entityType).toBe('User');
+      expect(entry?.actorId).toBe(userId);
+      expect(entry?.actorRole).toBe('SUPER_ADMIN');
+      expect(entry?.entityId).toBe(userId);
+    });
+
+    it.each(ADMIN_ROLE_NAMES)('records the actual role for a %s', async (roleName) => {
+      const { useCase, userRepository, mfaSecretRepository, auditWriter } = setup();
+      const { email } = await seedAdminWithPendingSecret(userRepository, mfaSecretRepository, {
+        role: roleName,
+      });
+
+      await useCase.execute({ email, password: ADMIN_PASSWORD, totpCode: VALID_TOTP });
+
+      expect(auditWriter.entries[0]?.actorRole).toBe(roleName);
+    });
+
+    it('records no credential material anywhere in the entry', async () => {
+      const { useCase, userRepository, mfaSecretRepository, auditWriter } = setup();
+      const { email } = await seedAdminWithPendingSecret(userRepository, mfaSecretRepository);
+
+      const session = await useCase.execute({
+        email,
+        password: ADMIN_PASSWORD,
+        totpCode: VALID_TOTP,
+      });
+
+      const serialised = JSON.stringify(auditWriter.entries);
+      expect(serialised).not.toContain(ADMIN_PASSWORD);
+      expect(serialised).not.toContain(VALID_TOTP);
+      expect(serialised).not.toContain(PLAINTEXT_SECRET);
+      expect(serialised).not.toContain(session.accessToken);
+      expect(serialised).not.toContain(session.refreshToken);
+      expect(serialised).not.toContain('encrypted:');
+      expect(serialised).not.toContain('hashed:');
+      expect(serialised).not.toContain('hash:');
+    });
+
+    it('leaves before/after/reason unset', async () => {
+      const { useCase, userRepository, mfaSecretRepository, auditWriter } = setup();
+      const { email } = await seedAdminWithPendingSecret(userRepository, mfaSecretRepository);
+
+      await useCase.execute({ email, password: ADMIN_PASSWORD, totpCode: VALID_TOTP });
+
+      const [entry] = auditWriter.entries;
+      expect(entry?.before).toBeUndefined();
+      expect(entry?.after).toBeUndefined();
+      expect(entry?.reason).toBeUndefined();
+    });
+
+    it('records nothing when the password is wrong', async () => {
+      const { useCase, userRepository, mfaSecretRepository, auditWriter } = setup();
+      const { email } = await seedAdminWithPendingSecret(userRepository, mfaSecretRepository);
+
+      await expect(
+        useCase.execute({ email, password: 'wrong', totpCode: VALID_TOTP }),
+      ).rejects.toBeInstanceOf(InvalidCredentialsError);
+
+      expect(auditWriter.entries).toHaveLength(0);
+    });
+
+    it('records nothing when the TOTP is wrong', async () => {
+      const { useCase, userRepository, mfaSecretRepository, auditWriter } = setup();
+      const { email } = await seedAdminWithPendingSecret(userRepository, mfaSecretRepository);
+
+      await expect(
+        useCase.execute({ email, password: ADMIN_PASSWORD, totpCode: '000000' }),
+      ).rejects.toBeInstanceOf(InvalidCredentialsError);
+
+      expect(auditWriter.entries).toHaveLength(0);
+    });
+
+    it('records nothing for an unknown email', async () => {
+      const { useCase, auditWriter } = setup();
+
+      await expect(
+        useCase.execute({
+          email: 'ghost@leenmart.in',
+          password: ADMIN_PASSWORD,
+          totpCode: VALID_TOTP,
+        }),
+      ).rejects.toBeInstanceOf(InvalidCredentialsError);
+
+      expect(auditWriter.entries).toHaveLength(0);
+    });
+
+    it('leaves session issuance and secret confirmation unchanged', async () => {
+      // The audit write is additive: everything this use case did before it
+      // still happens, in the same way.
+      const { useCase, userRepository, mfaSecretRepository, refreshTokenRepository, auditWriter } =
+        setup();
+      const { userId, email } = await seedAdminWithPendingSecret(
+        userRepository,
+        mfaSecretRepository,
+      );
+
+      const session = await useCase.execute({
+        email,
+        password: ADMIN_PASSWORD,
+        totpCode: VALID_TOTP,
+      });
+
+      expect(session.user.id).toBe(userId);
+      expect(session.accessToken).toBe('access-token');
+      expect(await mfaSecretRepository.findByUserId(userId)).toSatisfy(
+        (secret: { isConfirmed(): boolean } | null) => secret?.isConfirmed() === true,
+      );
+      expect(
+        await refreshTokenRepository.findByTokenHash(`hash:${session.refreshToken}`),
+      ).not.toBeNull();
+      expect(auditWriter.entries).toHaveLength(1);
     });
   });
 });

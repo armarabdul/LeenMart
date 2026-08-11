@@ -777,4 +777,218 @@ describe('admin auth endpoints', () => {
       await adminMfaVerify(app, mfaChallengeToken, await currentTotpCode(secret)).expect(200);
     });
   });
+
+  describe('admin authentication audit (SDD 18.4)', () => {
+    const UA = 'leen-mart-admin-audit-probe/1.0';
+    const CLIENT_IP = '203.0.113.7';
+
+    interface AuditRow {
+      action: string;
+      entity_type: string;
+      entity_id: string | null;
+      actor_id: string | null;
+      actor_role: string;
+      request_id: string | null;
+      ip_address: string | null;
+      user_agent: string | null;
+      before: unknown;
+      after: unknown;
+      reason: string | null;
+    }
+
+    const auditRowsFor = async (userId: string, action: string): Promise<AuditRow[]> =>
+      container.prisma.$queryRawUnsafe<AuditRow[]>(
+        `SELECT action, entity_type, entity_id, actor_id, actor_role, request_id,
+                host(ip_address) AS ip_address, user_agent, before, after, reason
+           FROM audit_logs
+          WHERE actor_id = $1::uuid AND action = $2
+          ORDER BY created_at DESC`,
+        userId,
+        action,
+      );
+
+    /** Completes a real two-step admin login, carrying the probe headers throughout. */
+    const completeAdminLogin = async (
+      label: string,
+    ): Promise<{ userId: string; refreshToken: string }> => {
+      const { email, secret } = await seedEnrolledAdminWithKnownSecret(label);
+      const stepOne = await adminLoginStepOne(app, email, ADMIN_PASSWORD)
+        .set('User-Agent', UA)
+        .set('X-Forwarded-For', CLIENT_IP)
+        .expect(200);
+      const { mfaChallengeToken } = (stepOne.body as StepOneBody).data;
+
+      const stepTwo = await adminMfaVerify(app, mfaChallengeToken, await currentTotpCode(secret))
+        .set('User-Agent', UA)
+        .set('X-Forwarded-For', CLIENT_IP)
+        .expect(200);
+      const body = stepTwo.body as StepTwoBody;
+
+      return { userId: body.data.user.id, refreshToken: body.data.refreshToken };
+    };
+
+    it('writes an audit row for a completed admin login', async () => {
+      const { userId } = await completeAdminLogin('audit-login');
+
+      const rows = await auditRowsFor(userId, 'identity.admin.login');
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.entity_type).toBe('User');
+      expect(rows[0]?.entity_id).toBe(userId);
+      expect(rows[0]?.actor_role).toBe('SUPER_ADMIN');
+    });
+
+    it('stores the request context captured from the HTTP request', async () => {
+      const { userId } = await completeAdminLogin('audit-login-context');
+
+      const [row] = await auditRowsFor(userId, 'identity.admin.login');
+
+      expect(row?.request_id).toEqual(expect.any(String) as unknown as string);
+      expect(row?.ip_address).toBe(CLIENT_IP);
+      expect(row?.user_agent).toBe(UA);
+    });
+
+    it('writes an audit row for an admin logout', async () => {
+      const { userId, refreshToken } = await completeAdminLogin('audit-logout');
+
+      await request(app)
+        .post('/api/v1/identity/logout')
+        .set('User-Agent', UA)
+        .set('X-Forwarded-For', CLIENT_IP)
+        .send({ refreshToken })
+        .expect(200);
+
+      const rows = await auditRowsFor(userId, 'identity.admin.logout');
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.entity_type).toBe('User');
+      expect(rows[0]?.entity_id).toBe(userId);
+      expect(rows[0]?.ip_address).toBe(CLIENT_IP);
+      expect(rows[0]?.user_agent).toBe(UA);
+    });
+
+    it('writes an identity.admin.login row when enrollment confirmation issues the session', async () => {
+      // The same event as a normal login: this path proves the same two
+      // factors and hands back a full admin session.
+      const email = await seedUnenrolledAdmin('audit-enroll-confirm');
+      const enrolled = await adminMfaEnroll(app, email, ADMIN_PASSWORD)
+        .set('User-Agent', UA)
+        .set('X-Forwarded-For', CLIENT_IP)
+        .expect(200);
+      const { secret } = (enrolled.body as EnrollBody).data;
+
+      const confirmed = await adminMfaEnrollConfirm(
+        app,
+        email,
+        ADMIN_PASSWORD,
+        await currentTotpCode(secret),
+      )
+        .set('User-Agent', UA)
+        .set('X-Forwarded-For', CLIENT_IP)
+        .expect(200);
+      const userId = (confirmed.body as StepTwoBody).data.user.id;
+
+      const rows = await auditRowsFor(userId, 'identity.admin.login');
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.entity_type).toBe('User');
+      expect(rows[0]?.entity_id).toBe(userId);
+      expect(rows[0]?.actor_role).toBe('SUPER_ADMIN');
+      expect(rows[0]?.ip_address).toBe(CLIENT_IP);
+      expect(rows[0]?.user_agent).toBe(UA);
+    });
+
+    it('stores no credential material for a confirmed enrollment', async () => {
+      const email = await seedUnenrolledAdmin('audit-enroll-no-secrets');
+      const enrolled = await adminMfaEnroll(app, email, ADMIN_PASSWORD).expect(200);
+      const { secret } = (enrolled.body as EnrollBody).data;
+      const confirmed = await adminMfaEnrollConfirm(
+        app,
+        email,
+        ADMIN_PASSWORD,
+        await currentTotpCode(secret),
+      ).expect(200);
+      const body = (confirmed.body as StepTwoBody).data;
+
+      const rows = await auditRowsFor(body.user.id, 'identity.admin.login');
+
+      const serialised = JSON.stringify(rows);
+      expect(serialised).not.toContain(ADMIN_PASSWORD);
+      expect(serialised).not.toContain(secret);
+      expect(serialised).not.toContain(body.refreshToken);
+      expect(rows[0]?.before).toBeNull();
+      expect(rows[0]?.after).toBeNull();
+      expect(rows[0]?.reason).toBeNull();
+    });
+
+    it('writes no audit row when enrollment confirmation is rejected', async () => {
+      const email = await seedUnenrolledAdmin('audit-enroll-rejected');
+      await adminMfaEnroll(app, email, ADMIN_PASSWORD).expect(200);
+
+      await adminMfaEnrollConfirm(app, email, ADMIN_PASSWORD, '000000').expect(401);
+      await adminMfaEnrollConfirm(app, email, 'wrong-password', '000000').expect(401);
+
+      const admin = await userRepository.findByEmail(email);
+      if (!admin) throw new Error('fixture admin was not persisted');
+      expect(await auditRowsFor(admin.id, 'identity.admin.login')).toHaveLength(0);
+    });
+
+    it('writes no login audit row when the TOTP is wrong', async () => {
+      const { email } = await seedEnrolledAdminWithKnownSecret('audit-wrong-totp');
+      const stepOne = await adminLoginStepOne(app, email, ADMIN_PASSWORD).expect(200);
+      const { mfaChallengeToken } = (stepOne.body as StepOneBody).data;
+
+      await adminMfaVerify(app, mfaChallengeToken, '000000').expect(401);
+
+      const admin = await userRepository.findByEmail(email);
+      if (!admin) throw new Error('fixture admin was not persisted');
+      expect(await auditRowsFor(admin.id, 'identity.admin.login')).toHaveLength(0);
+    });
+
+    it('writes no login audit row when the password is wrong', async () => {
+      const { email } = await seedEnrolledAdminWithKnownSecret('audit-wrong-password');
+
+      await adminLoginStepOne(app, email, 'wrong-password').expect(401);
+
+      const admin = await userRepository.findByEmail(email);
+      if (!admin) throw new Error('fixture admin was not persisted');
+      expect(await auditRowsFor(admin.id, 'identity.admin.login')).toHaveLength(0);
+    });
+
+    it('stores no credential material in any audited column', async () => {
+      const { userId, refreshToken } = await completeAdminLogin('audit-no-secrets');
+      await request(app).post('/api/v1/identity/logout').send({ refreshToken }).expect(200);
+
+      const rows = [
+        ...(await auditRowsFor(userId, 'identity.admin.login')),
+        ...(await auditRowsFor(userId, 'identity.admin.logout')),
+      ];
+      expect(rows).toHaveLength(2);
+
+      const serialised = JSON.stringify(rows);
+      expect(serialised).not.toContain(ADMIN_PASSWORD);
+      expect(serialised).not.toContain(refreshToken);
+      expect(serialised).not.toContain('hash');
+      for (const row of rows) {
+        expect(row.before).toBeNull();
+        expect(row.after).toBeNull();
+        expect(row.reason).toBeNull();
+      }
+    });
+
+    it('writes no admin audit row when a customer logs out', async () => {
+      // `/logout` is shared by both audiences; only the administrative half
+      // is audited.
+      const email = uniqueEmail('audit-customer-logout');
+      const registered = await request(app)
+        .post('/api/v1/identity/register')
+        .send({ email, password: 'correct horse battery staple' })
+        .expect(201);
+      const { user, refreshToken } = (registered.body as StepTwoBody).data;
+
+      await request(app).post('/api/v1/identity/logout').send({ refreshToken }).expect(200);
+
+      expect(await auditRowsFor(user.id, 'identity.admin.logout')).toHaveLength(0);
+    });
+  });
 });
