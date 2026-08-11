@@ -832,6 +832,33 @@ describe('identity endpoints', () => {
       await me(deviceB.accessToken).expect(200);
     });
 
+    it('reuse detection also stops the replayed session\u2019s own access token', async () => {
+      // The rotated-away session is already revoked in the database, so it is
+      // not part of what family revocation "kills" \u2014 but its access token is
+      // still live and is the one a thief is most likely to be holding.
+      const registered = await registerCustomer(
+        app,
+        uniqueEmail('reuse-replayed'),
+        PASSWORD,
+      ).expect(201);
+      const first = (registered.body as AuthSessionBody).data;
+
+      await request(app)
+        .post('/api/v1/identity/refresh')
+        .send({ refreshToken: first.refreshToken })
+        .expect(200);
+      // The outgoing session's access token is still valid at this point.
+      await me(first.accessToken).expect(200);
+
+      await request(app)
+        .post('/api/v1/identity/refresh')
+        .send({ refreshToken: first.refreshToken })
+        .expect(401);
+
+      const response = await me(first.accessToken).expect(401);
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_ACCESS_TOKEN');
+    });
+
     it('an ordinary rotation does not revoke the outgoing access token', async () => {
       // Rotation is legitimate: the same holder receives the replacement.
       const registered = await registerCustomer(app, uniqueEmail('rotate-ok'), PASSWORD).expect(

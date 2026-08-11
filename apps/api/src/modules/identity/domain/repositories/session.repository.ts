@@ -29,4 +29,22 @@ export interface SessionRepository {
    * the family's size, and empty on a replay of the same stolen token.
    */
   revokeFamily(familyId: SessionId, now: Date): Promise<readonly SessionId[]>;
+
+  /**
+   * Every session id in one rotation lineage, **including already-revoked
+   * ones**, for SDD 7.2's "the entire session family is revoked".
+   *
+   * Distinct from `revokeFamily`'s return value, which is only what that call
+   * killed. On reuse detection the two differ in exactly the way that
+   * matters: the token being replayed was rotated away, so it is *already*
+   * revoked and `revokeFamily` will not report it — yet its access token may
+   * still be seconds from minted and is precisely the credential a thief
+   * holding that refresh token is likely to hold too. Denying only the live
+   * sessions would leave the replayed session, and any earlier rotation,
+   * authenticating for the rest of the access-token lifetime.
+   *
+   * Read-only, so it carries no `now`. Bounded by the family, which is one
+   * indexed lookup regardless of chain length.
+   */
+  findFamilySessionIds(familyId: SessionId): Promise<readonly SessionId[]>;
 }

@@ -87,4 +87,15 @@ export class PrismaRefreshTokenRepository implements RefreshTokenRepository {
       return ids.map(toSessionId);
     });
   }
+
+  async findFamilySessionIds(familyId: SessionId): Promise<readonly SessionId[]> {
+    // No `revokedAt` filter, unlike `revokeFamily`: the point of this read is
+    // the sessions that are already dead in the database but whose access
+    // tokens have not yet expired.
+    const rows = await this.prisma.refreshToken.findMany({
+      where: { familyId },
+      select: { id: true },
+    });
+    return rows.map((row) => toSessionId(row.id));
+  }
 }

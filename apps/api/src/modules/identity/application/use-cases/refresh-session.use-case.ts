@@ -73,8 +73,19 @@ export class RefreshSessionUseCase {
         // hold a signature-valid access token. Denying each `sid` is what
         // makes the revocation take effect now rather than up to one
         // access-token lifetime from now.
+        //
+        // Denies the *whole* family, not just what `revokeFamily` killed.
+        // The token being replayed was rotated away, so it is already revoked
+        // and never appears in that list — yet a thief holding it is exactly
+        // who is likely to hold its access token too. Denying only the live
+        // sessions would leave the replayed one authenticating for the rest
+        // of its access-token lifetime, which is most of what reuse detection
+        // exists to stop.
+        const familySessionIds = await refreshTokenRepository.findFamilySessionIds(
+          existing.familyId,
+        );
         await Promise.all(
-          revokedSessionIds.map((sessionId) =>
+          familySessionIds.map((sessionId) =>
             sessionDenylist.deny(sessionId, accessTokenTtlSeconds),
           ),
         );

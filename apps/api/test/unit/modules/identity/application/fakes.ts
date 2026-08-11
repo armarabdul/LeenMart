@@ -103,6 +103,15 @@ export class InMemoryRefreshTokenRepository implements RefreshTokenRepository {
     return Promise.resolve(revoked);
   }
 
+  /** Mirrors the Prisma adapter: no revoked filter — dead sessions are exactly what this is for. */
+  findFamilySessionIds(familyId: SessionId): Promise<readonly SessionId[]> {
+    const ids: SessionId[] = [];
+    for (const [id, token] of this.byId) {
+      if (token.familyId === familyId) ids.push(id);
+    }
+    return Promise.resolve(ids);
+  }
+
   /** Test-only view of stored state, so assertions can inspect a whole family. */
   all(): readonly RefreshToken[] {
     return [...this.byId.values()];

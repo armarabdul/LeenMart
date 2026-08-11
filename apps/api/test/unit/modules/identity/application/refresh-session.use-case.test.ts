@@ -455,6 +455,40 @@ describe('RefreshSessionUseCase', () => {
       expect(await sessionDenylist.isDenied(bystander.refreshTokenId)).toBe(false);
     });
 
+    it('denies the replayed session itself, not only the sessions still live', async () => {
+      // The replayed token was rotated away, so it is already revoked and
+      // `revokeFamily` never reports it — but a thief holding that refresh
+      // token is exactly who holds its access token too. Denying only the
+      // live sessions would leave this one authenticating for the rest of
+      // its access-token lifetime.
+      const { registerUseCase, refreshUseCase, sessionDenylist } = setup();
+      const first = await registerUseCase.execute({ email: 'a@example.com', password: PASSWORD });
+      await refreshUseCase.execute({ refreshToken: first.refreshToken });
+
+      await expect(
+        refreshUseCase.execute({ refreshToken: first.refreshToken }),
+      ).rejects.toBeInstanceOf(InvalidRefreshTokenError);
+
+      expect(await sessionDenylist.isDenied(first.refreshTokenId)).toBe(true);
+    });
+
+    it('denies every session in the family, including intermediate rotations', async () => {
+      const { registerUseCase, refreshUseCase, sessionDenylist } = setup();
+      const first = await registerUseCase.execute({ email: 'a@example.com', password: PASSWORD });
+      const second = await refreshUseCase.execute({ refreshToken: first.refreshToken });
+      const third = await refreshUseCase.execute({ refreshToken: second.refreshToken });
+
+      await expect(
+        refreshUseCase.execute({ refreshToken: first.refreshToken }),
+      ).rejects.toBeInstanceOf(InvalidRefreshTokenError);
+
+      // first and second are already revoked; third is live. All three had a
+      // live access token at some point in the last 10 minutes.
+      expect(await sessionDenylist.isDenied(first.refreshTokenId)).toBe(true);
+      expect(await sessionDenylist.isDenied(second.refreshTokenId)).toBe(true);
+      expect(await sessionDenylist.isDenied(third.refreshTokenId)).toBe(true);
+    });
+
     it('denies nothing on an ordinary rotation', async () => {
       // Rotation is legitimate: the same holder gets the replacement, so the
       // outgoing session’s access token is not a compromise.
