@@ -95,19 +95,36 @@ describe('PrismaVendorRepository', () => {
   it('round-trips a lifecycle status change through update()', async () => {
     const existing = await repository.findByUserId(userId);
     const later = new Date('2026-01-02T00:00:00.000Z');
-    const submitted = VendorProfile.reconstitute({
-      id: existing!.id,
-      userId: existing!.userId,
-      status: VendorStatus.KYC_SUBMITTED,
-      createdAt: existing!.createdAt,
-      updatedAt: later,
-    });
+    // Driven through the real SDD 15.1 transition rather than a hand-built
+    // status: this is what proves the domain's state machine and the column
+    // agree on the value, end to end.
+    const submitted = existing!.submitKyc(later);
 
     await repository.update(submitted);
 
     const found = await repository.findById(existing!.id);
     expect(found?.status).toBe(VendorStatus.KYC_SUBMITTED);
     expect(found?.createdAt).toEqual(now);
+    expect(found?.updatedAt).toEqual(later);
+  });
+
+  it('round-trips the rest of the lifecycle to ACTIVE', async () => {
+    const submitted = await repository.findByUserId(userId);
+    const later = new Date('2026-01-03T00:00:00.000Z');
+
+    await repository.update(submitted!.startKycReview(later));
+    expect((await repository.findById(submitted!.id))?.status).toBe(VendorStatus.KYC_UNDER_REVIEW);
+
+    const reviewing = await repository.findById(submitted!.id);
+    await repository.update(reviewing!.approveKyc(later));
+    expect((await repository.findById(submitted!.id))?.status).toBe(VendorStatus.KYC_APPROVED);
+
+    const approved = await repository.findById(submitted!.id);
+    await repository.update(approved!.activate(later));
+
+    const active = await repository.findById(submitted!.id);
+    expect(active?.status).toBe(VendorStatus.ACTIVE);
+    expect(active?.createdAt).toEqual(now);
   });
 
   it('does not change the owning user (registration never touches User.role)', async () => {
