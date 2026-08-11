@@ -25,6 +25,17 @@ describe('environment configuration', () => {
     expect(env.RATE_LIMIT_MAX).toBe(250);
   });
 
+  it('defaults the access-token lifetime to SDD 7.2’s 10 minutes', () => {
+    // Pinned rather than incidental: an access token cannot be retracted
+    // mid-life, so this value is the revocation lag the whole token design is
+    // sized against (SDD 7.2).
+    expect(loadEnv({ ...validEnv }).JWT_ACCESS_TTL_SECONDS).toBe(600);
+  });
+
+  it('defaults the refresh-token lifetime to SDD 7.2’s 30 days', () => {
+    expect(loadEnv({ ...validEnv }).JWT_REFRESH_TTL_DAYS).toBe(30);
+  });
+
   it('parses the CORS allowlist into a trimmed array', () => {
     const env = loadEnv({
       ...validEnv,

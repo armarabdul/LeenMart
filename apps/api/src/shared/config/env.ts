@@ -66,7 +66,15 @@ const envSchema = z
 
     // --- identity (SDD 6.1: JWT access tokens, opaque hashed refresh tokens) ---
     JWT_ACCESS_SECRET: z.string().min(32).default(INSECURE_DEV_JWT_ACCESS_SECRET),
-    JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+    /**
+     * 10 minutes, per SDD 7.2's token table. Load-bearing rather than
+     * arbitrary: an access token is a bearer credential that no server-side
+     * check can retract mid-life, so its lifetime *is* the revocation lag —
+     * SDD 7.2 sizes the planned denylist as "a TTL equal to the remaining
+     * access-token life (max 10 minutes of exposure)". A longer default
+     * silently widens that window everywhere it is not overridden.
+     */
+    JWT_ACCESS_TTL_SECONDS: z.coerce.number().int().positive().default(600),
     JWT_REFRESH_TTL_DAYS: z.coerce.number().int().positive().default(30),
 
     // --- identity (Milestone 3 Step 5C: AES-256-GCM encryption for admin MFA secrets) ---
