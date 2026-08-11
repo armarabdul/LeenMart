@@ -2,6 +2,8 @@ import { NullLogger } from '@leen-mart/domain-kit';
 import type { SessionId } from '../../../../../src/modules/identity/domain/value-objects/session-id.value-object.js';
 import type { UserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 import type { OtpId } from '../../../../../src/modules/identity/domain/value-objects/otp-id.value-object.js';
+import type { MfaSecretId } from '../../../../../src/modules/identity/domain/value-objects/mfa-secret-id.value-object.js';
+import type { MfaChallengeId } from '../../../../../src/modules/identity/domain/value-objects/mfa-challenge-id.value-object.js';
 import type { PhoneNumber } from '../../../../../src/modules/identity/domain/value-objects/phone-number.value-object.js';
 import type { RoleName } from '../../../../../src/modules/identity/domain/value-objects/role.value-object.js';
 import type {
@@ -16,9 +18,13 @@ import type { UserRepository } from '../../../../../src/modules/identity/applica
 import type { OtpGenerator } from '../../../../../src/modules/identity/domain/services/otp-generator.service.js';
 import type { OtpHasher } from '../../../../../src/modules/identity/domain/services/otp-hasher.service.js';
 import type { OtpRepository } from '../../../../../src/modules/identity/domain/repositories/otp.repository.js';
+import type { MfaSecretRepository } from '../../../../../src/modules/identity/domain/repositories/mfa-secret.repository.js';
+import type { MfaChallengeRepository } from '../../../../../src/modules/identity/domain/repositories/mfa-challenge.repository.js';
 import type { RefreshToken } from '../../../../../src/modules/identity/domain/entities/refresh-token.entity.js';
 import type { User } from '../../../../../src/modules/identity/domain/entities/user.entity.js';
 import type { Otp } from '../../../../../src/modules/identity/domain/entities/otp.entity.js';
+import type { MfaSecret } from '../../../../../src/modules/identity/domain/entities/mfa-secret.entity.js';
+import type { MfaChallenge } from '../../../../../src/modules/identity/domain/entities/mfa-challenge.entity.js';
 import { PasswordHash } from '../../../../../src/modules/identity/domain/value-objects/password-hash.value-object.js';
 import { OtpCode } from '../../../../../src/modules/identity/domain/value-objects/otp-code.value-object.js';
 
@@ -172,6 +178,52 @@ export class FakeOtpHasher implements OtpHasher {
 
   verify(hash: string, rawCode: string): Promise<boolean> {
     return Promise.resolve(hash === `hashed:${rawCode}`);
+  }
+}
+
+export class InMemoryMfaSecretRepository implements MfaSecretRepository {
+  private readonly byId = new Map<MfaSecretId, MfaSecret>();
+
+  create(mfaSecret: MfaSecret): Promise<void> {
+    this.byId.set(mfaSecret.id, mfaSecret);
+    return Promise.resolve();
+  }
+
+  update(mfaSecret: MfaSecret): Promise<void> {
+    this.byId.set(mfaSecret.id, mfaSecret);
+    return Promise.resolve();
+  }
+
+  findById(id: MfaSecretId): Promise<MfaSecret | null> {
+    return Promise.resolve(this.byId.get(id) ?? null);
+  }
+
+  findByUserId(userId: UserId): Promise<MfaSecret | null> {
+    for (const secret of this.byId.values()) {
+      if (secret.userId === userId) return Promise.resolve(secret);
+    }
+    return Promise.resolve(null);
+  }
+}
+
+export class InMemoryMfaChallengeRepository implements MfaChallengeRepository {
+  private readonly byId = new Map<MfaChallengeId, MfaChallenge>();
+
+  create(mfaChallenge: MfaChallenge): Promise<void> {
+    this.byId.set(mfaChallenge.id, mfaChallenge);
+    return Promise.resolve();
+  }
+
+  update(mfaChallenge: MfaChallenge): Promise<void> {
+    this.byId.set(mfaChallenge.id, mfaChallenge);
+    return Promise.resolve();
+  }
+
+  findByTokenHash(tokenHash: string): Promise<MfaChallenge | null> {
+    for (const challenge of this.byId.values()) {
+      if (challenge.tokenHash === tokenHash) return Promise.resolve(challenge);
+    }
+    return Promise.resolve(null);
   }
 }
 

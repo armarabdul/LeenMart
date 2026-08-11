@@ -84,6 +84,7 @@ export const createApp = (container: Container): Express => {
 
   const identityModule = createIdentityModule({ prisma, env, clock, idGenerator, logger });
   app.use('/api/v1/identity', identityModule.router);
+  app.use('/api/v1/admin', identityModule.adminAuthRouter);
 
   // Shares identity's token verifier rather than minting a second one (SDD 5).
   const vendorModule = createVendorModule({

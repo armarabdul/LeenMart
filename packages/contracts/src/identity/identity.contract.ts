@@ -53,6 +53,24 @@ export const verifyOtpRequestSchema = z
   })
   .strict();
 
+/** POST /api/v1/admin/login — step 1 of admin sign-in (SDD 7.1: mandatory TOTP, always). Same shape as `loginRequestSchema`, kept distinct because the two are semantically different endpoints on different surfaces. */
+export const adminLoginStepOneRequestSchema = z
+  .object({
+    email: emailSchema,
+    password: z.string().min(1).max(128),
+  })
+  .strict();
+
+/**
+ * Never a session — only an opaque credential for step 2 (SDD 7.1). The
+ * client has no use for anything about the admin account at this point; it
+ * already knows the email it just submitted.
+ */
+export const adminLoginStepOneResponseSchema = z.object({
+  mfaChallengeToken: z.string(),
+  mfaChallengeTokenExpiresAt: isoDateTimeSchema,
+});
+
 export const authUserSchema = z.object({
   id: uuidSchema,
   email: emailSchema.optional(),
@@ -91,6 +109,8 @@ export const meResponseSchema = z.object({
 export type RoleDto = z.infer<typeof roleSchema>;
 export type RegisterCustomerRequest = z.infer<typeof registerCustomerRequestSchema>;
 export type LoginRequest = z.infer<typeof loginRequestSchema>;
+export type AdminLoginStepOneRequest = z.infer<typeof adminLoginStepOneRequestSchema>;
+export type AdminLoginStepOneResponse = z.infer<typeof adminLoginStepOneResponseSchema>;
 export type RefreshSessionRequest = z.infer<typeof refreshSessionRequestSchema>;
 export type LogoutRequest = z.infer<typeof logoutRequestSchema>;
 export type RequestOtpRequest = z.infer<typeof requestOtpRequestSchema>;
