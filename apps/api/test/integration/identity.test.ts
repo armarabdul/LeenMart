@@ -912,4 +912,97 @@ describe('identity endpoints', () => {
       await me(accessToken).expect(200);
     });
   });
+
+  describe('request context capture (SDD 18.4)', () => {
+    const PASSWORD = 'correct horse battery staple';
+
+    it('still returns requestId in the success envelope', async () => {
+      // The pre-existing consumer of the request context. Adding `ip` and
+      // `userAgent` alongside it must not disturb what SDD 9.3 puts on the wire.
+      const response = await registerCustomer(app, uniqueEmail('ctx-success'), PASSWORD).expect(
+        201,
+      );
+
+      const body = response.body as { meta?: { requestId?: string } };
+      expect(body.meta?.requestId).toEqual(expect.any(String) as unknown as string);
+    });
+
+    it('still returns requestId in the error envelope', async () => {
+      const response = await request(app)
+        .post('/api/v1/identity/login')
+        .send({ email: 'not-an-email' })
+        .expect(400);
+
+      expect((response.body as { error: { requestId: string } }).error.requestId).toEqual(
+        expect.any(String) as unknown as string,
+      );
+    });
+
+    it('never leaks the captured IP or user agent into a success response', async () => {
+      const response = await registerCustomer(app, uniqueEmail('ctx-leak'), PASSWORD)
+        .set('User-Agent', 'leen-mart-leak-probe/1.0')
+        .set('X-Forwarded-For', '203.0.113.7')
+        .expect(201);
+
+      const serialised = JSON.stringify(response.body);
+      expect(serialised).not.toContain('leen-mart-leak-probe');
+      expect(serialised).not.toContain('203.0.113.7');
+      expect(serialised).not.toContain('userAgent');
+      expect(serialised).not.toMatch(/"ip"/);
+    });
+
+    it('never leaks the captured IP or user agent into an error response', async () => {
+      const response = await request(app)
+        .post('/api/v1/identity/login')
+        .set('User-Agent', 'leen-mart-leak-probe/1.0')
+        .set('X-Forwarded-For', '203.0.113.7')
+        .send({ email: 'not-an-email' })
+        .expect(400);
+
+      const serialised = JSON.stringify(response.body);
+      expect(serialised).not.toContain('leen-mart-leak-probe');
+      expect(serialised).not.toContain('203.0.113.7');
+      expect(serialised).not.toContain('userAgent');
+    });
+
+    it('leaves authentication unchanged when a user agent is supplied', async () => {
+      const registered = await registerCustomer(app, uniqueEmail('ctx-auth'), PASSWORD)
+        .set('User-Agent', 'leen-mart-auth-probe/1.0')
+        .expect(201);
+      const { accessToken } = (registered.body as AuthSessionBody).data;
+
+      await request(app)
+        .get('/api/v1/identity/me')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .set('User-Agent', 'leen-mart-auth-probe/1.0')
+        .expect(200);
+    });
+
+    it('leaves authentication unchanged when no user agent is supplied', async () => {
+      // The null-user-agent path must not affect anything on the request.
+      const email = uniqueEmail('ctx-no-ua');
+      const registered = await registerCustomer(app, email, PASSWORD).expect(201);
+      const { accessToken } = (registered.body as AuthSessionBody).data;
+
+      const response = await request(app)
+        .get('/api/v1/identity/me')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+
+      expect((response.body as MeBody).data.id).toEqual(expect.any(String) as unknown as string);
+    });
+
+    it('leaves the rate-limit contract unchanged', async () => {
+      // The limiter derives its own IP key independently of the request
+      // context; capturing the IP here must not have disturbed it.
+      const response = await request(app)
+        .post('/api/v1/identity/login')
+        .set('User-Agent', 'leen-mart-rl-probe/1.0')
+        .send({ email: uniqueEmail('ctx-rl'), password: PASSWORD })
+        .expect(401);
+
+      expect(response.headers['x-ratelimit-limit']).toBeDefined();
+      expect(response.headers['x-ratelimit-remaining']).toBeDefined();
+    });
+  });
 });
