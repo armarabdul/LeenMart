@@ -16,6 +16,25 @@ import { createIdentityModule, type AccessTokenService } from './modules/identit
 import { createVendorModule } from './modules/vendor/index.js';
 
 /**
+ * Response headers a cross-origin browser client is allowed to read.
+ *
+ * SDD 9.2 makes the rate-limit headers part of the API contract, so they have
+ * to be listed here: an unexposed response header is invisible to `fetch`,
+ * which would leave a browser client unable to back off on anything but a
+ * bare 429. Both the `X-RateLimit-*` set SDD 9.2 names and draft-7's
+ * `RateLimit` header are exposed, matching what the limiter actually sends.
+ */
+const EXPOSED_HEADERS = [
+  'X-Request-Id',
+  'X-RateLimit-Limit',
+  'X-RateLimit-Remaining',
+  'X-RateLimit-Reset',
+  'RateLimit',
+  'RateLimit-Policy',
+  'Retry-After',
+];
+
+/**
  * Mounts every module beyond `identity` itself. Split out of `createApp`
  * purely to stay under this file's max-lines-per-function budget — each of
  * these modules shares identity's token verifier rather than minting a
@@ -96,7 +115,7 @@ export const createApp = (container: Container): Express => {
       credentials: true,
       methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id', 'Idempotency-Key'],
-      exposedHeaders: ['X-Request-Id', 'RateLimit', 'RateLimit-Policy', 'Retry-After'],
+      exposedHeaders: EXPOSED_HEADERS,
       maxAge: 86_400,
     }),
   );

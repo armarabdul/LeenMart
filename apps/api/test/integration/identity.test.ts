@@ -336,6 +336,44 @@ describe('identity endpoints', () => {
         .expect(429);
     });
 
+    it('answers a 429 with the same error envelope as every other failure (SDD 9.3)', async () => {
+      const phone = uniquePhone();
+      await requestOtp(app, phone).expect(200);
+
+      const blocked = await requestOtp(app, phone).expect(429);
+
+      // A short-circuited refusal used to be the one response shape that
+      // carried no requestId — precisely the response a client most needs to
+      // correlate to a log line.
+      const body = blocked.body as ErrorBody & {
+        error: { requestId?: string; timestamp?: string };
+      };
+      expect(body.error.code).toBe('RATE_LIMIT_EXCEEDED');
+      expect(body.error.message).toEqual(expect.any(String));
+      expect(body.error.requestId).toEqual(expect.any(String));
+      expect(body.error.requestId).toBe(blocked.headers['x-request-id']);
+      expect(new Date(body.error.timestamp ?? '').toISOString()).toBe(body.error.timestamp);
+    });
+
+    it('sends the rate-limit headers SDD 9.2 names', async () => {
+      const phone = uniquePhone();
+      await requestOtp(app, phone).expect(200);
+
+      const blocked = await requestOtp(app, phone).expect(429);
+
+      expect(blocked.headers['x-ratelimit-limit']).toBe('1');
+      expect(blocked.headers['x-ratelimit-remaining']).toBe('0');
+      expect(blocked.headers['x-ratelimit-reset']).toEqual(expect.any(String));
+      expect(Number(blocked.headers['retry-after'])).toBeGreaterThan(0);
+    });
+
+    it('reports the remaining budget on a request that is still allowed', async () => {
+      const response = await requestOtp(app, uniquePhone()).expect(200);
+
+      expect(response.headers['x-ratelimit-limit']).toEqual(expect.any(String));
+      expect(response.headers['x-ratelimit-remaining']).toEqual(expect.any(String));
+    });
+
     it('leaves unbudgeted endpoints alone', async () => {
       // SDD 23.3 gives `register` and `logout` no per-endpoint budget; only the
       // global 1,000/min ceiling applies.
