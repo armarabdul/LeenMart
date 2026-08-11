@@ -84,6 +84,11 @@ export class AdminLoginStepOneUseCase {
       throw new InvalidCredentialsError();
     }
 
+    // Only after the password verifies (SDD 7.2, SEC-15). Refusing here stops
+    // a shut-out administrator before a challenge is even minted, so step 2
+    // has nothing to consume.
+    user.assertCanAuthenticate();
+
     const mfaSecret = await mfaSecretRepository.findByUserId(user.id);
     if (!mfaSecret?.isConfirmed()) {
       logger.warn({ userId: user.id }, 'Admin login step 1 refused: no confirmed MFA secret');

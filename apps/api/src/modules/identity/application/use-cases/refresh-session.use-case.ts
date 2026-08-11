@@ -79,6 +79,17 @@ export class RefreshSessionUseCase {
       throw new InvalidRefreshTokenError();
     }
 
+    // The token is already proven valid at this point, which is this path's
+    // credential equivalent — so this is the "after credentials" position and
+    // discloses nothing to anyone who did not already hold a live session.
+    //
+    // This is the check SDD 7.2 is really about: revoking a suspended
+    // account's sessions bounds nothing if the refresh token it is still
+    // holding keeps minting new ones. Without it, "a suspended vendor with a
+    // 7-day JWT would otherwise keep trading for a week" describes this
+    // codebase.
+    user.assertCanAuthenticate();
+
     // The new session continues this lineage rather than starting one, so a
     // reuse detected many rotations from now still reaches every descendant.
     const session = await sessionIssuer.issueFor(user, existing.familyId);

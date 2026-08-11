@@ -126,6 +126,35 @@ export class User {
   }
 
   /**
+   * Refuses a shut-out account (SDD 7.2's revocation model, which exists so
+   * that "a suspended vendor with a 7-day JWT would otherwise keep trading
+   * for a week" cannot happen).
+   *
+   * Every path that hands out a session must call this. Revoking sessions
+   * only ends the ones already issued; without this check the same account
+   * simply authenticates again and is handed a fresh one, which makes
+   * suspension a database annotation rather than a control.
+   *
+   * SUSPENDED and LOCKED only — the same two states `activate()` has always
+   * refused. PENDING is deliberately allowed through: a phone signup starts
+   * there and is activated *by* authenticating (`verifyPhone`), so blocking
+   * it would break the OTP flow rather than protect anything.
+   *
+   * Callers must invoke this **after** verifying credentials. Before them, a
+   * distinct 403 would tell an unauthenticated caller which accounts exist
+   * and are suspended (SEC-15); after them, it tells that only to someone who
+   * already proved they hold the account's credentials.
+   */
+  assertCanAuthenticate(): void {
+    if (this.status.equals(UserStatus.SUSPENDED)) {
+      throw new AccountSuspendedError();
+    }
+    if (this.status.equals(UserStatus.LOCKED)) {
+      throw new AccountLockedError();
+    }
+  }
+
+  /**
    * The one stated invariant: suspended (and, by the same reasoning, locked)
    * users cannot become ACTIVE directly. The only way out of either state is
    * `reinstate()`, which lands on PENDING — a separate, explicit `activate()`
@@ -133,12 +162,7 @@ export class User {
    * directly" true rather than just documented.
    */
   activate(now: Date): User {
-    if (this.status.equals(UserStatus.SUSPENDED)) {
-      throw new AccountSuspendedError();
-    }
-    if (this.status.equals(UserStatus.LOCKED)) {
-      throw new AccountLockedError();
-    }
+    this.assertCanAuthenticate();
     return new User({ ...this.props, status: UserStatus.ACTIVE, updatedAt: now });
   }
 
@@ -149,12 +173,7 @@ export class User {
    * shut out.
    */
   verifyPhone(now: Date): User {
-    if (this.status.equals(UserStatus.SUSPENDED)) {
-      throw new AccountSuspendedError();
-    }
-    if (this.status.equals(UserStatus.LOCKED)) {
-      throw new AccountLockedError();
-    }
+    this.assertCanAuthenticate();
     return new User({
       ...this.props,
       phoneVerifiedAt: now,

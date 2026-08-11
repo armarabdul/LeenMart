@@ -116,6 +116,11 @@ export class AdminLoginStepTwoUseCase {
       throw new InvalidCredentialsError();
     }
 
+    // Only after the TOTP verifies, and deliberately after the challenge has
+    // been consumed (SDD 7.2, SEC-15): a shut-out administrator must not be
+    // able to replay the same challenge, so it is burned either way.
+    user.assertCanAuthenticate();
+
     logger.info({ userId: user.id }, 'Admin login step 2 succeeded: session issued');
     return sessionIssuer.issueFor(user);
   }

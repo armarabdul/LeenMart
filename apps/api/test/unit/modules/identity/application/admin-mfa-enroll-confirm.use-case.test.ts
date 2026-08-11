@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FixedClock, UuidV7Generator } from '@leen-mart/domain-kit';
 import { AdminMfaEnrollConfirmUseCase } from '../../../../../src/modules/identity/application/use-cases/admin-mfa-enroll-confirm.use-case.js';
-import { InvalidCredentialsError } from '../../../../../src/modules/identity/domain/errors/identity-errors.js';
+import {
+  AccountLockedError,
+  AccountSuspendedError,
+  InvalidCredentialsError,
+} from '../../../../../src/modules/identity/domain/errors/identity-errors.js';
 import { User } from '../../../../../src/modules/identity/domain/entities/user.entity.js';
 import { MfaSecret } from '../../../../../src/modules/identity/domain/entities/mfa-secret.entity.js';
 import {
@@ -342,5 +346,118 @@ describe('AdminMfaEnrollConfirmUseCase', () => {
     expect(serialized).not.toContain(PLAINTEXT_SECRET);
     expect(serialized).not.toContain(VALID_TOTP);
     expect(serialized).not.toContain(ADMIN_PASSWORD);
+  });
+
+  describe('shut-out accounts (SDD 7.2)', () => {
+    /** Re-saves a seeded admin in a shut-out state, as an admin suspension action would. */
+    const setStatus = async (
+      userRepository: InMemoryUserRepository,
+      userId: ReturnType<typeof toUserId>,
+      status: UserStatus,
+    ): Promise<void> => {
+      const admin = await userRepository.findById(userId);
+      if (!admin) throw new Error('seeded admin missing');
+      await userRepository.update(
+        User.reconstitute({
+          id: admin.id,
+          ...(admin.email === undefined ? {} : { email: admin.email }),
+          ...(admin.passwordHash === undefined ? {} : { passwordHash: admin.passwordHash }),
+          role: admin.role,
+          status,
+          createdAt: admin.createdAt,
+          updatedAt: admin.updatedAt,
+        }),
+      );
+    };
+
+    it('refuses a suspended admin who supplied both a correct password and a correct TOTP', async () => {
+      const { useCase, userRepository, mfaSecretRepository } = setup();
+      const { userId, email } = await seedAdminWithPendingSecret(
+        userRepository,
+        mfaSecretRepository,
+      );
+      await setStatus(userRepository, userId, UserStatus.SUSPENDED);
+
+      await expect(
+        useCase.execute({ email, password: ADMIN_PASSWORD, totpCode: VALID_TOTP }),
+      ).rejects.toBeInstanceOf(AccountSuspendedError);
+    });
+
+    it('refuses a locked admin who supplied both a correct password and a correct TOTP', async () => {
+      const { useCase, userRepository, mfaSecretRepository } = setup();
+      const { userId, email } = await seedAdminWithPendingSecret(
+        userRepository,
+        mfaSecretRepository,
+      );
+      await setStatus(userRepository, userId, UserStatus.LOCKED);
+
+      await expect(
+        useCase.execute({ email, password: ADMIN_PASSWORD, totpCode: VALID_TOTP }),
+      ).rejects.toBeInstanceOf(AccountLockedError);
+    });
+
+    it('never reveals status to a caller with the wrong password (SEC-15)', async () => {
+      const { useCase, userRepository, mfaSecretRepository } = setup();
+      const { userId, email } = await seedAdminWithPendingSecret(
+        userRepository,
+        mfaSecretRepository,
+      );
+      await setStatus(userRepository, userId, UserStatus.SUSPENDED);
+
+      await expect(
+        useCase.execute({ email, password: 'wrong', totpCode: VALID_TOTP }),
+      ).rejects.toBeInstanceOf(InvalidCredentialsError);
+    });
+
+    it('never reveals status to a caller with the wrong TOTP (SEC-15)', async () => {
+      const { useCase, userRepository, mfaSecretRepository } = setup();
+      const { userId, email } = await seedAdminWithPendingSecret(
+        userRepository,
+        mfaSecretRepository,
+      );
+      await setStatus(userRepository, userId, UserStatus.LOCKED);
+
+      await expect(
+        useCase.execute({ email, password: ADMIN_PASSWORD, totpCode: '000000' }),
+      ).rejects.toBeInstanceOf(InvalidCredentialsError);
+    });
+
+    it('leaves the secret unconfirmed and issues no session for a shut-out admin', async () => {
+      // Enrollment must not become a way around suspension: neither the
+      // factor nor the session it would return may survive the refusal.
+      const { useCase, userRepository, mfaSecretRepository, refreshTokenRepository } = setup();
+      const { userId, email } = await seedAdminWithPendingSecret(
+        userRepository,
+        mfaSecretRepository,
+      );
+      await setStatus(userRepository, userId, UserStatus.SUSPENDED);
+      const issueRefreshToken = vi.spyOn(refreshTokenRepository, 'create');
+
+      await expect(
+        useCase.execute({ email, password: ADMIN_PASSWORD, totpCode: VALID_TOTP }),
+      ).rejects.toBeInstanceOf(AccountSuspendedError);
+
+      const secret = await mfaSecretRepository.findByUserId(userId);
+      expect(secret?.isConfirmed()).toBe(false);
+      expect(issueRefreshToken).not.toHaveBeenCalled();
+    });
+
+    it('still confirms enrollment for an active admin', async () => {
+      const { useCase, userRepository, mfaSecretRepository } = setup();
+      const { userId, email } = await seedAdminWithPendingSecret(
+        userRepository,
+        mfaSecretRepository,
+      );
+
+      const session = await useCase.execute({
+        email,
+        password: ADMIN_PASSWORD,
+        totpCode: VALID_TOTP,
+      });
+
+      expect(session.accessToken).toBe('access-token');
+      const secret = await mfaSecretRepository.findByUserId(userId);
+      expect(secret?.isConfirmed()).toBe(true);
+    });
   });
 });

@@ -3,7 +3,11 @@ import { FixedClock, UuidV4Generator } from '@leen-mart/domain-kit';
 import { SessionIssuer } from '../../../../../src/modules/identity/application/services/session-issuer.service.js';
 import { LoginUseCase } from '../../../../../src/modules/identity/application/use-cases/login.use-case.js';
 import { RegisterCustomerUseCase } from '../../../../../src/modules/identity/application/use-cases/register-customer.use-case.js';
-import { InvalidCredentialsError } from '../../../../../src/modules/identity/domain/errors/identity-errors.js';
+import {
+  AccountLockedError,
+  AccountSuspendedError,
+  InvalidCredentialsError,
+} from '../../../../../src/modules/identity/domain/errors/identity-errors.js';
 import { User } from '../../../../../src/modules/identity/domain/entities/user.entity.js';
 import {
   ADMIN_ROLE_NAMES,
@@ -199,5 +203,79 @@ describe('LoginUseCase', () => {
         expect(session.user.role.name).toBe(roleName);
       },
     );
+  });
+
+  describe('shut-out accounts (SDD 7.2)', () => {
+    const CUSTOMER_PASSWORD = 'correct horse battery staple';
+
+    const seedCustomer = async (
+      userRepository: InMemoryUserRepository,
+      email: string,
+      status: UserStatus,
+    ): Promise<void> => {
+      await userRepository.create(
+        User.reconstitute({
+          id: toUserId('00000000-0000-7000-8000-0000000000d3'),
+          email,
+          passwordHash: PasswordHash.create(`hashed:${CUSTOMER_PASSWORD}`),
+          role: Role.CUSTOMER,
+          status,
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+        }),
+      );
+    };
+
+    it('refuses a suspended account holding the correct password', async () => {
+      const { loginUseCase, userRepository } = setup();
+      const email = 'suspended@example.com';
+      await seedCustomer(userRepository, email, UserStatus.SUSPENDED);
+
+      await expect(
+        loginUseCase.execute({ email, password: CUSTOMER_PASSWORD }),
+      ).rejects.toBeInstanceOf(AccountSuspendedError);
+    });
+
+    it('refuses a locked account holding the correct password', async () => {
+      const { loginUseCase, userRepository } = setup();
+      const email = 'locked@example.com';
+      await seedCustomer(userRepository, email, UserStatus.LOCKED);
+
+      await expect(
+        loginUseCase.execute({ email, password: CUSTOMER_PASSWORD }),
+      ).rejects.toBeInstanceOf(AccountLockedError);
+    });
+
+    it('never reveals suspension to a caller with the wrong password (SEC-15)', async () => {
+      // The whole point of checking status *after* the password: a distinct
+      // 403 before it would let anyone enumerate which accounts are suspended.
+      const { loginUseCase, userRepository } = setup();
+      const email = 'suspended@example.com';
+      await seedCustomer(userRepository, email, UserStatus.SUSPENDED);
+
+      await expect(
+        loginUseCase.execute({ email, password: 'not the right password' }),
+      ).rejects.toBeInstanceOf(InvalidCredentialsError);
+    });
+
+    it('never reveals a lock to a caller with the wrong password (SEC-15)', async () => {
+      const { loginUseCase, userRepository } = setup();
+      const email = 'locked@example.com';
+      await seedCustomer(userRepository, email, UserStatus.LOCKED);
+
+      await expect(
+        loginUseCase.execute({ email, password: 'not the right password' }),
+      ).rejects.toBeInstanceOf(InvalidCredentialsError);
+    });
+
+    it('still issues a session for an active account', async () => {
+      const { loginUseCase, userRepository } = setup();
+      const email = 'active@example.com';
+      await seedCustomer(userRepository, email, UserStatus.ACTIVE);
+
+      const session = await loginUseCase.execute({ email, password: CUSTOMER_PASSWORD });
+
+      expect(session.user.email).toBe(email);
+    });
   });
 });

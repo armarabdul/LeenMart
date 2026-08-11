@@ -641,4 +641,140 @@ describe('admin auth endpoints', () => {
       expect(rows).toHaveLength(1);
     });
   });
+
+  describe('shut-out admin accounts (SDD 7.2)', () => {
+    /** Suspends/locks a seeded admin directly, as an admin suspension action would. */
+    const setStatus = async (email: string, status: 'SUSPENDED' | 'LOCKED'): Promise<void> => {
+      await container.prisma.user.update({ where: { email }, data: { status } });
+    };
+
+    it('refuses step 1 for a suspended admin holding the correct password', async () => {
+      const email = await seedEnrolledAdmin('step1-suspended');
+      await setStatus(email, 'SUSPENDED');
+
+      const response = await adminLoginStepOne(app, email, ADMIN_PASSWORD).expect(403);
+
+      expect((response.body as ErrorBody).error.code).toBe('ACCOUNT_SUSPENDED');
+    });
+
+    it('refuses step 1 for a locked admin holding the correct password', async () => {
+      const email = await seedEnrolledAdmin('step1-locked');
+      await setStatus(email, 'LOCKED');
+
+      const response = await adminLoginStepOne(app, email, ADMIN_PASSWORD).expect(403);
+
+      expect((response.body as ErrorBody).error.code).toBe('ACCOUNT_LOCKED');
+    });
+
+    it('answers a wrong password with the uniform 401, whatever the status (SEC-15)', async () => {
+      const email = await seedEnrolledAdmin('step1-suspended-wrong-pw');
+      await setStatus(email, 'SUSPENDED');
+
+      const response = await adminLoginStepOne(app, email, 'wrong-password').expect(401);
+
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_CREDENTIALS');
+    });
+
+    it('refuses step 2 for an admin suspended after the challenge was issued', async () => {
+      // The realistic ordering: the challenge is minted while the account is
+      // still healthy, and suspension lands before the second factor arrives.
+      const { email, secret } = await seedEnrolledAdminWithKnownSecret('step2-suspended');
+      const stepOne = await adminLoginStepOne(app, email, ADMIN_PASSWORD).expect(200);
+      const { mfaChallengeToken } = (stepOne.body as StepOneBody).data;
+      await setStatus(email, 'SUSPENDED');
+
+      const response = await adminMfaVerify(
+        app,
+        mfaChallengeToken,
+        await currentTotpCode(secret),
+      ).expect(403);
+
+      expect((response.body as ErrorBody).error.code).toBe('ACCOUNT_SUSPENDED');
+    });
+
+    it('refuses step 2 for an admin locked after the challenge was issued', async () => {
+      const { email, secret } = await seedEnrolledAdminWithKnownSecret('step2-locked');
+      const stepOne = await adminLoginStepOne(app, email, ADMIN_PASSWORD).expect(200);
+      const { mfaChallengeToken } = (stepOne.body as StepOneBody).data;
+      await setStatus(email, 'LOCKED');
+
+      const response = await adminMfaVerify(
+        app,
+        mfaChallengeToken,
+        await currentTotpCode(secret),
+      ).expect(403);
+
+      expect((response.body as ErrorBody).error.code).toBe('ACCOUNT_LOCKED');
+    });
+
+    it('answers a wrong TOTP with the uniform 401, whatever the status (SEC-15)', async () => {
+      const { email } = await seedEnrolledAdminWithKnownSecret('step2-suspended-wrong-totp');
+      const stepOne = await adminLoginStepOne(app, email, ADMIN_PASSWORD).expect(200);
+      const { mfaChallengeToken } = (stepOne.body as StepOneBody).data;
+      await setStatus(email, 'SUSPENDED');
+
+      const response = await adminMfaVerify(app, mfaChallengeToken, '000000').expect(401);
+
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_CREDENTIALS');
+    });
+
+    it('issues no session to a shut-out admin who completes both factors', async () => {
+      const { email, secret } = await seedEnrolledAdminWithKnownSecret('step2-no-session');
+      const stepOne = await adminLoginStepOne(app, email, ADMIN_PASSWORD).expect(200);
+      const { mfaChallengeToken } = (stepOne.body as StepOneBody).data;
+      await setStatus(email, 'SUSPENDED');
+
+      await adminMfaVerify(app, mfaChallengeToken, await currentTotpCode(secret)).expect(403);
+
+      const admin = await userRepository.findByEmail(email);
+      if (!admin) throw new Error('fixture admin was not persisted');
+      const sessions = await container.prisma.refreshToken.findMany({
+        where: { userId: admin.id },
+      });
+      expect(sessions).toHaveLength(0);
+    });
+
+    it('refuses MFA enrollment confirmation for a shut-out admin, leaving the factor unconfirmed', async () => {
+      // Enrollment ends in a session, so it must honour suspension too —
+      // otherwise enrolling a factor would be a way around being shut out.
+      const email = await seedUnenrolledAdmin('enroll-confirm-suspended');
+      const enrolled = await adminMfaEnroll(app, email, ADMIN_PASSWORD).expect(200);
+      const { secret } = (enrolled.body as EnrollBody).data;
+      await setStatus(email, 'SUSPENDED');
+
+      const response = await adminMfaEnrollConfirm(
+        app,
+        email,
+        ADMIN_PASSWORD,
+        await currentTotpCode(secret),
+      ).expect(403);
+
+      expect((response.body as ErrorBody).error.code).toBe('ACCOUNT_SUSPENDED');
+      const admin = await userRepository.findByEmail(email);
+      if (!admin) throw new Error('fixture admin was not persisted');
+      const stored = await mfaSecretRepository.findByUserId(admin.id);
+      expect(stored?.isConfirmed()).toBe(false);
+    });
+
+    it('answers a wrong enrollment password with the uniform 401, whatever the status (SEC-15)', async () => {
+      const email = await seedUnenrolledAdmin('enroll-confirm-wrong-pw');
+      await adminMfaEnroll(app, email, ADMIN_PASSWORD).expect(200);
+      await setStatus(email, 'SUSPENDED');
+
+      const response = await adminMfaEnrollConfirm(app, email, 'wrong-password', '000000').expect(
+        401,
+      );
+
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_CREDENTIALS');
+    });
+
+    it('leaves an active admin completing both steps normally', async () => {
+      const { email, secret } = await seedEnrolledAdminWithKnownSecret('active-unaffected');
+
+      const stepOne = await adminLoginStepOne(app, email, ADMIN_PASSWORD).expect(200);
+      const { mfaChallengeToken } = (stepOne.body as StepOneBody).data;
+
+      await adminMfaVerify(app, mfaChallengeToken, await currentTotpCode(secret)).expect(200);
+    });
+  });
 });

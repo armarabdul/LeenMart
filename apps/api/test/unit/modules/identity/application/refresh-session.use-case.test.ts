@@ -4,7 +4,13 @@ import { SessionIssuer } from '../../../../../src/modules/identity/application/s
 import { LogoutUseCase } from '../../../../../src/modules/identity/application/use-cases/logout.use-case.js';
 import { RefreshSessionUseCase } from '../../../../../src/modules/identity/application/use-cases/refresh-session.use-case.js';
 import { RegisterCustomerUseCase } from '../../../../../src/modules/identity/application/use-cases/register-customer.use-case.js';
-import { InvalidRefreshTokenError } from '../../../../../src/modules/identity/domain/errors/identity-errors.js';
+import { User } from '../../../../../src/modules/identity/domain/entities/user.entity.js';
+import { UserStatus } from '../../../../../src/modules/identity/domain/value-objects/user-status.value-object.js';
+import {
+  AccountLockedError,
+  AccountSuspendedError,
+  InvalidRefreshTokenError,
+} from '../../../../../src/modules/identity/domain/errors/identity-errors.js';
 import {
   FakeAccessTokenService,
   FakePasswordHasher,
@@ -21,6 +27,7 @@ const setup = (): {
   refreshUseCase: RefreshSessionUseCase;
   logoutUseCase: LogoutUseCase;
   refreshTokenRepository: InMemoryRefreshTokenRepository;
+  userRepository: InMemoryUserRepository;
   clock: FixedClock;
 } => {
   const clock = new FixedClock(new Date('2026-01-01T00:00:00.000Z'));
@@ -65,7 +72,14 @@ const setup = (): {
     logger: nullLogger,
   });
 
-  return { registerUseCase, refreshUseCase, logoutUseCase, refreshTokenRepository, clock };
+  return {
+    registerUseCase,
+    refreshUseCase,
+    logoutUseCase,
+    refreshTokenRepository,
+    userRepository,
+    clock,
+  };
 };
 
 /** How many of the stored sessions are still usable — the blast radius assertions read this. */
@@ -268,6 +282,102 @@ describe('RefreshSessionUseCase', () => {
       expect(deviceBRotated.refreshTokenFamilyId).toBe(deviceB.refreshTokenFamilyId);
       expect(deviceBRotated.user.email).toBe('second@example.com');
       expect(clock.now()).toBeInstanceOf(Date);
+    });
+  });
+  describe('shut-out accounts (SDD 7.2)', () => {
+    /** Suspends the account behind an already-issued session, as an admin action would. */
+    const setStatus = async (
+      userRepository: InMemoryUserRepository,
+      email: string,
+      status: UserStatus,
+    ): Promise<void> => {
+      const user = await userRepository.findByEmail(email);
+      if (!user) throw new Error(`no seeded user for ${email}`);
+      await userRepository.update(
+        User.reconstitute({
+          id: user.id,
+          ...(user.email === undefined ? {} : { email: user.email }),
+          ...(user.passwordHash === undefined ? {} : { passwordHash: user.passwordHash }),
+          role: user.role,
+          status,
+          createdAt: user.createdAt,
+          updatedAt: user.updatedAt,
+        }),
+      );
+    };
+
+    it('refuses to renew a suspended account holding a valid refresh token', async () => {
+      // The gap SDD 7.2 names: revoking the sessions a suspended account
+      // already had bounds nothing if its live refresh token keeps minting
+      // new ones.
+      const { registerUseCase, refreshUseCase, userRepository } = setup();
+      const email = 'shopper@example.com';
+      const initial = await registerUseCase.execute({
+        email,
+        password: 'correct horse battery',
+      });
+
+      await setStatus(userRepository, email, UserStatus.SUSPENDED);
+
+      await expect(
+        refreshUseCase.execute({ refreshToken: initial.refreshToken }),
+      ).rejects.toBeInstanceOf(AccountSuspendedError);
+    });
+
+    it('refuses to renew a locked account holding a valid refresh token', async () => {
+      const { registerUseCase, refreshUseCase, userRepository } = setup();
+      const email = 'shopper@example.com';
+      const initial = await registerUseCase.execute({
+        email,
+        password: 'correct horse battery',
+      });
+
+      await setStatus(userRepository, email, UserStatus.LOCKED);
+
+      await expect(
+        refreshUseCase.execute({ refreshToken: initial.refreshToken }),
+      ).rejects.toBeInstanceOf(AccountLockedError);
+    });
+
+    it('refuses every later rotation too, not just the first', async () => {
+      const { registerUseCase, refreshUseCase, userRepository } = setup();
+      const email = 'shopper@example.com';
+      const initial = await registerUseCase.execute({
+        email,
+        password: 'correct horse battery',
+      });
+      const rotated = await refreshUseCase.execute({ refreshToken: initial.refreshToken });
+
+      await setStatus(userRepository, email, UserStatus.SUSPENDED);
+
+      await expect(
+        refreshUseCase.execute({ refreshToken: rotated.refreshToken }),
+      ).rejects.toBeInstanceOf(AccountSuspendedError);
+    });
+
+    it('answers an invalid token before it answers account status', async () => {
+      // Status is disclosed only to a caller who already holds a live
+      // session; an unknown token still gets the uniform token error.
+      const { registerUseCase, refreshUseCase, userRepository } = setup();
+      const email = 'shopper@example.com';
+      await registerUseCase.execute({ email, password: 'correct horse battery' });
+      await setStatus(userRepository, email, UserStatus.SUSPENDED);
+
+      await expect(refreshUseCase.execute({ refreshToken: 'never-issued' })).rejects.toBeInstanceOf(
+        InvalidRefreshTokenError,
+      );
+    });
+
+    it('still renews an active account', async () => {
+      const { registerUseCase, refreshUseCase } = setup();
+      const initial = await registerUseCase.execute({
+        email: 'shopper@example.com',
+        password: 'correct horse battery',
+      });
+
+      const rotated = await refreshUseCase.execute({ refreshToken: initial.refreshToken });
+
+      expect(rotated.refreshToken).not.toBe(initial.refreshToken);
     });
   });
 });

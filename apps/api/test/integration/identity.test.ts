@@ -595,4 +595,117 @@ describe('identity endpoints', () => {
       expect((response.body as ErrorBody).error.code).toBe('INVALID_ACCESS_TOKEN');
     });
   });
+
+  describe('shut-out accounts (SDD 7.2)', () => {
+    const PASSWORD = 'correct horse battery staple';
+
+    /** Suspends/locks a registered account directly, as an admin action would. */
+    const setStatus = async (email: string, status: 'SUSPENDED' | 'LOCKED'): Promise<void> => {
+      await container.prisma.user.update({ where: { email }, data: { status } });
+    };
+
+    const registerAndShutOut = async (
+      label: string,
+      status: 'SUSPENDED' | 'LOCKED',
+    ): Promise<{ email: string; refreshToken: string }> => {
+      const email = uniqueEmail(label);
+      const registered = await registerCustomer(app, email, PASSWORD).expect(201);
+      const { refreshToken } = (registered.body as AuthSessionBody).data;
+      await setStatus(email, status);
+      return { email, refreshToken };
+    };
+
+    it('refuses login for a suspended account holding the correct password', async () => {
+      const { email } = await registerAndShutOut('login-suspended', 'SUSPENDED');
+
+      const response = await request(app)
+        .post('/api/v1/identity/login')
+        .send({ email, password: PASSWORD })
+        .expect(403);
+
+      expect((response.body as ErrorBody).error.code).toBe('ACCOUNT_SUSPENDED');
+    });
+
+    it('refuses login for a locked account holding the correct password', async () => {
+      const { email } = await registerAndShutOut('login-locked', 'LOCKED');
+
+      const response = await request(app)
+        .post('/api/v1/identity/login')
+        .send({ email, password: PASSWORD })
+        .expect(403);
+
+      expect((response.body as ErrorBody).error.code).toBe('ACCOUNT_LOCKED');
+    });
+
+    it('answers a wrong password with 401 even when the account is suspended (SEC-15)', async () => {
+      // The status check sits after the password check precisely so this
+      // endpoint never becomes a way to enumerate suspended accounts.
+      const { email } = await registerAndShutOut('login-suspended-wrong-pw', 'SUSPENDED');
+
+      const response = await request(app)
+        .post('/api/v1/identity/login')
+        .send({ email, password: 'definitely not the password' })
+        .expect(401);
+
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_CREDENTIALS');
+    });
+
+    it('answers a wrong password with 401 even when the account is locked (SEC-15)', async () => {
+      const { email } = await registerAndShutOut('login-locked-wrong-pw', 'LOCKED');
+
+      const response = await request(app)
+        .post('/api/v1/identity/login')
+        .send({ email, password: 'definitely not the password' })
+        .expect(401);
+
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_CREDENTIALS');
+    });
+
+    it('refuses to refresh a suspended account still holding a valid refresh token', async () => {
+      // The gap SDD 7.2 names: revoking existing sessions bounds nothing if
+      // the live refresh token keeps minting replacements.
+      const { refreshToken } = await registerAndShutOut('refresh-suspended', 'SUSPENDED');
+
+      const response = await request(app)
+        .post('/api/v1/identity/refresh')
+        .send({ refreshToken })
+        .expect(403);
+
+      expect((response.body as ErrorBody).error.code).toBe('ACCOUNT_SUSPENDED');
+    });
+
+    it('refuses to refresh a locked account still holding a valid refresh token', async () => {
+      const { refreshToken } = await registerAndShutOut('refresh-locked', 'LOCKED');
+
+      const response = await request(app)
+        .post('/api/v1/identity/refresh')
+        .send({ refreshToken })
+        .expect(403);
+
+      expect((response.body as ErrorBody).error.code).toBe('ACCOUNT_LOCKED');
+    });
+
+    it('still answers an unknown refresh token uniformly, whatever the account status', async () => {
+      await registerAndShutOut('refresh-unknown-token', 'SUSPENDED');
+
+      const response = await request(app)
+        .post('/api/v1/identity/refresh')
+        .send({ refreshToken: 'never-issued-token' })
+        .expect(401);
+
+      expect((response.body as ErrorBody).error.code).toBe('INVALID_REFRESH_TOKEN');
+    });
+
+    it('leaves an active account logging in and refreshing normally', async () => {
+      const email = uniqueEmail('active-unaffected');
+      const registered = await registerCustomer(app, email, PASSWORD).expect(201);
+      const { refreshToken } = (registered.body as AuthSessionBody).data;
+
+      await request(app)
+        .post('/api/v1/identity/login')
+        .send({ email, password: PASSWORD })
+        .expect(200);
+      await request(app).post('/api/v1/identity/refresh').send({ refreshToken }).expect(200);
+    });
+  });
 });

@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FixedClock, UuidV7Generator } from '@leen-mart/domain-kit';
 import { AdminLoginStepTwoUseCase } from '../../../../../src/modules/identity/application/use-cases/admin-login-step-two.use-case.js';
-import { InvalidCredentialsError } from '../../../../../src/modules/identity/domain/errors/identity-errors.js';
+import {
+  AccountLockedError,
+  AccountSuspendedError,
+  InvalidCredentialsError,
+} from '../../../../../src/modules/identity/domain/errors/identity-errors.js';
 import { User } from '../../../../../src/modules/identity/domain/entities/user.entity.js';
 import { MfaSecret } from '../../../../../src/modules/identity/domain/entities/mfa-secret.entity.js';
 import { MfaChallenge } from '../../../../../src/modules/identity/domain/entities/mfa-challenge.entity.js';
 import { Role } from '../../../../../src/modules/identity/domain/value-objects/role.value-object.js';
+import { UserStatus } from '../../../../../src/modules/identity/domain/value-objects/user-status.value-object.js';
 import { PasswordHash } from '../../../../../src/modules/identity/domain/value-objects/password-hash.value-object.js';
 import { toUserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 import { toMfaSecretId } from '../../../../../src/modules/identity/domain/value-objects/mfa-secret-id.value-object.js';
@@ -403,5 +408,88 @@ describe('AdminLoginStepTwoUseCase', () => {
     const serialized = JSON.stringify(recordedCalls);
     expect(serialized).not.toContain('the-plaintext-secret');
     expect(serialized).not.toContain(VALID_TOTP);
+  });
+  describe('shut-out accounts (SDD 7.2)', () => {
+    const suspendSeeded = async (
+      userRepository: InMemoryUserRepository,
+      userId: ReturnType<typeof toUserId>,
+      status: UserStatus,
+    ): Promise<void> => {
+      const admin = await userRepository.findById(userId);
+      if (!admin) throw new Error('seeded admin missing');
+      await userRepository.update(
+        User.reconstitute({
+          id: admin.id,
+          ...(admin.email === undefined ? {} : { email: admin.email }),
+          ...(admin.passwordHash === undefined ? {} : { passwordHash: admin.passwordHash }),
+          role: admin.role,
+          status,
+          createdAt: admin.createdAt,
+          updatedAt: admin.updatedAt,
+        }),
+      );
+    };
+
+    it('refuses a suspended admin who supplied a correct TOTP', async () => {
+      const { useCase, userRepository, mfaSecretRepository, mfaChallengeRepository } = setup();
+      const { userId } = await seedAdminWithChallenge(
+        userRepository,
+        mfaSecretRepository,
+        mfaChallengeRepository,
+      );
+      await suspendSeeded(userRepository, userId, UserStatus.SUSPENDED);
+
+      await expect(
+        useCase.execute({ mfaChallengeToken: CHALLENGE_TOKEN, totpCode: VALID_TOTP }),
+      ).rejects.toBeInstanceOf(AccountSuspendedError);
+    });
+
+    it('refuses a locked admin who supplied a correct TOTP', async () => {
+      const { useCase, userRepository, mfaSecretRepository, mfaChallengeRepository } = setup();
+      const { userId } = await seedAdminWithChallenge(
+        userRepository,
+        mfaSecretRepository,
+        mfaChallengeRepository,
+      );
+      await suspendSeeded(userRepository, userId, UserStatus.LOCKED);
+
+      await expect(
+        useCase.execute({ mfaChallengeToken: CHALLENGE_TOKEN, totpCode: VALID_TOTP }),
+      ).rejects.toBeInstanceOf(AccountLockedError);
+    });
+
+    it('never reveals status to a caller with the wrong TOTP (SEC-15)', async () => {
+      const { useCase, userRepository, mfaSecretRepository, mfaChallengeRepository } = setup();
+      const { userId } = await seedAdminWithChallenge(
+        userRepository,
+        mfaSecretRepository,
+        mfaChallengeRepository,
+      );
+      await suspendSeeded(userRepository, userId, UserStatus.SUSPENDED);
+
+      await expect(
+        useCase.execute({ mfaChallengeToken: CHALLENGE_TOKEN, totpCode: '000000' }),
+      ).rejects.toBeInstanceOf(InvalidCredentialsError);
+    });
+
+    it('burns the challenge, so a suspended admin cannot replay it', async () => {
+      const { useCase, userRepository, mfaSecretRepository, mfaChallengeRepository } = setup();
+      const { userId } = await seedAdminWithChallenge(
+        userRepository,
+        mfaSecretRepository,
+        mfaChallengeRepository,
+      );
+      await suspendSeeded(userRepository, userId, UserStatus.SUSPENDED);
+
+      await expect(
+        useCase.execute({ mfaChallengeToken: CHALLENGE_TOKEN, totpCode: VALID_TOTP }),
+      ).rejects.toBeInstanceOf(AccountSuspendedError);
+
+      // Reinstating must not resurrect the already-consumed challenge.
+      await suspendSeeded(userRepository, userId, UserStatus.ACTIVE);
+      await expect(
+        useCase.execute({ mfaChallengeToken: CHALLENGE_TOKEN, totpCode: VALID_TOTP }),
+      ).rejects.toBeInstanceOf(InvalidCredentialsError);
+    });
   });
 });

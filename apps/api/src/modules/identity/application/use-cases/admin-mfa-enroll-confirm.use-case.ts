@@ -103,6 +103,12 @@ export class AdminMfaEnrollConfirmUseCase {
       throw new InvalidCredentialsError();
     }
 
+    // Only after both the password and the TOTP verify (SDD 7.2, SEC-15).
+    // Enrollment ends in a session, so it is a session-issuing path and has to
+    // honour suspension exactly like login does — otherwise enrolling a factor
+    // would be a way around being shut out.
+    user.assertCanAuthenticate();
+
     await mfaSecretRepository.update(mfaSecret.confirm(now));
 
     logger.info(

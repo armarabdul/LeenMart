@@ -49,6 +49,14 @@ export class LoginUseCase {
       throw new InvalidCredentialsError();
     }
 
+    // Only after the password verifies (SDD 7.2). A suspended account must
+    // not be handed a fresh session — revoking the sessions it already had
+    // achieves nothing if it can simply log in again. Checking here rather
+    // than above the password means a wrong guess still answers
+    // `INVALID_CREDENTIALS`, so this never becomes a way to discover which
+    // accounts exist and are suspended (SEC-15).
+    user.assertCanAuthenticate();
+
     logger.info({ userId: user.id }, 'Login succeeded');
     return sessionIssuer.issueFor(user);
   }
