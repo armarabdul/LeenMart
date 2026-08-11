@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { pino, type Logger as PinoLogger } from 'pino';
-import { PinoLoggerAdapter, REDACTED_PATHS } from '../../src/shared/infrastructure/observability/logger.js';
+import {
+  PinoLoggerAdapter,
+  REDACTED_PATHS,
+} from '../../src/shared/infrastructure/observability/logger.js';
 
 const captureLine = async (write: (logger: PinoLogger) => void): Promise<string> => {
   const stream = new PassThrough();
@@ -63,5 +66,45 @@ describe('logging', () => {
     const parsed = JSON.parse(chunks.join('').trim()) as Record<string, unknown>;
     expect(parsed.module).toBe('catalogue');
     expect(parsed.productId).toBe('p-1');
+  });
+
+  describe('KYC key material (SDD 12.3)', () => {
+    it.each([
+      'dataKey',
+      'plaintextDataKey',
+      'wrappedDataKey',
+      'wrapped',
+      'plaintext',
+      'wrappingKey',
+      'secretAccessKey',
+    ])('redacts %s at the top level', async (field) => {
+      const line = await captureLine((logger) => {
+        logger.info({ [field]: 'SUPER-SECRET-KEY-MATERIAL' }, 'kyc');
+      });
+
+      expect(line).not.toContain('SUPER-SECRET-KEY-MATERIAL');
+      expect(line).toContain('[REDACTED]');
+    });
+
+    it.each(['dataKey', 'plaintextDataKey', 'wrappedDataKey'])(
+      'redacts %s one level down',
+      async (field) => {
+        const line = await captureLine((logger) => {
+          logger.info({ document: { [field]: 'SUPER-SECRET-KEY-MATERIAL' } }, 'kyc');
+        });
+
+        expect(line).not.toContain('SUPER-SECRET-KEY-MATERIAL');
+      },
+    );
+
+    it('redacts a Buffer-shaped key just as readily as a string', async () => {
+      // The ciphers deal in Buffers; a serialised Buffer must not leak either.
+      const line = await captureLine((logger) => {
+        logger.info({ dataKey: Buffer.from('SUPER-SECRET-KEY-MATERIAL') }, 'kyc');
+      });
+
+      expect(line).not.toContain('SUPER-SECRET-KEY-MATERIAL');
+      expect(line).not.toContain(Buffer.from('SUPER-SECRET-KEY-MATERIAL').toString('base64'));
+    });
   });
 });

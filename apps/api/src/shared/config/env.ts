@@ -30,6 +30,15 @@ const INSECURE_DEV_JWT_ACCESS_SECRET = 'dev-only-insecure-jwt-access-secret-chan
  */
 const INSECURE_DEV_MFA_ENCRYPTION_KEY = 'deadbeef'.repeat(8);
 
+/**
+ * The development wrapping key for `DevDataKeyCipher`, the local stand-in for
+ * KMS. Same shape and same rules as `INSECURE_DEV_MFA_ENCRYPTION_KEY` — and
+ * deliberately a *separate* value, because SDD 12.1/12.3 scope KYC key
+ * material to its own KMS-managed CMK and reusing the MFA key would quietly
+ * make one compromise reach both.
+ */
+const INSECURE_DEV_KYC_WRAPPING_KEY = 'feedface'.repeat(8);
+
 const envSchema = z
   .object({
     // --- runtime ---
@@ -98,6 +107,37 @@ const envSchema = z
       .string()
       .regex(/^[0-9a-f]{64}$/i, 'must be a 64-character hexadecimal string (32 bytes)')
       .default(INSECURE_DEV_MFA_ENCRYPTION_KEY),
+
+    // --- KYC object storage (SDD 12.1/12.2): S3-compatible, MinIO locally, R2 in production ---
+    KYC_S3_ENDPOINT: z.string().url().default('http://localhost:9000'),
+    KYC_S3_REGION: z.string().min(1).default('auto'),
+    KYC_S3_BUCKET: z.string().min(1).default('leenmart-private-kyc'),
+    KYC_S3_ACCESS_KEY_ID: z.string().min(1).default('leenmart'),
+    KYC_S3_SECRET_ACCESS_KEY: z.string().min(1).default('leenmart-dev-secret'),
+    /**
+     * MinIO needs path-style addressing (`endpoint/bucket/key`); R2 accepts it
+     * too, so this defaults on and is not something production has to think
+     * about.
+     */
+    KYC_S3_FORCE_PATH_STYLE: booleanFromString.default('true'),
+
+    // --- KYC envelope encryption (SDD 12.1/12.3) ---
+    /**
+     * The KMS CMK that wraps every KYC data key. No default: there is no
+     * sensible stand-in for a CMK, and production is refused below without it.
+     */
+    KYC_KMS_KEY_ID: z.string().min(1).optional(),
+    KYC_KMS_REGION: z.string().min(1).default('ap-south-1'),
+    /**
+     * Development only. Selects `DevDataKeyCipher` over the KMS adapter; the
+     * `superRefine` below refuses it in production, and the cipher itself
+     * refuses to construct there as a second, independent guard.
+     */
+    KYC_USE_DEV_DATA_KEY_CIPHER: booleanFromString.default('true'),
+    KYC_DEV_WRAPPING_KEY: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/i, 'must be a 64-character hexadecimal string (32 bytes)')
+      .default(INSECURE_DEV_KYC_WRAPPING_KEY),
   })
   .superRefine((env, ctx) => {
     // Guard rails that only apply once real users are involved.
@@ -128,6 +168,28 @@ const envSchema = z
           code: z.ZodIssueCode.custom,
           path: ['MFA_ENCRYPTION_KEY'],
           message: 'A real MFA_ENCRYPTION_KEY must be set in production.',
+        });
+      }
+      if (env.KYC_USE_DEV_DATA_KEY_CIPHER) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['KYC_USE_DEV_DATA_KEY_CIPHER'],
+          message:
+            'KYC key wrapping must use the KMS-managed CMK in production (SDD 12.1/12.3), never the development cipher.',
+        });
+      }
+      if (!env.KYC_KMS_KEY_ID) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['KYC_KMS_KEY_ID'],
+          message: 'A KMS CMK must be configured in production to wrap KYC data keys (SDD 12.3).',
+        });
+      }
+      if (env.KYC_S3_SECRET_ACCESS_KEY === 'leenmart-dev-secret') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['KYC_S3_SECRET_ACCESS_KEY'],
+          message: 'Real object-storage credentials must be set in production.',
         });
       }
     }

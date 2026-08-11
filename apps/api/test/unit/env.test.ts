@@ -7,6 +7,21 @@ const validEnv = {
   REDIS_URL: 'redis://localhost:6379',
 } satisfies NodeJS.ProcessEnv;
 
+/**
+ * A production environment that satisfies every guard. Individual tests break
+ * one field at a time, so each failure is unambiguous about what caused it.
+ */
+const productionEnv = {
+  ...validEnv,
+  NODE_ENV: 'production',
+  CORS_ALLOWED_ORIGINS: 'https://leenmart.in',
+  JWT_ACCESS_SECRET: 'a-real-production-secret-that-is-long-enough',
+  MFA_ENCRYPTION_KEY: 'f'.repeat(64),
+  KYC_USE_DEV_DATA_KEY_CIPHER: 'false',
+  KYC_KMS_KEY_ID: 'arn:aws:kms:ap-south-1:000000000000:key/real',
+  KYC_S3_SECRET_ACCESS_KEY: 'a-real-object-storage-secret',
+};
+
 describe('environment configuration', () => {
   beforeEach(() => {
     resetEnvCache();
@@ -113,14 +128,57 @@ describe('environment configuration', () => {
   });
 
   it('accepts a real MFA_ENCRYPTION_KEY in production', () => {
-    const env = loadEnv({
-      ...validEnv,
-      NODE_ENV: 'production',
-      CORS_ALLOWED_ORIGINS: 'https://leenmart.in',
-      JWT_ACCESS_SECRET: 'a-real-production-secret-that-is-long-enough',
-      MFA_ENCRYPTION_KEY: 'f'.repeat(64),
-    });
+    const env = loadEnv({ ...productionEnv, MFA_ENCRYPTION_KEY: 'f'.repeat(64) });
     expect(env.MFA_ENCRYPTION_KEY).toBe('f'.repeat(64));
+  });
+
+  describe('KYC object storage and encryption (SDD 12.1/12.3)', () => {
+    it('defaults to MinIO and the development cipher outside production', () => {
+      const env = loadEnv({ ...validEnv });
+
+      expect(env.KYC_S3_ENDPOINT).toBe('http://localhost:9000');
+      expect(env.KYC_S3_BUCKET).toBe('leenmart-private-kyc');
+      expect(env.KYC_USE_DEV_DATA_KEY_CIPHER).toBe(true);
+    });
+
+    it('gives the KYC wrapping key a value distinct from MFA_ENCRYPTION_KEY', () => {
+      // SDD 12.1/12.3 scope KYC key material to its own CMK; sharing the MFA
+      // key would make one compromise reach both.
+      const env = loadEnv({ ...validEnv });
+
+      expect(env.KYC_DEV_WRAPPING_KEY).not.toBe(env.MFA_ENCRYPTION_KEY);
+    });
+
+    it('rejects a KYC wrapping key that is not 64 hex characters', () => {
+      expect(() => loadEnv({ ...validEnv, KYC_DEV_WRAPPING_KEY: 'z'.repeat(64) })).toThrow(
+        /KYC_DEV_WRAPPING_KEY/,
+      );
+    });
+
+    it('refuses the development cipher in production', () => {
+      expect(() => loadEnv({ ...productionEnv, KYC_USE_DEV_DATA_KEY_CIPHER: 'true' })).toThrow(
+        /KYC_USE_DEV_DATA_KEY_CIPHER/,
+      );
+    });
+
+    it('requires a KMS CMK in production', () => {
+      const { KYC_KMS_KEY_ID: _omitted, ...withoutCmk } = productionEnv;
+
+      expect(() => loadEnv(withoutCmk)).toThrow(/KYC_KMS_KEY_ID/);
+    });
+
+    it('refuses the development object-storage secret in production', () => {
+      expect(() =>
+        loadEnv({ ...productionEnv, KYC_S3_SECRET_ACCESS_KEY: 'leenmart-dev-secret' }),
+      ).toThrow(/KYC_S3_SECRET_ACCESS_KEY/);
+    });
+
+    it('accepts a fully configured production environment', () => {
+      const env = loadEnv({ ...productionEnv });
+
+      expect(env.KYC_USE_DEV_DATA_KEY_CIPHER).toBe(false);
+      expect(env.KYC_KMS_KEY_ID).toBe('arn:aws:kms:ap-south-1:000000000000:key/real');
+    });
   });
 
   it('memoises the parsed environment', () => {

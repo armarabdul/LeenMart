@@ -34,6 +34,24 @@ export const REDACTED_PATHS = [
   '*.cardNumber',
   'cvv',
   'signature',
+  // KYC envelope-encryption key material (SDD 12.3). A plaintext data key is
+  // the document itself, once unwrapped; the wrapped form is one KMS call away
+  // from being it. Neither belongs in a log line, and the wrapping keys and
+  // object-storage credentials that protect them belong there even less.
+  'dataKey',
+  '*.dataKey',
+  'plaintextDataKey',
+  '*.plaintextDataKey',
+  'wrappedDataKey',
+  '*.wrappedDataKey',
+  'wrapped',
+  '*.wrapped',
+  'plaintext',
+  '*.plaintext',
+  'wrappingKey',
+  '*.wrappingKey',
+  'secretAccessKey',
+  '*.secretAccessKey',
 ] as const;
 
 export const createRootLogger = (env: Env): PinoLogger =>
