@@ -92,6 +92,7 @@ model User {
   refreshTokens RefreshToken[]
   otps          Otp[]
   vendorProfile VendorProfile?
+  mfaSecret     MfaSecret?
 
   @@map("users")
 }
@@ -140,6 +141,32 @@ model Otp {
 
   @@index([userId], map: "idx_otps_user")
   @@map("otps")
+}
+
+/// An administrator's TOTP secret (SDD 7.1: MFA is mandatory for every admin
+/// role, always — never optional). `encrypted_secret` is ciphertext, never
+/// the raw base32 secret; the key and cipher are out of scope for this
+/// persistence-only chunk (Milestone 3 Step 5B) and land with the TOTP
+/// service that first writes to this table. `user_id` is unique: exactly one
+/// secret per user, the same one-to-one shape as `vendors.user_id`.
+/// `confirmed_at` is null until the admin completes enrollment by proving
+/// possession of the secret — a later chunk's concern, not this table's.
+///
+/// No `algorithm`/`digits`/`period` columns: TOTP's parameters are fixed
+/// platform constants (approved design), not per-user configuration. No
+/// recovery-code columns: recovery is operator-assisted break-glass (approved
+/// design), which does not persist codes here.
+model MfaSecret {
+  id              String    @id @db.Uuid
+  userId          String    @unique @map("user_id") @db.Uuid
+  encryptedSecret String    @map("encrypted_secret")
+  confirmedAt     DateTime? @map("confirmed_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("mfa_secrets")
 }
 
 /// Vendor module (SDD 5, module 3).
