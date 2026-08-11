@@ -1,7 +1,12 @@
 import type { PrismaClient } from '@prisma/client';
 import type { Router } from 'express';
+import type { Redis } from 'ioredis';
 import type { Clock, IdGenerator, Logger } from '@leen-mart/domain-kit';
 import type { Env } from '../../shared/config/env.js';
+import {
+  createAuthRateLimiters,
+  type AuthRateLimiters,
+} from '../../shared/interface/http/middleware/auth-rate-limit.js';
 import type { AccessTokenService } from './application/ports/access-token.port.js';
 import { AesGcmMfaSecretCipher } from './infrastructure/security/aes-gcm-mfa-secret-cipher.service.js';
 import { Argon2OtpHasher } from './infrastructure/security/argon2-otp-hasher.js';
@@ -33,6 +38,8 @@ import { createIdentityRouter } from './interface/http/identity.routes.js';
 
 export interface IdentityModuleDeps {
   readonly prisma: PrismaClient;
+  /** Backs SDD 23.3's per-endpoint auth rate-limit budgets; shared with the global limiter. */
+  readonly redis: Redis;
   readonly env: Env;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
@@ -297,6 +304,7 @@ const buildRouters = (params: {
   adminMfaEnrollUseCase: AdminMfaEnrollUseCase;
   adminMfaEnrollConfirmUseCase: AdminMfaEnrollConfirmUseCase;
   accessTokenService: AccessTokenService;
+  rateLimiters: AuthRateLimiters;
 }): IdentityRouters => {
   const controller = createIdentityController({
     registerCustomerUseCase: params.registerCustomerUseCase,
@@ -314,7 +322,7 @@ const buildRouters = (params: {
   });
 
   return {
-    router: createIdentityRouter(controller, params.accessTokenService),
+    router: createIdentityRouter(controller, params.accessTokenService, params.rateLimiters),
     adminAuthRouter: createAdminAuthRouter(adminAuthController),
   };
 };
@@ -325,7 +333,7 @@ const buildRouters = (params: {
  * gets back a router.
  */
 export const createIdentityModule = (deps: IdentityModuleDeps): IdentityModule => {
-  const { prisma, env, clock, idGenerator, logger } = deps;
+  const { prisma, redis, env, clock, idGenerator, logger } = deps;
   const moduleLogger = logger.child({ module: 'identity' });
 
   const infra = buildInfrastructure({ prisma, env, clock, idGenerator });
@@ -362,6 +370,7 @@ export const createIdentityModule = (deps: IdentityModuleDeps): IdentityModule =
     adminMfaEnrollUseCase,
     adminMfaEnrollConfirmUseCase,
     accessTokenService: infra.accessTokenService,
+    rateLimiters: createAuthRateLimiters(redis, env),
   });
   return {
     router,

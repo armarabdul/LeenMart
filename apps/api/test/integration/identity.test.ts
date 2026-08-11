@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import type { Express } from 'express';
 import { createApp } from '../../src/app.js';
@@ -38,6 +38,12 @@ const uniquePhone = (): string => {
 const registerCustomer = (app: Express, email: string, password: string): request.Test =>
   request(app).post('/api/v1/identity/register').send({ email, password });
 
+/** Drops every rate-limit bucket so a run never inherits another run's counters. */
+const clearRateLimitKeys = async (container: Container): Promise<void> => {
+  const keys = await container.redis.keys('rl:*');
+  if (keys.length > 0) await container.redis.del(...keys);
+};
+
 const requestOtp = (app: Express, phone: string): request.Test =>
   request(app).post('/api/v1/identity/otp/request').send({ phone });
 
@@ -54,15 +60,28 @@ describe('identity endpoints', () => {
   let container: Container;
   let app: Express;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     process.env.ENV_FILE = '.env.test';
     container = createContainer();
     app = createApp(container);
+    // SDD 23.3's per-IP budgets are counted in Redis, which outlives a test
+    // run. Without clearing them, the hour-long windows accumulate across
+    // repeated runs and the suite starts failing on its third pass for
+    // reasons that have nothing to do with the code under test.
+    await clearRateLimitKeys(container);
+  });
+
+  // Every test starts with a clean budget, so no test can be pushed over a
+  // ceiling by whatever ran before it. Counters still accumulate *within* a
+  // test, which is exactly what the rate-limit cases below rely on.
+  beforeEach(async () => {
+    await clearRateLimitKeys(container);
   });
 
   afterAll(async () => {
     await container.prisma.user.deleteMany({ where: { email: { contains: EMAIL_PREFIX } } });
     await container.prisma.user.deleteMany({ where: { phone: { startsWith: PHONE_PREFIX } } });
+    await clearRateLimitKeys(container);
     await container.dispose();
   });
 
@@ -219,6 +238,117 @@ describe('identity endpoints', () => {
     expect(families).toHaveLength(2);
   });
 
+  describe('rate-limit budgets (SDD 23.3)', () => {
+    it('caps login at 5 per minute for one identity, without leaking whether it exists', async () => {
+      const email = uniqueEmail('login-budget');
+      const password = 'correct horse battery staple';
+      await registerCustomer(app, email, password).expect(201);
+
+      // Five wrong-password attempts are the whole per-identity budget.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await request(app)
+          .post('/api/v1/identity/login')
+          .send({ email, password: 'wrong password' })
+          .expect(401);
+      }
+
+      // The sixth is refused by the limiter — even with the *correct*
+      // password, which is what makes this a brute-force ceiling rather than
+      // a failed-attempt counter.
+      const blocked = await request(app)
+        .post('/api/v1/identity/login')
+        .send({ email, password })
+        .expect(429);
+      expect((blocked.body as ErrorBody).error.code).toBe('RATE_LIMIT_EXCEEDED');
+    });
+
+    it('scopes the login budget to one identity, so exhausting it cannot lock out others', async () => {
+      const victim = uniqueEmail('login-victim');
+      const bystander = uniqueEmail('login-bystander');
+      const password = 'correct horse battery staple';
+      await registerCustomer(app, victim, password).expect(201);
+      await registerCustomer(app, bystander, password).expect(201);
+
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        await request(app)
+          .post('/api/v1/identity/login')
+          .send({ email: victim, password: 'wrong password' });
+      }
+
+      await request(app)
+        .post('/api/v1/identity/login')
+        .send({ email: bystander, password })
+        .expect(200);
+    });
+
+    it('caps OTP requests at 1 per minute for one phone, protecting SMS spend', async () => {
+      const phone = uniquePhone();
+
+      await requestOtp(app, phone).expect(200);
+
+      const blocked = await requestOtp(app, phone).expect(429);
+      expect((blocked.body as ErrorBody).error.code).toBe('RATE_LIMIT_EXCEEDED');
+    });
+
+    it('scopes the OTP budget to one phone', async () => {
+      const first = uniquePhone();
+      const second = uniquePhone();
+
+      await requestOtp(app, first).expect(200);
+      await requestOtp(app, first).expect(429);
+
+      await requestOtp(app, second).expect(200);
+    });
+
+    it('caps refresh at 10 per minute for one session', async () => {
+      const email = uniqueEmail('refresh-budget');
+      const registered = await registerCustomer(app, email, 'correct horse battery staple').expect(
+        201,
+      );
+      const refreshToken = (registered.body as AuthSessionBody).data.refreshToken;
+
+      // The same token, replayed. Every call after the first is a rejected
+      // reuse, but the limiter counts attempts rather than successes — a
+      // limiter that only counted successes would not bound an attacker.
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        await request(app).post('/api/v1/identity/refresh').send({ refreshToken });
+      }
+
+      const blocked = await request(app)
+        .post('/api/v1/identity/refresh')
+        .send({ refreshToken })
+        .expect(429);
+      expect((blocked.body as ErrorBody).error.code).toBe('RATE_LIMIT_EXCEEDED');
+    });
+
+    it('counts malformed requests too, so the limiter cannot be bypassed by sending junk', async () => {
+      const email = uniqueEmail('login-malformed');
+
+      // No password at all: `validate()` would reject these with a 400, but
+      // the limiter runs first and still charges them to the identity.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await request(app).post('/api/v1/identity/login').send({ email }).expect(400);
+      }
+
+      await request(app)
+        .post('/api/v1/identity/login')
+        .send({ email, password: 'correct horse battery staple' })
+        .expect(429);
+    });
+
+    it('leaves unbudgeted endpoints alone', async () => {
+      // SDD 23.3 gives `register` and `logout` no per-endpoint budget; only the
+      // global 1,000/min ceiling applies.
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        await registerCustomer(
+          app,
+          uniqueEmail(`unbudgeted-${attempt}`),
+          'correct horse battery',
+        ).expect(201);
+      }
+    });
+  });
+
   it('logs out and invalidates the refresh token', async () => {
     const email = uniqueEmail('logout');
     const registered = await registerCustomer(app, email, 'correct horse battery staple').expect(
@@ -293,6 +423,12 @@ describe('identity endpoints', () => {
       const phone = uniquePhone();
 
       await requestOtp(app, phone).expect(200);
+      // SDD 23.3 caps this phone at 1 OTP/min, and that cap is not what this
+      // test is about: the invariant under test is that the *use case* reuses
+      // the existing account instead of creating a second one. Clearing the
+      // budget keeps that invariant testable without relaxing the production
+      // ceiling.
+      await clearRateLimitKeys(container);
       await requestOtp(app, phone).expect(200);
 
       const users = await container.prisma.user.findMany({ where: { phone } });

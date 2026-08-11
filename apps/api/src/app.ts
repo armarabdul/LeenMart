@@ -110,7 +110,7 @@ export const createApp = (container: Container): Express => {
   // --- routes ---
   app.use(createHealthRouter({ env, prisma, redis, clock }));
 
-  const identityModule = createIdentityModule({ prisma, env, clock, idGenerator, logger });
+  const identityModule = createIdentityModule({ prisma, redis, env, clock, idGenerator, logger });
   app.use('/api/v1/identity', identityModule.router);
   app.use('/api/v1/admin', identityModule.adminAuthRouter);
 
