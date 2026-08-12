@@ -1,5 +1,6 @@
 import { runInTenantTransaction } from '../../../../shared/infrastructure/persistence/tenant-prisma.js';
 import type { PrismaClient } from '@prisma/client';
+import type { TransactionScope } from '@leen-mart/domain-kit';
 import { toUserId, toVendorId, type VendorId } from '../../../identity/index.js';
 import { KycDocument } from '../../domain/entities/kyc-document.entity.js';
 import { VendorKyc, type KycReview } from '../../domain/entities/vendor-kyc.entity.js';
@@ -144,55 +145,90 @@ const INCLUDE_DOCUMENTS = { documents: { orderBy: { type: 'asc' } } } as const;
 
 /** Maps rows to `VendorKyc`; Prisma types never escape this file (SDD 3.4). */
 export class PrismaVendorKycRepository implements VendorKycRepository {
-  constructor(private readonly prisma: PrismaClient) {}
+  /**
+   * @param inCallerTransaction True only for an instance produced by
+   * `withTransaction`, meaning `prisma` is already a transaction client whose
+   * connection carries the tenant GUCs. Private to this file — the only way to
+   * set it is to hand over a `TransactionScope`, which only
+   * `TransactionRunner.run` can produce.
+   */
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly inCallerTransaction = false,
+  ) {}
+
+  /**
+   * Unwraps the opaque scope back into the Prisma transaction client it
+   * actually is, exactly as `PrismaVendorRepository.withTransaction` does. The
+   * cast is confined to this layer: the port cannot name `PrismaClient`
+   * (SDD 2.3), and a `TransactionScope` can only come from
+   * `TransactionRunner.run`, so nothing else can fabricate one.
+   */
+  withTransaction(scope: TransactionScope): VendorKycRepository {
+    return new PrismaVendorKycRepository(scope as unknown as PrismaClient, true);
+  }
 
   /**
    * One transaction, because a submission without its documents is not a
    * submission — the aggregate refuses to exist in that shape, and the
    * database should not hold it either.
    *
-   * `runInTenantTransaction`, not a bare `$transaction`: both models here are
-   * tenant-scoped, and only the sanctioned helper sets `app.vendor_id` on the
-   * pinned connection these statements actually run on. A bare `$transaction`
-   * would leave the tenant boundary reaching for a different connection, and
-   * the failure would be silent (see `tenant-prisma.ts`).
+   * Where that transaction comes from depends on how this repository was
+   * built. Unscoped, it opens its own via `runInTenantTransaction` — not a
+   * bare `$transaction`, because both models here are tenant-scoped and only
+   * the sanctioned helper sets `app.vendor_id` on the pinned connection these
+   * statements actually run on.
+   *
+   * Scoped, it opens **nothing** and writes straight to the caller's
+   * transaction client. Opening one here would be a nested `$transaction`,
+   * which acquires a *different* connection — one the outer transaction never
+   * configured — so RLS would see no `app.vendor_id` and return zero rows
+   * rather than failing, and a small pool would deadlock waiting for the
+   * connection the outer transaction is still holding (`tenant-prisma.ts`).
    */
   async create(kyc: VendorKyc): Promise<void> {
-    await runInTenantTransaction(this.prisma, async (tx) => {
-      await tx.vendorKycSubmission.create({
-        data: {
-          id: kyc.id,
-          vendorId: kyc.vendorId,
-          panFingerprint: kyc.identifiers.panFingerprint,
-          panLast4: kyc.identifiers.panLast4,
-          gstin: kyc.identifiers.gstin,
-          bankFingerprint: kyc.identifiers.bankFingerprint,
-          bankAccountLast4: kyc.identifiers.bankAccountLast4,
-          ifsc: kyc.identifiers.ifsc,
-          submittedAt: kyc.submittedAt,
-          createdAt: kyc.createdAt,
-          updatedAt: kyc.updatedAt,
-        },
-      });
+    if (this.inCallerTransaction) {
+      await this.writeSubmission(this.prisma, kyc);
+      return;
+    }
+    await runInTenantTransaction(this.prisma, (tx) => this.writeSubmission(tx, kyc));
+  }
 
-      await tx.kycDocument.createMany({
-        data: kyc.documents.map((document) => ({
-          id: document.id,
-          kycId: kyc.id,
-          // Denormalised, then held to the parent by the composite foreign
-          // key — it cannot be written to a different vendor than the
-          // submission it hangs off.
-          vendorId: kyc.vendorId,
-          type: document.type.name,
-          objectKey: document.objectKey,
-          wrappedDataKey: document.wrappedDataKey,
-          contentType: document.contentType,
-          sizeBytes: document.sizeBytes,
-          status: document.status,
-          uploadedAt: document.uploadedAt,
-          createdAt: document.createdAt,
-        })),
-      });
+  /** The two statements themselves, identical on both paths — only the client differs. */
+  private async writeSubmission(tx: PrismaClient, kyc: VendorKyc): Promise<void> {
+    await tx.vendorKycSubmission.create({
+      data: {
+        id: kyc.id,
+        vendorId: kyc.vendorId,
+        panFingerprint: kyc.identifiers.panFingerprint,
+        panLast4: kyc.identifiers.panLast4,
+        gstin: kyc.identifiers.gstin,
+        bankFingerprint: kyc.identifiers.bankFingerprint,
+        bankAccountLast4: kyc.identifiers.bankAccountLast4,
+        ifsc: kyc.identifiers.ifsc,
+        submittedAt: kyc.submittedAt,
+        createdAt: kyc.createdAt,
+        updatedAt: kyc.updatedAt,
+      },
+    });
+
+    await tx.kycDocument.createMany({
+      data: kyc.documents.map((document) => ({
+        id: document.id,
+        kycId: kyc.id,
+        // Denormalised, then held to the parent by the composite foreign
+        // key — it cannot be written to a different vendor than the
+        // submission it hangs off.
+        vendorId: kyc.vendorId,
+        type: document.type.name,
+        objectKey: document.objectKey,
+        wrappedDataKey: document.wrappedDataKey,
+        contentType: document.contentType,
+        sizeBytes: document.sizeBytes,
+        status: document.status,
+        uploadedAt: document.uploadedAt,
+        createdAt: document.createdAt,
+      })),
     });
   }
 

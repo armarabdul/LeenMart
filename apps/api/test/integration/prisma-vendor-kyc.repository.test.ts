@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@prisma/client';
-import { UuidV7Generator } from '@leen-mart/domain-kit';
+import { UuidV7Generator, type TransactionScope } from '@leen-mart/domain-kit';
 import { PrismaVendorKycRepository } from '../../src/modules/vendor/infrastructure/persistence/prisma-vendor-kyc.repository.js';
 import { runWithTenant } from '../../src/shared/infrastructure/persistence/tenant-context.js';
+import { runInTenantTransaction } from '../../src/shared/infrastructure/persistence/tenant-prisma.js';
 import { HmacIdentifierFingerprinter } from '../../src/modules/vendor/infrastructure/security/hmac-identifier-fingerprinter.js';
 import { KycDocument } from '../../src/modules/vendor/domain/entities/kyc-document.entity.js';
 import {
@@ -559,6 +560,115 @@ describe('PrismaVendorKycRepository', () => {
       );
 
       await expect(create(newSubmission())).resolves.toBeUndefined();
+    });
+  });
+  /**
+   * The transaction-participation path (the KYC-4b prerequisite).
+   *
+   * What matters here is not that `create` still works, but that the scoped
+   * instance writes on the **caller's** connection. A nested transaction would
+   * acquire a different one — without `app.vendor_id` — and RLS would answer
+   * with zero rows instead of an error, so a test that only checked "the rows
+   * are there" would pass on a broken implementation too. Hence the rollback
+   * and GUC assertions below.
+   */
+  describe('withTransaction (joins a caller transaction)', () => {
+    const runScoped = async (
+      kyc: VendorKyc,
+      andThen?: (tx: unknown) => Promise<void>,
+    ): Promise<void> => {
+      await runWithTenant({ userId, vendorId }, async () => {
+        await runInTenantTransaction(prisma, async (tx) => {
+          await repository.withTransaction(tx as unknown as TransactionScope).create(kyc);
+          await andThen?.(tx);
+        });
+      });
+    };
+
+    it('persists the submission and its documents through the caller transaction', async () => {
+      await clearSubmissions();
+      const kyc = newSubmission();
+
+      await runScoped(kyc);
+
+      const row = await prisma.vendorKycSubmission.findUniqueOrThrow({
+        where: { id: kyc.id },
+        include: { documents: true },
+      });
+      expect(row.vendorId).toBe(vendorId);
+      expect(row.documents).toHaveLength(KycDocumentType.REQUIRED.length);
+    });
+
+    it('rolls back the submission *and* its documents when the caller transaction fails', async () => {
+      // The atomicity guarantee KYC-2A made must survive moving the boundary
+      // out to the caller.
+      await clearSubmissions();
+      const kyc = newSubmission();
+
+      await expect(
+        runScoped(kyc, () => {
+          throw new Error('caller failed after the KYC write');
+        }),
+      ).rejects.toThrow('caller failed after the KYC write');
+
+      expect(await prisma.vendorKycSubmission.findUnique({ where: { id: kyc.id } })).toBeNull();
+      expect(await prisma.kycDocument.count({ where: { kycId: kyc.id } })).toBe(0);
+    });
+
+    it('runs on the caller connection, which still carries the tenant GUCs', async () => {
+      // If `create` had opened a nested transaction it would have used another
+      // connection; reading the setting back on the caller's `tx` after the
+      // write is what shows it did not.
+      await clearSubmissions();
+      const kyc = newSubmission();
+      let observed: string | null = null;
+
+      await runScoped(kyc, async (tx) => {
+        const client = tx as {
+          $queryRawUnsafe: (sql: string) => Promise<{ vendor: string | null }[]>;
+        };
+        const rows = await client.$queryRawUnsafe(
+          "SELECT nullif(current_setting('app.vendor_id', true), '') AS vendor",
+        );
+        observed = rows[0]?.vendor ?? null;
+      });
+
+      expect(observed).toBe(vendorId);
+    });
+
+    it('lets a caller write another repository in the same transaction, atomically', async () => {
+      // The shape KYC-4b will use: submission here, VendorProfile transition
+      // next door, both or neither.
+      await clearSubmissions();
+      const kyc = newSubmission();
+
+      await expect(
+        runScoped(kyc, async (tx) => {
+          const client = tx as {
+            vendorProfile: { update: (args: unknown) => Promise<unknown> };
+          };
+          await client.vendorProfile.update({
+            where: { id: vendorId },
+            data: { status: 'KYC_SUBMITTED' },
+          });
+          throw new Error('rolled back on purpose');
+        }),
+      ).rejects.toThrow('rolled back on purpose');
+
+      expect(await prisma.vendorKycSubmission.findUnique({ where: { id: kyc.id } })).toBeNull();
+      const vendor = await prisma.vendorProfile.findUniqueOrThrow({ where: { id: vendorId } });
+      expect(vendor.status).toBe('REGISTERED');
+    });
+
+    it('leaves the standalone path opening its own transaction', async () => {
+      // Unscoped `create` must keep working with no caller transaction at all.
+      await clearSubmissions();
+      const kyc = newSubmission();
+
+      await expect(create(kyc)).resolves.toBeUndefined();
+      expect(await prisma.kycDocument.count({ where: { kycId: kyc.id } })).toBe(
+        KycDocumentType.REQUIRED.length,
+      );
     });
   });
 });

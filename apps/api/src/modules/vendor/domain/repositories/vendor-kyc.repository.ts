@@ -1,3 +1,4 @@
+import type { TransactionScope } from '@leen-mart/domain-kit';
 import type { VendorId } from '../../../identity/index.js';
 import type { VendorKyc } from '../entities/vendor-kyc.entity.js';
 import type { KycId } from '../value-objects/kyc-id.value-object.js';
@@ -20,9 +21,37 @@ import type { SensitiveFingerprint } from '../value-objects/sensitive-fingerprin
  */
 export interface VendorKycRepository {
   /**
+   * Re-binds this repository to a transaction the caller already opened. See
+   * `UserRepository.withTransaction` and `VendorRepository.withTransaction`,
+   * which this mirrors.
+   *
+   * Exists because submitting KYC is two writes in two repositories — the
+   * submission with its documents here, and the `VendorProfile`'s
+   * `REGISTERED → KYC_SUBMITTED` transition next door — and a crash between
+   * them strands the vendor. Persisting the submission while the profile stays
+   * `REGISTERED` leaves an undecided row the vendor cannot see and cannot
+   * replace: their retry mints fresh intents happily and then loses to
+   * `uq_vendor_kyc_one_undecided`. Doing it the other way round is worse — a
+   * profile stuck at `KYC_SUBMITTED` with nothing to review can never
+   * transition again, because `submitKyc()` only accepts `REGISTERED` or
+   * `KYC_REJECTED`.
+   *
+   * The scoped instance runs **on the caller's connection** and opens no
+   * transaction of its own. That is not an optimisation: a nested
+   * `$transaction` would acquire a different connection, one without the
+   * `app.vendor_id` the outer transaction set, and RLS would answer with zero
+   * rows instead of an error (see `tenant-prisma.ts`).
+   */
+  withTransaction(scope: TransactionScope): VendorKycRepository;
+
+  /**
    * Persists a new submission together with its documents, in one
    * transaction. Both or neither: a submission whose documents failed to write
    * would look complete to the aggregate and be unreviewable in practice.
+   *
+   * Opens that transaction itself when called on an unscoped repository, and
+   * joins the caller's when called on one from `withTransaction` — the
+   * atomicity guarantee is the same either way, only its boundary moves.
    *
    * Relies on the database for the one-undecided-attempt invariant rather than
    * checking first — two concurrent callers can both pass a check and only one
