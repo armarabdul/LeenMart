@@ -28,6 +28,10 @@ export { toUserId, toVendorId } from './domain/index.js';
 export type { AccessTokenService } from './application/ports/access-token.port.js';
 export type { SessionDenylist } from './application/ports/session-denylist.port.js';
 export type { Principal } from './application/ports/principal.js';
+// The platform's 403. Published so the shared permission middleware can refuse
+// with the same shape every other authorisation failure already uses, instead
+// of minting a second one that looks almost the same.
+export { UnauthorizedError } from './domain/index.js';
 // Published so `vendor` can promote an account and revoke its sessions during
 // registration (SDD 5.1: cross-module access through the published interface
 // only). Both are ports; no entity or adapter is exposed.
