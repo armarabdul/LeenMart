@@ -1,5 +1,5 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
-import { AppError } from '@leen-mart/domain-kit';
+import { AppError, type TransactionRunner, type TransactionScope } from '@leen-mart/domain-kit';
 import {
   TENANT_SCOPED_MODELS,
   USER_ROOTED_MODELS,
@@ -31,6 +31,15 @@ export class MissingTenantContextError extends AppError {
 }
 
 type AuthenticatedContext = Extract<TenantContext, { kind: 'authenticated' }>;
+
+/** A verified caller, with or without a resolved vendor. */
+const requireAuthenticated = (what: string): AuthenticatedContext => {
+  const context = getTenantContext();
+  if (context?.kind !== 'authenticated') {
+    throw new MissingTenantContextError(what);
+  }
+  return context;
+};
 
 /**
  * The context a tenant-scoped query may run under, or a thrown error.
@@ -152,7 +161,18 @@ export const runInTenantTransaction = async <R>(
   client: PrismaClient,
   callback: (tx: PrismaClient) => Promise<R>,
 ): Promise<R> => {
-  const context = requireContext('a tenant transaction');
+  // Only an authenticated context is required to *open* the transaction — not
+  // a resolved vendor. Vendor registration is the case that forces this: it
+  // creates the tenant, so there is no `vendorId` to demand, and the tenant
+  // root's INSERT policy is written against `app.user_id` precisely for that.
+  //
+  // This is not a relaxation of enforcement. Every query inside still passes
+  // through `requireContext(model)` before the `inTransaction` short-circuit,
+  // so a leaf model like `VendorKycSubmission` is refused here exactly as it
+  // is outside a transaction. The transaction-level check was strictly
+  // redundant with the per-query one; only the per-query one knows which model
+  // is being touched, which is the only place the distinction can be made.
+  const context = requireAuthenticated('a tenant transaction');
 
   return client.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT set_config('app.user_id', ${context.userId}, TRUE)`;
@@ -160,3 +180,18 @@ export const runInTenantTransaction = async <R>(
     return runInsideTenantTransaction(context, () => callback(tx as unknown as PrismaClient));
   });
 };
+
+/**
+ * `TransactionRunner` over the tenant-aware client (SDD 2.3).
+ *
+ * The application layer gets "run these writes atomically" without learning
+ * what a Prisma client is; the scope it hands back is the transaction client,
+ * opaque until a repository adapter unwraps it in `withTransaction`.
+ */
+export class PrismaTransactionRunner implements TransactionRunner {
+  constructor(private readonly prisma: PrismaClient) {}
+
+  async run<T>(work: (scope: TransactionScope) => Promise<T>): Promise<T> {
+    return runInTenantTransaction(this.prisma, (tx) => work(tx as unknown as TransactionScope));
+  }
+}

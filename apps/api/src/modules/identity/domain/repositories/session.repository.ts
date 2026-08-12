@@ -1,4 +1,5 @@
 import type { SessionId } from '../value-objects/session-id.value-object.js';
+import type { UserId } from '../value-objects/user-id.value-object.js';
 import type { Session } from '../entities/session.entity.js';
 
 /** Uses `string` for the hash lookup, matching `Session.tokenHash` — never look up a session by anything but its hash. */
@@ -47,4 +48,28 @@ export interface SessionRepository {
    * indexed lookup regardless of chain length.
    */
   findFamilySessionIds(familyId: SessionId): Promise<readonly SessionId[]>;
+
+  /**
+   * Revokes every still-live session belonging to one user, across *all*
+   * rotation lineages, and returns the ids it killed.
+   *
+   * The family-scoped pair above is not enough for this: a family is one login
+   * and its rotations, and a user who signed in on a laptop and a phone holds
+   * two of them. A change to what the account *is* — its role — has to reach
+   * every one, not just the lineage that happened to make the request.
+   *
+   * Mirrors `revokeFamily` exactly: already-revoked rows are left alone, so
+   * the result is the real blast radius, and the ids are returned because
+   * killing refresh rows is only half of revocation (SDD 7.2).
+   */
+  revokeAllForUser(userId: UserId, now: Date): Promise<readonly SessionId[]>;
+
+  /**
+   * Every session id belonging to one user, **including already-revoked
+   * ones** — the user-scoped counterpart of `findFamilySessionIds`, and for
+   * the same reason: a session revoked minutes ago may still have a
+   * signature-valid access token carrying the old role, and that token is
+   * exactly what must stop working.
+   */
+  findSessionIdsByUserId(userId: UserId): Promise<readonly SessionId[]>;
 }

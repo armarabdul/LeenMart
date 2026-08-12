@@ -1,3 +1,4 @@
+import type { TransactionScope } from '@leen-mart/domain-kit';
 import type { PrismaClient } from '@prisma/client';
 import { toUserId, type UserId } from '../../domain/value-objects/user-id.value-object.js';
 import type { UserRepository } from '../../application/ports/user-repository.port.js';
@@ -36,6 +37,18 @@ const toDomain = (row: UserRow): User =>
 export class PrismaUserRepository implements UserRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
+  /**
+   * Unwraps the opaque scope back into the Prisma transaction client it
+   * actually is. The cast is confined to this layer on purpose: the port
+   * cannot name `PrismaClient` (SDD 2.3 forbids the domain and application
+   * layers from importing Prisma), and the only way to obtain a
+   * `TransactionScope` is from `TransactionRunner.run`, so nothing else can
+   * fabricate one.
+   */
+  withTransaction(scope: TransactionScope): UserRepository {
+    return new PrismaUserRepository(scope as unknown as PrismaClient);
+  }
+
   async create(user: User): Promise<void> {
     await this.prisma.user.create({
       data: {
@@ -56,6 +69,12 @@ export class PrismaUserRepository implements UserRepository {
     await this.prisma.user.update({
       where: { id: user.id },
       data: {
+        // `role` joins the narrow field list because vendor registration
+        // promotes CUSTOMER → VENDOR_OWNER (SDD 8.1) and that transition has
+        // nowhere else to be written. Safe for every other caller: they load
+        // the user first, so the value they write back is the one already
+        // stored.
+        role: user.role.name,
         status: user.status.name,
         phoneVerifiedAt: user.phoneVerifiedAt,
         updatedAt: user.updatedAt,

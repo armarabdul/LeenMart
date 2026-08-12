@@ -3,6 +3,9 @@ import type { Router } from 'express';
 import type { Clock, IdGenerator, Logger } from '@leen-mart/domain-kit';
 import type { AccessTokenService, SessionDenylist } from '../identity/index.js';
 import { PrismaVendorRepository } from './infrastructure/persistence/prisma-vendor.repository.js';
+import { PrismaUserRepository } from '../identity/infrastructure/persistence/prisma-user.repository.js';
+import { PrismaRefreshTokenRepository } from '../identity/infrastructure/persistence/prisma-refresh-token.repository.js';
+import { PrismaTransactionRunner } from '../../shared/infrastructure/persistence/tenant-prisma.js';
 import { RegisterVendorUseCase } from './application/use-cases/register-vendor.use-case.js';
 import { createVendorController } from './interface/http/vendor.controller.js';
 import { createVendorRouter } from './interface/http/vendor.routes.js';
@@ -23,6 +26,8 @@ export interface VendorModuleDeps {
    * module consults the same instance.
    */
   readonly sessionDenylist: SessionDenylist;
+  /** How long a denylist entry must live — the access-token lifetime (SDD 7.2). */
+  readonly accessTokenTtlSeconds: number;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
   readonly logger: Logger;
@@ -38,13 +43,26 @@ export interface VendorModule {
  * lifecycle — it hands over the shared container's ports and gets a router.
  */
 export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
-  const { prisma, accessTokenService, sessionDenylist, clock, idGenerator, logger } = deps;
+  const {
+    prisma,
+    accessTokenService,
+    sessionDenylist,
+    accessTokenTtlSeconds,
+    clock,
+    idGenerator,
+    logger,
+  } = deps;
   const moduleLogger = logger.child({ module: 'vendor' });
 
   const vendorRepository = new PrismaVendorRepository(prisma);
 
   const registerVendorUseCase = new RegisterVendorUseCase({
     vendorRepository,
+    userRepository: new PrismaUserRepository(prisma),
+    sessionRepository: new PrismaRefreshTokenRepository(prisma),
+    sessionDenylist,
+    transactionRunner: new PrismaTransactionRunner(prisma),
+    accessTokenTtlSeconds,
     idGenerator,
     clock,
     logger: moduleLogger,

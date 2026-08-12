@@ -39,6 +39,21 @@ import { OtpCode } from '../../../../../src/modules/identity/domain/value-object
 export class InMemoryUserRepository implements UserRepository {
   private readonly byId = new Map<UserId, User>();
 
+  /** In-memory writes share one map, so a "transaction" is the same store. */
+  withTransaction(): UserRepository {
+    return this;
+  }
+
+  /** Lets a fake transaction runner roll the store back on failure. */
+  snapshot(): Map<UserId, User> {
+    return new Map(this.byId);
+  }
+
+  restore(state: Map<UserId, User>): void {
+    this.byId.clear();
+    for (const [id, user] of state) this.byId.set(id, user);
+  }
+
   create(user: User): Promise<void> {
     this.byId.set(user.id, user);
     return Promise.resolve();
@@ -77,6 +92,23 @@ export class InMemoryUserRepository implements UserRepository {
 
 export class InMemoryRefreshTokenRepository implements RefreshTokenRepository {
   private readonly byId = new Map<SessionId, RefreshToken>();
+
+  revokeAllForUser(userId: UserId, now: Date): Promise<readonly SessionId[]> {
+    const killed: SessionId[] = [];
+    for (const [id, token] of this.byId) {
+      if (token.userId === userId && !token.isRevoked()) {
+        this.byId.set(id, token.revoke(now));
+        killed.push(id);
+      }
+    }
+    return Promise.resolve(killed);
+  }
+
+  findSessionIdsByUserId(userId: UserId): Promise<readonly SessionId[]> {
+    return Promise.resolve(
+      [...this.byId.values()].filter((token) => token.userId === userId).map((token) => token.id),
+    );
+  }
 
   create(token: RefreshToken): Promise<void> {
     this.byId.set(token.id, token);

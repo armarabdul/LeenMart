@@ -5,3 +5,4 @@ export * from './errors/domain-error.js';
 export * from './ports/clock.js';
 export * from './ports/id-generator.js';
 export * from './ports/logger.js';
+export * from './ports/transaction.js';

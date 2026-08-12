@@ -53,6 +53,7 @@ const mountBusinessModules = (
     prisma: Container['prisma'];
     accessTokenService: AccessTokenService;
     sessionDenylist: SessionDenylist;
+    accessTokenTtlSeconds: number;
     clock: Container['clock'];
     idGenerator: Container['idGenerator'];
     logger: Container['logger'];
@@ -144,6 +145,7 @@ export const createApp = (container: Container): Express => {
     prisma,
     accessTokenService: identityModule.accessTokenService,
     sessionDenylist: identityModule.sessionDenylist,
+    accessTokenTtlSeconds: env.JWT_ACCESS_TTL_SECONDS,
     clock,
     idGenerator,
     logger,

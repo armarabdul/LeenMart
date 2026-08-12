@@ -182,6 +182,29 @@ export class User {
     });
   }
 
+  /**
+   * Promotes a customer account to vendor owner (SDD 8.1).
+   *
+   * Registration is the only caller and the only path: SDD 8.1 presents role
+   * membership as fixed, and the one transition the platform actually needs is
+   * the moment a customer becomes a vendor. Narrow on purpose — a general
+   * `changeRole` would be a privilege-escalation primitive sitting in the
+   * domain waiting for a careless caller.
+   *
+   * Refuses any starting role but CUSTOMER. An admin account must never
+   * acquire a vendor's tenancy, and a vendor owner promoted twice would be a
+   * second vendor profile for one account, which `vendors.user_id`'s unique
+   * constraint already refuses at the database.
+   */
+  promoteToVendorOwner(now: Date): User {
+    if (!this.props.role.equals(Role.CUSTOMER)) {
+      throw new TypeError(
+        `Only a CUSTOMER may become a vendor owner, not "${this.props.role.name}".`,
+      );
+    }
+    return new User({ ...this.props, role: Role.VENDOR_OWNER, updatedAt: now });
+  }
+
   suspend(now: Date): User {
     return new User({ ...this.props, status: UserStatus.SUSPENDED, updatedAt: now });
   }

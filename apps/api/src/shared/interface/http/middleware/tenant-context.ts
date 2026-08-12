@@ -49,8 +49,14 @@ export const tenantContext =
       // looked up for a vendor. A customer registering a vendor needs the
       // former and cannot yet have the latter — which is exactly what the
       // tenant-root INSERT policy is written against.
+      // The resolver reads `vendors`, which is itself tenant-scoped — so it
+      // has to run inside a context of its own. A user-only one is exactly
+      // right and is why the SELECT policy carries a `user_id = app.user_id`
+      // arm: without it, resolving a vendor would require already having one.
       const vendorId = VENDOR_ROLES.has(principal.role)
-        ? await resolveVendor(principal.userId)
+        ? await runWithTenant({ userId: principal.userId, vendorId: null }, () =>
+            resolveVendor(principal.userId),
+          )
         : null;
 
       // `next()` runs *inside* the scope, so every downstream handler, use

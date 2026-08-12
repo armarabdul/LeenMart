@@ -11,7 +11,7 @@ export type { RoleName } from './domain/index.js';
 // in this module — a documented pre-existing SDD 5 discrepancy, since SDD 5
 // assigns the vendor profile and its events to the `vendor` module. Left in
 // place deliberately; the `vendor` module consumes it through this interface.
-export type { UserId, VendorId } from './domain/index.js';
+export type { UserId, VendorId, SessionId } from './domain/index.js';
 
 // Their constructors, needed by any module that rehydrates its own rows into
 // branded ids at the persistence boundary (the `vendor` module's repository
@@ -28,3 +28,7 @@ export { toUserId, toVendorId } from './domain/index.js';
 export type { AccessTokenService } from './application/ports/access-token.port.js';
 export type { SessionDenylist } from './application/ports/session-denylist.port.js';
 export type { Principal } from './application/ports/principal.js';
+// Published so `vendor` can promote an account and revoke its sessions during
+// registration (SDD 5.1: cross-module access through the published interface
+// only). Both are ports; no entity or adapter is exposed.
+export type { UserRepository, SessionRepository } from './domain/index.js';

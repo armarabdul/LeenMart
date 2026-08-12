@@ -2,7 +2,7 @@ import type { PrismaClient } from '@prisma/client';
 import type { RefreshTokenRepository } from '../../application/ports/refresh-token-repository.port.js';
 import { RefreshToken } from '../../domain/entities/refresh-token.entity.js';
 import { toSessionId, type SessionId } from '../../domain/value-objects/session-id.value-object.js';
-import { toUserId } from '../../domain/value-objects/user-id.value-object.js';
+import { toUserId, type UserId } from '../../domain/value-objects/user-id.value-object.js';
 
 interface RefreshTokenRow {
   readonly id: string;
@@ -86,6 +86,38 @@ export class PrismaRefreshTokenRepository implements RefreshTokenRepository {
       });
       return ids.map(toSessionId);
     });
+  }
+
+  async revokeAllForUser(userId: UserId, now: Date): Promise<readonly SessionId[]> {
+    // Same select-then-update-in-one-transaction shape as `revokeFamily`, and
+    // for the same reason: the caller needs the ids to deny each dead
+    // session's access token, and only a transaction keeps the two statements
+    // agreeing about which rows those are.
+    return this.prisma.$transaction(async (tx) => {
+      const live = await tx.refreshToken.findMany({
+        where: { userId, revokedAt: null },
+        select: { id: true },
+      });
+      if (live.length === 0) return [];
+
+      const ids = live.map((row) => row.id);
+      await tx.refreshToken.updateMany({
+        where: { id: { in: ids }, revokedAt: null },
+        data: { revokedAt: now },
+      });
+      return ids.map(toSessionId);
+    });
+  }
+
+  async findSessionIdsByUserId(userId: UserId): Promise<readonly SessionId[]> {
+    // No `revokedAt` filter, for the same reason `findFamilySessionIds` has
+    // none: a session already dead in the database can still hold an access
+    // token carrying the stale role.
+    const rows = await this.prisma.refreshToken.findMany({
+      where: { userId },
+      select: { id: true },
+    });
+    return rows.map((row) => toSessionId(row.id));
   }
 
   async findFamilySessionIds(familyId: SessionId): Promise<readonly SessionId[]> {

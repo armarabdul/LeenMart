@@ -1,3 +1,4 @@
+import type { TransactionScope } from '@leen-mart/domain-kit';
 import type { PrismaClient } from '@prisma/client';
 import { toUserId, toVendorId, type UserId, type VendorId } from '../../../identity/index.js';
 import { VendorProfile } from '../../domain/entities/vendor-profile.entity.js';
@@ -24,6 +25,18 @@ const toDomain = (row: VendorProfileRow): VendorProfile =>
 /** Maps rows to `VendorProfile` at the boundary; Prisma types never escape this file (SDD 3.4). */
 export class PrismaVendorRepository implements VendorRepository {
   constructor(private readonly prisma: PrismaClient) {}
+
+  /**
+   * Unwraps the opaque scope back into the Prisma transaction client it
+   * actually is. The cast is confined to this layer on purpose: the port
+   * cannot name `PrismaClient` (SDD 2.3 forbids the domain and application
+   * layers from importing Prisma), and the only way to obtain a
+   * `TransactionScope` is from `TransactionRunner.run`, so nothing else can
+   * fabricate one.
+   */
+  withTransaction(scope: TransactionScope): VendorRepository {
+    return new PrismaVendorRepository(scope as unknown as PrismaClient);
+  }
 
   async create(vendorProfile: VendorProfile): Promise<void> {
     await this.prisma.vendorProfile.create({

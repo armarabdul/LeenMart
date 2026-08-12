@@ -1,3 +1,4 @@
+import type { TransactionScope } from '@leen-mart/domain-kit';
 import type { UserId } from '../value-objects/user-id.value-object.js';
 import type { PhoneNumber } from '../value-objects/phone-number.value-object.js';
 import type { RoleName } from '../value-objects/role.value-object.js';
@@ -12,6 +13,16 @@ import type { User } from '../entities/user.entity.js';
  * from day one rather than repeating email's deferred-adoption history.
  */
 export interface UserRepository {
+  /**
+   * Re-binds this repository to an open transaction, so a write here commits
+   * or rolls back with everything else in that scope.
+   *
+   * Needed because vendor registration promotes a `users` row and inserts a
+   * `vendors` row atomically — two modules' tables, so neither module's
+   * repository can own the transaction (SDD 5.1).
+   */
+  withTransaction(scope: TransactionScope): UserRepository;
+
   create(user: User): Promise<void>;
   update(user: User): Promise<void>;
   findById(id: UserId): Promise<User | null>;

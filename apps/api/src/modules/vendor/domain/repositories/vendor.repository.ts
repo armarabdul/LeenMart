@@ -1,3 +1,4 @@
+import type { TransactionScope } from '@leen-mart/domain-kit';
 import type { UserId, VendorId } from '../../../identity/index.js';
 import type { VendorProfile } from '../entities/vendor-profile.entity.js';
 
@@ -7,6 +8,9 @@ import type { VendorProfile } from '../entities/vendor-profile.entity.js';
  * vendor profile per account at registration time.
  */
 export interface VendorRepository {
+  /** Re-binds this repository to an open transaction. See `UserRepository.withTransaction`. */
+  withTransaction(scope: TransactionScope): VendorRepository;
+
   create(vendorProfile: VendorProfile): Promise<void>;
   update(vendorProfile: VendorProfile): Promise<void>;
   findById(id: VendorId): Promise<VendorProfile | null>;

@@ -38,13 +38,26 @@ describe('vendor endpoints', () => {
   let app: Express;
 
   /** Registers a customer and returns their access token plus user id. */
-  const signUpCustomer = async (label: string): Promise<{ token: string; userId: string }> => {
+  const signUpCustomer = async (
+    label: string,
+  ): Promise<{ token: string; userId: string; email: string }> => {
+    const email = uniqueEmail(label);
     const response = await request(app)
       .post('/api/v1/identity/register')
-      .send({ email: uniqueEmail(label), password: PASSWORD })
+      .send({ email, password: PASSWORD })
       .expect(201);
     const body = response.body as AuthSessionBody;
-    return { token: body.data.accessToken, userId: body.data.user.id };
+    return { token: body.data.accessToken, userId: body.data.user.id, email };
+  };
+
+  /** Signs back in — necessary after registration, which revokes every session. */
+  const logIn = async (email: string): Promise<{ token: string; role: string }> => {
+    const response = await request(app)
+      .post('/api/v1/identity/login')
+      .send({ email, password: PASSWORD })
+      .expect(200);
+    const body = response.body as AuthSessionBody;
+    return { token: body.data.accessToken, role: body.data.user.role };
   };
 
   const registerVendor = (token: string): request.Test =>
@@ -106,20 +119,74 @@ describe('vendor endpoints', () => {
     expect(stored.status).toBe('REGISTERED');
   });
 
-  it("does not change the caller's role", async () => {
-    const { token, userId } = await signUpCustomer('role-unchanged');
+  it('promotes the caller to VENDOR_OWNER', async () => {
+    // SDD 8.2 grants SUBMIT_OR_EDIT_KYC to VENDOR_OWNER and withholds it from
+    // CUSTOMER, so without promotion a vendor could never submit the KYC its
+    // own lifecycle requires.
+    const { token, userId } = await signUpCustomer('promoted');
 
     await registerVendor(token).expect(201);
 
     const user = await db.user.findUniqueOrThrow({ where: { id: userId } });
-    expect(user.role).toBe('CUSTOMER');
+    expect(user.role).toBe('VENDOR_OWNER');
+  });
+
+  it('revokes the session that performed the registration', async () => {
+    // The token was minted with a CUSTOMER claim and is now stale; SDD 7.2's
+    // denylist is what stops it rather than waiting for it to expire.
+    const { token } = await signUpCustomer('revoked-self');
+
+    await registerVendor(token).expect(201);
+
+    await request(app)
+      .get('/api/v1/identity/me')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(401);
+  });
+
+  it('revokes every other session the account holds', async () => {
+    const { token, email } = await signUpCustomer('revoked-all');
+    const other = await logIn(email);
+
+    await registerVendor(token).expect(201);
+
+    await request(app)
+      .get('/api/v1/identity/me')
+      .set('Authorization', `Bearer ${other.token}`)
+      .expect(401);
+  });
+
+  it('issues a VENDOR_OWNER claim on the next login', async () => {
+    const { token, email } = await signUpCustomer('next-login');
+    await registerVendor(token).expect(201);
+
+    const fresh = await logIn(email);
+
+    expect(fresh.role).toBe('VENDOR_OWNER');
+  });
+
+  it('resolves the vendor tenant context after re-authentication', async () => {
+    // Proof the whole chain works: the fresh token carries VENDOR_OWNER, so
+    // the tenant middleware resolves the vendor and a tenant-scoped read
+    // succeeds instead of failing closed.
+    const { token, email, userId } = await signUpCustomer('tenant-after');
+    await registerVendor(token).expect(201);
+    const fresh = await logIn(email);
+
+    const response = await registerVendor(fresh.token).expect(409);
+
+    expect((response.body as ErrorBody).error.code).toBe('VENDOR_ALREADY_REGISTERED');
+    expect(await db.vendorProfile.count({ where: { userId } })).toBe(1);
   });
 
   it('rejects a second registration for the same account', async () => {
-    const { token } = await signUpCustomer('duplicate');
+    // Requires a fresh token, because the first registration revoked the one
+    // that made it — the 409 itself is unchanged.
+    const { token, email } = await signUpCustomer('duplicate');
     await registerVendor(token).expect(201);
+    const fresh = await logIn(email);
 
-    const response = await registerVendor(token).expect(409);
+    const response = await registerVendor(fresh.token).expect(409);
 
     expect((response.body as ErrorBody).error.code).toBe('VENDOR_ALREADY_REGISTERED');
   });
