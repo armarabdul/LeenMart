@@ -2,6 +2,9 @@
 // this module should import from the module's top-level index.ts, not
 // reach into these files directly (SDD 5.1).
 
+// audit vocabulary
+export * from './audit-actions.js';
+
 // entities
 export * from './entities/vendor-profile.entity.js';
 export * from './entities/vendor-kyc.entity.js';

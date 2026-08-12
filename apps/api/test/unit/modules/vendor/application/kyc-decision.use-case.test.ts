@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FixedClock, NullLogger, UuidV7Generator } from '@leen-mart/domain-kit';
 import type { TransactionRunner, TransactionScope } from '@leen-mart/domain-kit';
+import type { AuditWriter, AuditWriterInput } from '../../../../../src/modules/audit/index.js';
+import { VENDOR_AUDIT_ACTIONS } from '../../../../../src/modules/vendor/domain/audit-actions.js';
 import { StartKycReviewUseCase } from '../../../../../src/modules/vendor/application/use-cases/start-kyc-review.use-case.js';
 import { DecideVendorKycUseCase } from '../../../../../src/modules/vendor/application/use-cases/decide-vendor-kyc.use-case.js';
 import {
@@ -22,6 +24,7 @@ import { toSessionId } from '../../../../../src/modules/identity/domain/value-ob
 import { toUserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 import { toVendorId } from '../../../../../src/modules/identity/domain/value-objects/vendor-id.value-object.js';
 import type { Principal } from '../../../../../src/modules/identity/application/ports/principal.js';
+import { FailingAuditWriter, RecordingAuditWriter } from '../../identity/application/fakes.js';
 
 const ids = new UuidV7Generator();
 const NOW = new Date('2026-02-01T00:00:00.000Z');
@@ -131,10 +134,15 @@ const issueOf = async (act: () => Promise<unknown>): Promise<string> => {
 };
 
 describe('StartKycReviewUseCase', () => {
-  const build = (repo = kycRepo()): StartKycReviewUseCase =>
+  const build = (
+    repo = kycRepo(),
+    auditWriter: AuditWriter = new RecordingAuditWriter(),
+    onRollback?: () => void,
+  ): StartKycReviewUseCase =>
     new StartKycReviewUseCase({
       vendorKycRepository: repo,
-      transactionRunner: runner(),
+      transactionRunner: runner(onRollback),
+      auditWriter,
       clock,
       logger: new NullLogger(),
     });
@@ -195,6 +203,76 @@ describe('StartKycReviewUseCase', () => {
       KycSubmissionNotFoundError,
     );
   });
+
+  describe('audit (KYC-6)', () => {
+    const entryOf = (writer: AuditWriter): AuditWriterInput => {
+      const [entry] = (writer as RecordingAuditWriter).entries;
+      if (!entry) throw new Error('expected an audit entry');
+      return entry;
+    };
+
+    it('records exactly one audit event for a winning claim', async () => {
+      const auditWriter = new RecordingAuditWriter();
+
+      await build(kycRepo(), auditWriter).execute({ principal: principalOf(), kycId });
+
+      expect(auditWriter.entries).toHaveLength(1);
+    });
+
+    it('records the review-started action and the claimed kyc id', async () => {
+      const auditWriter = new RecordingAuditWriter();
+
+      await build(kycRepo(), auditWriter).execute({ principal: principalOf(), kycId });
+
+      const entry = entryOf(auditWriter);
+      expect(entry.action).toBe(VENDOR_AUDIT_ACTIONS.KYC_REVIEW_STARTED);
+      expect(entry.entityType).toBe('VendorKyc');
+      expect(entry.entityId).toBe(kycId);
+    });
+
+    it('takes the reviewer identity from the authenticated principal', async () => {
+      const auditWriter = new RecordingAuditWriter();
+
+      await build(kycRepo(), auditWriter).execute({ principal: principalOf(reviewer), kycId });
+
+      const entry = entryOf(auditWriter);
+      expect(entry.actorId).toBe(reviewer);
+      expect(entry.actorRole).toBe('RISK_ANALYST');
+    });
+
+    it('writes no audit row when another reviewer wins the race', async () => {
+      const auditWriter = new RecordingAuditWriter();
+      const repo = kycRepo({ claimForReviewIfUnclaimed: vi.fn().mockResolvedValue(false) });
+
+      await expect(
+        build(repo, auditWriter).execute({ principal: principalOf(), kycId }),
+      ).rejects.toBeInstanceOf(KycReviewAlreadyClaimedError);
+      expect(auditWriter.entries).toHaveLength(0);
+    });
+
+    it('writes no audit row when the domain refuses an already-claimed submission', async () => {
+      const auditWriter = new RecordingAuditWriter();
+      const claimedByOther = submission().startReview(otherReviewer, NOW);
+      const repo = kycRepo({ findById: vi.fn().mockResolvedValue(claimedByOther) });
+
+      await expect(
+        build(repo, auditWriter).execute({ principal: principalOf(), kycId }),
+      ).rejects.toThrow();
+      expect(auditWriter.entries).toHaveLength(0);
+    });
+
+    it('rolls back the claim when the audit write fails', async () => {
+      let rolledBack = false;
+
+      await expect(
+        build(kycRepo(), new FailingAuditWriter(), () => {
+          rolledBack = true;
+        }).execute({ principal: principalOf(), kycId }),
+      ).rejects.toThrow(/audit log unavailable/);
+
+      expect(rolledBack).toBe(true);
+    });
+  });
 });
 
 describe('DecideVendorKycUseCase', () => {
@@ -204,11 +282,13 @@ describe('DecideVendorKycUseCase', () => {
     kyc: VendorKycRepository = kycRepo({ findById: vi.fn().mockResolvedValue(claimed()) }),
     vendor: VendorRepository = vendorRepo(),
     onRollback?: () => void,
+    auditWriter: AuditWriter = new RecordingAuditWriter(),
   ): DecideVendorKycUseCase =>
     new DecideVendorKycUseCase({
       vendorKycRepository: kyc,
       vendorRepository: vendor,
       transactionRunner: runner(onRollback),
+      auditWriter,
       clock,
       logger: new NullLogger(),
     });
@@ -450,6 +530,198 @@ describe('DecideVendorKycUseCase', () => {
       await expect(
         build(repo).execute({ principal: principalOf(), kycId, command: { decision: 'APPROVE' } }),
       ).rejects.toBeInstanceOf(KycSubmissionNotFoundError);
+    });
+  });
+
+  describe('audit (KYC-6)', () => {
+    const entryOf = (writer: AuditWriter): AuditWriterInput => {
+      const [entry] = (writer as RecordingAuditWriter).entries;
+      if (!entry) throw new Error('expected an audit entry');
+      return entry;
+    };
+
+    describe('approval', () => {
+      it('records exactly one audit event', async () => {
+        const auditWriter = new RecordingAuditWriter();
+
+        await build(undefined, undefined, undefined, auditWriter).execute({
+          principal: principalOf(),
+          kycId,
+          command: { decision: 'APPROVE' },
+        });
+
+        expect(auditWriter.entries).toHaveLength(1);
+      });
+
+      it('records the approved action, kyc id and deciding admin', async () => {
+        const auditWriter = new RecordingAuditWriter();
+
+        await build(undefined, undefined, undefined, auditWriter).execute({
+          principal: principalOf(reviewer),
+          kycId,
+          command: { decision: 'APPROVE' },
+        });
+
+        const entry = entryOf(auditWriter);
+        expect(entry.action).toBe(VENDOR_AUDIT_ACTIONS.KYC_APPROVED);
+        expect(entry.entityType).toBe('VendorKyc');
+        expect(entry.entityId).toBe(kycId);
+        expect(entry.actorId).toBe(reviewer);
+        expect(entry.actorRole).toBe('RISK_ANALYST');
+      });
+
+      it('carries no sensitive KYC material in the audit payload', async () => {
+        const auditWriter = new RecordingAuditWriter();
+
+        await build(undefined, undefined, undefined, auditWriter).execute({
+          principal: principalOf(),
+          kycId,
+          command: { decision: 'APPROVE' },
+        });
+
+        const serialised = JSON.stringify(entryOf(auditWriter));
+        expect(serialised).not.toContain('panFingerprint');
+        expect(serialised).not.toContain('bankFingerprint');
+        expect(serialised).not.toContain('wrappedDataKey');
+      });
+
+      it('writes no audit row when the decision write loses the race', async () => {
+        const auditWriter = new RecordingAuditWriter();
+        const kyc = kycRepo({
+          findById: vi.fn().mockResolvedValue(claimed()),
+          saveDecisionIfUndecided: vi.fn().mockResolvedValue(false),
+        });
+
+        await expect(
+          build(kyc, vendorRepo(), undefined, auditWriter).execute({
+            principal: principalOf(),
+            kycId,
+            command: { decision: 'APPROVE' },
+          }),
+        ).rejects.toBeInstanceOf(KycAlreadyDecidedError);
+        expect(auditWriter.entries).toHaveLength(0);
+      });
+
+      it('rolls back both the decision and the vendor transition when the audit write fails', async () => {
+        let rolledBack = false;
+        const vendor = vendorRepo();
+        const vendorUpdate = vi.spyOn(vendor, 'update');
+
+        await expect(
+          build(
+            undefined,
+            vendor,
+            () => {
+              rolledBack = true;
+            },
+            new FailingAuditWriter(),
+          ).execute({
+            principal: principalOf(),
+            kycId,
+            command: { decision: 'APPROVE' },
+          }),
+        ).rejects.toThrow(/audit log unavailable/);
+
+        // The write itself happened (it is what the audit failure must undo);
+        // `rolledBack` proves the surrounding transaction unwound it.
+        expect(vendorUpdate).toHaveBeenCalledTimes(1);
+        expect(rolledBack).toBe(true);
+      });
+    });
+
+    describe('rejection', () => {
+      it('records exactly one audit event', async () => {
+        const auditWriter = new RecordingAuditWriter();
+
+        await build(undefined, undefined, undefined, auditWriter).execute({
+          principal: principalOf(),
+          kycId,
+          command: { decision: 'REJECT', reason: 'DOCUMENT_UNCLEAR' },
+        });
+
+        expect(auditWriter.entries).toHaveLength(1);
+      });
+
+      it('records the rejected action, kyc id and deciding admin', async () => {
+        const auditWriter = new RecordingAuditWriter();
+
+        await build(undefined, undefined, undefined, auditWriter).execute({
+          principal: principalOf(reviewer),
+          kycId,
+          command: { decision: 'REJECT', reason: 'DOCUMENT_UNCLEAR' },
+        });
+
+        const entry = entryOf(auditWriter);
+        expect(entry.action).toBe(VENDOR_AUDIT_ACTIONS.KYC_REJECTED);
+        expect(entry.entityType).toBe('VendorKyc');
+        expect(entry.entityId).toBe(kycId);
+        expect(entry.actorId).toBe(reviewer);
+      });
+
+      it('records the coded rejection reason and nothing else about the rejection', async () => {
+        const auditWriter = new RecordingAuditWriter();
+
+        await build(undefined, undefined, undefined, auditWriter).execute({
+          principal: principalOf(),
+          kycId,
+          command: { decision: 'REJECT', reason: 'BANK_DETAILS_MISMATCH' },
+        });
+
+        expect(entryOf(auditWriter).reason).toBe('BANK_DETAILS_MISMATCH');
+      });
+
+      it('never records the reviewer free-text note', async () => {
+        const auditWriter = new RecordingAuditWriter();
+        const note = 'Business name on the certificate does not match the application.';
+
+        await build(undefined, undefined, undefined, auditWriter).execute({
+          principal: principalOf(),
+          kycId,
+          command: { decision: 'REJECT', reason: 'OTHER', note },
+        });
+
+        const serialised = JSON.stringify(entryOf(auditWriter));
+        expect(serialised).not.toContain(note);
+        expect(entryOf(auditWriter).reason).toBe('OTHER');
+      });
+
+      it('writes no audit row when the decision write loses the race', async () => {
+        const auditWriter = new RecordingAuditWriter();
+        const kyc = kycRepo({
+          findById: vi.fn().mockResolvedValue(claimed()),
+          saveDecisionIfUndecided: vi.fn().mockResolvedValue(false),
+        });
+
+        await expect(
+          build(kyc, vendorRepo(), undefined, auditWriter).execute({
+            principal: principalOf(),
+            kycId,
+            command: { decision: 'REJECT', reason: 'DOCUMENT_UNCLEAR' },
+          }),
+        ).rejects.toBeInstanceOf(KycAlreadyDecidedError);
+        expect(auditWriter.entries).toHaveLength(0);
+      });
+
+      it('rolls back both the decision and the vendor transition when the audit write fails', async () => {
+        let rolledBack = false;
+
+        await expect(
+          build(
+            undefined,
+            undefined,
+            () => {
+              rolledBack = true;
+            },
+            new FailingAuditWriter(),
+          ).execute({
+            principal: principalOf(),
+            kycId,
+            command: { decision: 'REJECT', reason: 'DOCUMENT_UNCLEAR' },
+          }),
+        ).rejects.toThrow(/audit log unavailable/);
+
+        expect(rolledBack).toBe(true);
+      });
     });
   });
 });

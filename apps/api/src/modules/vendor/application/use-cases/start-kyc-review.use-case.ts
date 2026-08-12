@@ -1,5 +1,8 @@
 import type { Clock, Logger, TransactionRunner } from '@leen-mart/domain-kit';
+import { toUuid } from '@leen-mart/domain-kit';
+import type { AuditWriter } from '../../../audit/index.js';
 import type { Principal } from '../../../identity/index.js';
+import { VENDOR_AUDIT_ACTIONS, VENDOR_AUDIT_ENTITY_TYPES } from '../../domain/audit-actions.js';
 import type { VendorKyc } from '../../domain/entities/vendor-kyc.entity.js';
 import {
   KycReviewAlreadyClaimedError,
@@ -20,6 +23,7 @@ export interface StartKycReviewResult {
 export interface StartKycReviewDeps {
   readonly vendorKycRepository: VendorKycRepository;
   readonly transactionRunner: TransactionRunner;
+  readonly auditWriter: AuditWriter;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -46,7 +50,7 @@ export class StartKycReviewUseCase {
   constructor(private readonly deps: StartKycReviewDeps) {}
 
   async execute(input: StartKycReviewInput): Promise<StartKycReviewResult> {
-    const { vendorKycRepository, transactionRunner, clock, logger } = this.deps;
+    const { vendorKycRepository, transactionRunner, auditWriter, clock, logger } = this.deps;
 
     return transactionRunner.run(async (scope) => {
       const repository = vendorKycRepository.withTransaction(scope);
@@ -66,6 +70,17 @@ export class StartKycReviewUseCase {
       if (!(await repository.claimForReviewIfUnclaimed(claimed))) {
         throw new KycReviewAlreadyClaimedError();
       }
+
+      // Only the winner reaches here — the loser threw above and this
+      // transaction never opened for them, so a lost race writes no audit row.
+      await auditWriter.withTransaction(scope).record({
+        actorId: input.principal.userId,
+        actorRole: input.principal.role,
+        action: VENDOR_AUDIT_ACTIONS.KYC_REVIEW_STARTED,
+        entityType: VENDOR_AUDIT_ENTITY_TYPES.KYC,
+        entityId: toUuid(claimed.id),
+        after: { vendorId: claimed.vendorId },
+      });
 
       logger.info({ kycId: input.kycId }, 'Admin claimed a KYC submission for review');
 

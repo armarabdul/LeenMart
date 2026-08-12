@@ -3,9 +3,33 @@ import request from 'supertest';
 import type { Express } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
+import { NullLogger, UuidV7Generator } from '@leen-mart/domain-kit';
+import type { AuditWriter } from '../../src/modules/audit/index.js';
+import { VENDOR_AUDIT_ACTIONS } from '../../src/modules/vendor/domain/audit-actions.js';
+import { SubmitVendorKycUseCase } from '../../src/modules/vendor/application/use-cases/submit-vendor-kyc.use-case.js';
+import { PrismaVendorKycRepository } from '../../src/modules/vendor/infrastructure/persistence/prisma-vendor-kyc.repository.js';
+import { PrismaVendorRepository } from '../../src/modules/vendor/infrastructure/persistence/prisma-vendor.repository.js';
+import { HmacIdentifierFingerprinter } from '../../src/modules/vendor/infrastructure/security/hmac-identifier-fingerprinter.js';
+import { S3ObjectStore } from '../../src/modules/vendor/infrastructure/storage/s3-object-store.js';
+import { PrismaTransactionRunner } from '../../src/shared/infrastructure/persistence/tenant-prisma.js';
+import { runWithTenant } from '../../src/shared/infrastructure/persistence/tenant-context.js';
+import { toSessionId } from '../../src/modules/identity/domain/value-objects/session-id.value-object.js';
+import { toUserId } from '../../src/modules/identity/domain/value-objects/user-id.value-object.js';
+import { toVendorId } from '../../src/modules/identity/domain/value-objects/vendor-id.value-object.js';
 import { createApp } from '../../src/app.js';
 import { type Container, createContainer } from '../../src/container.js';
 import { DevDataKeyCipher } from '../../src/modules/vendor/infrastructure/crypto/dev-data-key-cipher.js';
+
+/** Fails every write, for the audit-rollback proof — same shape as the unit fakes. */
+class FailingAuditWriter implements AuditWriter {
+  withTransaction(): AuditWriter {
+    return this;
+  }
+
+  record(): Promise<void> {
+    return Promise.reject(new Error('audit log unavailable'));
+  }
+}
 
 interface AuthSessionBody {
   data: { user: { id: string; role: string }; accessToken: string };
@@ -100,6 +124,22 @@ describe('POST /api/v1/vendors/me/kyc', () => {
       .send({})
       .expect(201);
     return logIn(email);
+  };
+
+  /** Same as `signUpVendorOwner`, but also resolves the row ids the use case needs directly. */
+  const signUpVendorOwnerWithIds = async (
+    label: string,
+  ): Promise<{ token: string; userId: string; vendorId: string }> => {
+    const { token, email } = await signUpCustomer(label);
+    await request(app)
+      .post('/api/v1/vendors')
+      .set('Authorization', `Bearer ${token}`)
+      .send({})
+      .expect(201);
+    const loggedInToken = await logIn(email);
+    const user = await db.user.findUniqueOrThrow({ where: { email } });
+    const vendor = await db.vendorProfile.findFirstOrThrow({ where: { userId: user.id } });
+    return { token: loggedInToken, userId: user.id, vendorId: vendor.id };
   };
 
   /** Mints intents and actually uploads each object, as a browser would. */
@@ -372,6 +412,99 @@ describe('POST /api/v1/vendors/me/kyc', () => {
       // attempt before the unique index is ever reached (SDD 15.1).
       const second = await uploadAll(token).catch(() => null);
       expect(second).toBeNull();
+    });
+  });
+
+  describe('audit (KYC-6)', () => {
+    interface AuditRow {
+      action: string;
+      entity_type: string;
+      entity_id: string | null;
+      actor_id: string | null;
+      actor_role: string;
+      reason: string | null;
+      after: unknown;
+    }
+
+    const auditRowsFor = async (entityId: string): Promise<AuditRow[]> =>
+      db.$queryRawUnsafe<AuditRow[]>(
+        `SELECT action, entity_type, entity_id, actor_id, actor_role, reason, after
+           FROM audit_logs
+          WHERE entity_id = $1::uuid AND action = $2
+          ORDER BY created_at DESC`,
+        entityId,
+        VENDOR_AUDIT_ACTIONS.KYC_SUBMITTED,
+      );
+
+    it('writes exactly one audit row, committed alongside the submission', async () => {
+      const token = await signUpVendorOwner('audit-happy-path');
+      const intent = await uploadAll(token);
+
+      await submit(token, submissionBodyFor(intent)).expect(201);
+
+      const rows = await auditRowsFor(intent.kycId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.entity_type).toBe('VendorKyc');
+    });
+
+    it('carries only the safe identifiers, never PAN, account number or fingerprints', async () => {
+      const token = await signUpVendorOwner('audit-minimal');
+      const intent = await uploadAll(token);
+
+      await submit(token, submissionBodyFor(intent)).expect(201);
+
+      const [row] = await auditRowsFor(intent.kycId);
+      const serialised = JSON.stringify(row);
+      expect(serialised).not.toContain(PAN);
+      expect(serialised).not.toContain(ACCOUNT_NUMBER);
+      expect(row?.reason).toBeNull();
+    });
+
+    it('leaves no submission, vendor transition or audit row when the audit write fails', async () => {
+      const { token, userId, vendorId } = await signUpVendorOwnerWithIds('audit-rollback');
+      const intent = await uploadAll(token);
+
+      const useCase = new SubmitVendorKycUseCase({
+        vendorRepository: new PrismaVendorRepository(container.prisma),
+        vendorKycRepository: new PrismaVendorKycRepository(container.prisma),
+        objectStore: new S3ObjectStore(s3, { bucket: container.env.KYC_S3_BUCKET }),
+        fingerprinter: new HmacIdentifierFingerprinter(container.env.KYC_FINGERPRINT_PEPPER),
+        transactionRunner: new PrismaTransactionRunner(container.prisma),
+        auditWriter: new FailingAuditWriter(),
+        idGenerator: new UuidV7Generator(),
+        clock: container.clock,
+        logger: new NullLogger(),
+      });
+      const body = submissionBodyFor(intent) as {
+        kycId: string;
+        pan: string;
+        gstin: string;
+        bankAccount: { accountNumber: string; ifsc: string };
+        documents: {
+          type: string;
+          wrappedDataKey: string;
+          contentType: string;
+          sizeBytes: number;
+        }[];
+      };
+
+      await expect(
+        runWithTenant({ userId: toUserId(userId), vendorId: toVendorId(vendorId) }, () =>
+          useCase.execute({
+            principal: {
+              userId: toUserId(userId),
+              sessionId: toSessionId(crypto.randomUUID()),
+              role: 'VENDOR_OWNER',
+            },
+            ...body,
+          }),
+        ),
+      ).rejects.toThrow(/audit log unavailable/);
+
+      expect(await db.vendorKycSubmission.findUnique({ where: { id: intent.kycId } })).toBeNull();
+      const vendor = await db.vendorProfile.findUniqueOrThrow({ where: { id: vendorId } });
+      expect(vendor.status).toBe('REGISTERED');
+      expect(await auditRowsFor(intent.kycId)).toHaveLength(0);
     });
   });
 });

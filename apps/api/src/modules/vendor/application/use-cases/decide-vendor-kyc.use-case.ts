@@ -1,5 +1,8 @@
 import type { Clock, Logger, TransactionRunner } from '@leen-mart/domain-kit';
+import { toUuid } from '@leen-mart/domain-kit';
+import type { AuditWriter } from '../../../audit/index.js';
 import type { Principal } from '../../../identity/index.js';
+import { VENDOR_AUDIT_ACTIONS, VENDOR_AUDIT_ENTITY_TYPES } from '../../domain/audit-actions.js';
 import type { VendorKyc } from '../../domain/entities/vendor-kyc.entity.js';
 import type { VendorProfile } from '../../domain/entities/vendor-profile.entity.js';
 import {
@@ -36,6 +39,7 @@ export interface DecideVendorKycDeps {
   readonly vendorKycRepository: VendorKycRepository;
   readonly vendorRepository: VendorRepository;
   readonly transactionRunner: TransactionRunner;
+  readonly auditWriter: AuditWriter;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -57,7 +61,8 @@ export class DecideVendorKycUseCase {
   constructor(private readonly deps: DecideVendorKycDeps) {}
 
   async execute(input: DecideVendorKycInput): Promise<DecideVendorKycResult> {
-    const { vendorKycRepository, vendorRepository, transactionRunner, clock, logger } = this.deps;
+    const { vendorKycRepository, vendorRepository, transactionRunner, auditWriter, clock, logger } =
+      this.deps;
 
     return transactionRunner.run(async (scope) => {
       const kycRepository = vendorKycRepository.withTransaction(scope);
@@ -93,6 +98,24 @@ export class DecideVendorKycUseCase {
         throw new KycAlreadyDecidedError();
       }
       await profileRepository.update(transitioned);
+
+      // Only the winner reaches here — the loser threw above and this
+      // transaction never opened for them, so a lost race writes no audit
+      // row. The coded reason travels on a rejection; the reviewer's
+      // free-text note never does — it is a reviewer's prose about a named
+      // vendor, not a lifecycle fact.
+      await auditWriter.withTransaction(scope).record({
+        actorId: input.principal.userId,
+        actorRole: input.principal.role,
+        action:
+          input.command.decision === 'APPROVE'
+            ? VENDOR_AUDIT_ACTIONS.KYC_APPROVED
+            : VENDOR_AUDIT_ACTIONS.KYC_REJECTED,
+        entityType: VENDOR_AUDIT_ENTITY_TYPES.KYC,
+        entityId: toUuid(decided.id),
+        reason: decided.review?.rejectionReason?.name ?? null,
+        after: { vendorId: decided.vendorId },
+      });
 
       // The decision and the id only — never the reason's free text, which is
       // a reviewer's prose about a named vendor.

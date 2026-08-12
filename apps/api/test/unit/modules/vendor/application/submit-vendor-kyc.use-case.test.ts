@@ -7,6 +7,8 @@ import {
   type TransactionRunner,
   type TransactionScope,
 } from '@leen-mart/domain-kit';
+import type { AuditWriter, AuditWriterInput } from '../../../../../src/modules/audit/index.js';
+import { VENDOR_AUDIT_ACTIONS } from '../../../../../src/modules/vendor/domain/audit-actions.js';
 import { SubmitVendorKycUseCase } from '../../../../../src/modules/vendor/application/use-cases/submit-vendor-kyc.use-case.js';
 import type {
   ObjectStore,
@@ -34,7 +36,11 @@ import { toUserId } from '../../../../../src/modules/identity/domain/value-objec
 import { toVendorId } from '../../../../../src/modules/identity/domain/value-objects/vendor-id.value-object.js';
 import { toSessionId } from '../../../../../src/modules/identity/domain/value-objects/session-id.value-object.js';
 import type { Principal } from '../../../../../src/modules/identity/application/ports/principal.js';
-import { nullLogger } from '../../identity/application/fakes.js';
+import {
+  FailingAuditWriter,
+  nullLogger,
+  RecordingAuditWriter,
+} from '../../identity/application/fakes.js';
 
 const NOW = new Date('2026-02-01T00:00:00.000Z');
 const vendorId = toVendorId('00000000-0000-7000-8000-0000000000f1');
@@ -133,6 +139,7 @@ interface Harness {
   created: VendorKyc[];
   updated: VendorProfile[];
   kycRepository: VendorKycRepository;
+  auditWriter: AuditWriter;
   transactionCalls: number;
 }
 
@@ -141,12 +148,14 @@ const setup = (
     vendor?: VendorProfile | null;
     objects?: Map<string, StoredObject>;
     failCreate?: Error;
+    auditWriter?: AuditWriter;
   } = {},
 ): Harness => {
   const vendor = options.vendor === undefined ? vendorIn(VendorStatus.REGISTERED) : options.vendor;
   const store = new MapObjectStore(options.objects ?? objectsFor());
   const created: VendorKyc[] = [];
   const updated: VendorProfile[] = [];
+  const auditWriter = new RecordingAuditWriter();
   const harness = { transactionCalls: 0 };
 
   const kycRepository = {
@@ -183,6 +192,8 @@ const setup = (
     },
   };
 
+  const resolvedAuditWriter = options.auditWriter ?? auditWriter;
+
   return {
     useCase: new SubmitVendorKycUseCase({
       vendorRepository,
@@ -190,6 +201,7 @@ const setup = (
       objectStore: store,
       fingerprinter: new FakeFingerprinter(),
       transactionRunner,
+      auditWriter: resolvedAuditWriter,
       idGenerator: new UuidV7Generator(),
       clock: new FixedClock(NOW),
       logger: nullLogger,
@@ -198,6 +210,7 @@ const setup = (
     created,
     updated,
     kycRepository,
+    auditWriter: resolvedAuditWriter,
     get transactionCalls(): number {
       return harness.transactionCalls;
     },
@@ -500,6 +513,73 @@ describe('SubmitVendorKycUseCase', () => {
       for (const document of SUBMITTED) {
         expect(documents).not.toContain(document.wrappedDataKey);
       }
+    });
+  });
+
+  describe('audit (KYC-6)', () => {
+    const entryOf = (writer: AuditWriter): AuditWriterInput => {
+      const [entry] = (writer as RecordingAuditWriter).entries;
+      if (!entry) throw new Error('expected an audit entry');
+      return entry;
+    };
+
+    it('records exactly one audit event for a successful submission', async () => {
+      const { useCase, auditWriter } = setup();
+
+      await submit(useCase);
+
+      expect((auditWriter as RecordingAuditWriter).entries).toHaveLength(1);
+    });
+
+    it('records the submission action, entity type and kyc id', async () => {
+      const { useCase, auditWriter } = setup();
+
+      await submit(useCase);
+
+      const entry = entryOf(auditWriter);
+      expect(entry.action).toBe(VENDOR_AUDIT_ACTIONS.KYC_SUBMITTED);
+      expect(entry.entityType).toBe('VendorKyc');
+      expect(entry.entityId).toBe(KYC_ID);
+    });
+
+    it('takes the actor from the authenticated principal, never the request', async () => {
+      const { useCase, auditWriter } = setup();
+
+      await submit(useCase);
+
+      const entry = entryOf(auditWriter);
+      expect(entry.actorId).toBe(principal.userId);
+      expect(entry.actorRole).toBe(principal.role);
+    });
+
+    it('keeps PAN, account number, fingerprints and key material out of the audit payload', async () => {
+      const { useCase, auditWriter } = setup();
+
+      await submit(useCase);
+
+      const serialised = JSON.stringify(entryOf(auditWriter));
+      expect(serialised).not.toContain(PAN);
+      expect(serialised).not.toContain(ACCOUNT_NUMBER);
+      expect(serialised).not.toContain('wrappedDataKey');
+      for (const document of SUBMITTED) {
+        expect(serialised).not.toContain(document.wrappedDataKey);
+      }
+    });
+
+    it('writes the audit entry through the transaction-bound writer', async () => {
+      const auditWriter = new RecordingAuditWriter();
+      const withTransaction = vi.spyOn(auditWriter, 'withTransaction');
+      const { useCase } = setup({ auditWriter });
+
+      await submit(useCase);
+
+      expect(withTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('propagates an audit persistence failure rather than returning success', async () => {
+      const { useCase } = setup({ auditWriter: new FailingAuditWriter() });
+
+      await expect(submit(useCase)).rejects.toThrow(/audit log unavailable/);
     });
   });
 });

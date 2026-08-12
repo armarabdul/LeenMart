@@ -1,6 +1,8 @@
 import type { Clock, IdGenerator, Logger, TransactionRunner } from '@leen-mart/domain-kit';
-import { NotFoundError, ValidationError } from '@leen-mart/domain-kit';
+import { NotFoundError, toUuid, ValidationError } from '@leen-mart/domain-kit';
+import type { AuditWriter } from '../../../audit/index.js';
 import type { Principal, VendorId } from '../../../identity/index.js';
+import { VENDOR_AUDIT_ACTIONS, VENDOR_AUDIT_ENTITY_TYPES } from '../../domain/audit-actions.js';
 import { KycDocument } from '../../domain/entities/kyc-document.entity.js';
 import { VendorKyc, type KycIdentifiers } from '../../domain/entities/vendor-kyc.entity.js';
 import type { VendorProfile } from '../../domain/entities/vendor-profile.entity.js';
@@ -44,6 +46,7 @@ export interface SubmitVendorKycDeps {
   readonly objectStore: ObjectStore;
   readonly fingerprinter: IdentifierFingerprinter;
   readonly transactionRunner: TransactionRunner;
+  readonly auditWriter: AuditWriter;
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
   readonly logger: Logger;
@@ -96,7 +99,7 @@ export class SubmitVendorKycUseCase {
   constructor(private readonly deps: SubmitVendorKycDeps) {}
 
   async execute(input: SubmitVendorKycInput): Promise<SubmitVendorKycResult> {
-    const { vendorRepository, transactionRunner, clock, logger } = this.deps;
+    const { vendorRepository, transactionRunner, auditWriter, clock, logger } = this.deps;
 
     const vendor = await vendorRepository.findByUserId(input.principal.userId);
     if (!vendor) {
@@ -131,13 +134,22 @@ export class SubmitVendorKycUseCase {
     });
     const submitted = vendor.submitKyc(now);
 
-    // One transaction over two repositories. Either both land or neither
-    // does: a submission without the transition strands the vendor behind a
-    // unique index they cannot see, and a transition without the submission
-    // strands them in `KYC_SUBMITTED` with nothing to review and no way back.
+    // One transaction over two repositories and the audit write. All three
+    // land or none does: a submission without the transition strands the
+    // vendor behind a unique index they cannot see, a transition without the
+    // submission strands them in `KYC_SUBMITTED` with nothing to review and
+    // no way back, and SDD 18.4 makes the audit entry as binding as either.
     await transactionRunner.run(async (scope) => {
       await this.deps.vendorKycRepository.withTransaction(scope).create(kyc);
       await vendorRepository.withTransaction(scope).update(submitted);
+      await auditWriter.withTransaction(scope).record({
+        actorId: input.principal.userId,
+        actorRole: input.principal.role,
+        action: VENDOR_AUDIT_ACTIONS.KYC_SUBMITTED,
+        entityType: VENDOR_AUDIT_ENTITY_TYPES.KYC,
+        entityId: toUuid(kyc.id),
+        after: { vendorId: kyc.vendorId },
+      });
     });
 
     // Ids and counts only — never an identifier, a fingerprint or key material.

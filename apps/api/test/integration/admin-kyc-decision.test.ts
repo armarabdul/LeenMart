@@ -2,10 +2,20 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Express } from 'express';
 import request from 'supertest';
 import { OTP } from 'otplib';
-import { FixedClock, UuidV7Generator } from '@leen-mart/domain-kit';
+import { FixedClock, NullLogger, UuidV7Generator } from '@leen-mart/domain-kit';
 import { PrismaClient } from '@prisma/client';
 import { createApp } from '../../src/app.js';
 import { createContainer, type Container } from '../../src/container.js';
+import type { AuditWriter } from '../../src/modules/audit/index.js';
+import { VENDOR_AUDIT_ACTIONS } from '../../src/modules/vendor/domain/audit-actions.js';
+import { StartKycReviewUseCase } from '../../src/modules/vendor/application/use-cases/start-kyc-review.use-case.js';
+import { DecideVendorKycUseCase } from '../../src/modules/vendor/application/use-cases/decide-vendor-kyc.use-case.js';
+import { PrismaVendorKycRepository } from '../../src/modules/vendor/infrastructure/persistence/prisma-vendor-kyc.repository.js';
+import { PrismaVendorRepository } from '../../src/modules/vendor/infrastructure/persistence/prisma-vendor.repository.js';
+import { AdminTransactionRunner } from '../../src/shared/infrastructure/persistence/tenant-prisma.js';
+import { toKycId } from '../../src/modules/vendor/domain/value-objects/kyc-id.value-object.js';
+import { toSessionId } from '../../src/modules/identity/domain/value-objects/session-id.value-object.js';
+import type { Principal } from '../../src/modules/identity/application/ports/principal.js';
 import { Argon2PasswordHasher } from '../../src/modules/identity/infrastructure/security/argon2-password-hasher.js';
 import { AesGcmMfaSecretCipher } from '../../src/modules/identity/infrastructure/security/aes-gcm-mfa-secret-cipher.service.js';
 import { OtplibTotpService } from '../../src/modules/identity/infrastructure/security/otplib-totp.service.js';
@@ -17,6 +27,17 @@ import { Role } from '../../src/modules/identity/domain/value-objects/role.value
 import { toMfaSecretId } from '../../src/modules/identity/domain/value-objects/mfa-secret-id.value-object.js';
 import { toUserId } from '../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 import type { RoleName } from '../../src/modules/identity/domain/value-objects/role.value-object.js';
+
+/** Fails every write, for the audit-rollback proofs — same shape as the unit fakes. */
+class FailingAuditWriter implements AuditWriter {
+  withTransaction(): AuditWriter {
+    return this;
+  }
+
+  record(): Promise<void> {
+    return Promise.reject(new Error('audit log unavailable'));
+  }
+}
 
 const EMAIL_PREFIX = 'kyc-decide-';
 const ADMIN_PASSWORD = 'admin-password-that-is-long-enough';
@@ -510,6 +531,263 @@ describe('admin KYC decisions', () => {
 
       expect(row.decidedAt).not.toBeNull();
       expect(vendor.status).toBe('KYC_APPROVED');
+    });
+  });
+
+  describe('audit (KYC-6)', () => {
+    interface AuditRow {
+      action: string;
+      entity_type: string;
+      entity_id: string | null;
+      actor_id: string | null;
+      actor_role: string;
+      reason: string | null;
+      after: unknown;
+    }
+
+    const auditRowsFor = async (entityId: string): Promise<AuditRow[]> =>
+      db.$queryRawUnsafe<AuditRow[]>(
+        `SELECT action, entity_type, entity_id, actor_id, actor_role, reason, after
+           FROM audit_logs
+          WHERE entity_id = $1::uuid
+          ORDER BY created_at ASC`,
+        entityId,
+      );
+
+    /** The claim/decision use cases built directly on `adminPrisma`, exactly as `vendor.module.ts` wires them. */
+    const decisionUseCases = (
+      auditWriter: AuditWriter,
+    ): {
+      startKycReviewUseCase: StartKycReviewUseCase;
+      decideVendorKycUseCase: DecideVendorKycUseCase;
+    } => {
+      const vendorKycRepository = new PrismaVendorKycRepository(container.adminPrisma);
+      const vendorRepository = new PrismaVendorRepository(container.adminPrisma);
+      const transactionRunner = new AdminTransactionRunner(container.adminPrisma);
+      return {
+        startKycReviewUseCase: new StartKycReviewUseCase({
+          vendorKycRepository,
+          transactionRunner,
+          auditWriter,
+          clock,
+          logger: new NullLogger(),
+        }),
+        decideVendorKycUseCase: new DecideVendorKycUseCase({
+          vendorKycRepository,
+          vendorRepository,
+          transactionRunner,
+          auditWriter,
+          clock,
+          logger: new NullLogger(),
+        }),
+      };
+    };
+
+    const principalOf = (userId: string): Principal => ({
+      userId: toUserId(userId),
+      sessionId: toSessionId(ids.generate()),
+      role: 'RISK_ANALYST',
+    });
+
+    describe('claim', () => {
+      it('writes exactly one audit row for a winning claim, identifying the reviewer', async () => {
+        const { kycId } = await seedSubmission();
+        const { token, userId } = await adminFor('RISK_ANALYST');
+
+        await claim(token, kycId).expect(200);
+
+        const rows = (await auditRowsFor(kycId)).filter(
+          (row) => row.action === VENDOR_AUDIT_ACTIONS.KYC_REVIEW_STARTED,
+        );
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.entity_type).toBe('VendorKyc');
+        expect(rows[0]?.actor_id).toBe(userId);
+      });
+
+      it('writes no second audit row for the sequential claim the domain refuses', async () => {
+        const { kycId } = await seedSubmission();
+        const first = await adminFor('RISK_ANALYST');
+        const second = await adminFor('SUPER_ADMIN');
+
+        await claim(first.token, kycId).expect(200);
+        await claim(second.token, kycId);
+
+        const rows = (await auditRowsFor(kycId)).filter(
+          (row) => row.action === VENDOR_AUDIT_ACTIONS.KYC_REVIEW_STARTED,
+        );
+        expect(rows).toHaveLength(1);
+      });
+
+      it('rolls back the claim and writes no audit row when the audit write fails', async () => {
+        const { kycId } = await seedSubmission();
+        const { userId } = await adminFor('RISK_ANALYST');
+        const { startKycReviewUseCase } = decisionUseCases(new FailingAuditWriter());
+
+        await expect(
+          startKycReviewUseCase.execute({ principal: principalOf(userId), kycId: toKycId(kycId) }),
+        ).rejects.toThrow(/audit log unavailable/);
+
+        const row = await db.vendorKycSubmission.findUniqueOrThrow({ where: { id: kycId } });
+        expect(row.reviewedBy).toBeNull();
+        expect(await auditRowsFor(kycId)).toHaveLength(0);
+      });
+    });
+
+    describe('approval', () => {
+      it('writes exactly one audit row identifying the admin and the kyc submission', async () => {
+        const { token, userId } = await adminFor('RISK_ANALYST');
+        const { kycId } = await seedSubmission({ claimedBy: userId });
+
+        await decide(token, kycId, { decision: 'APPROVE' }).expect(200);
+
+        const rows = await auditRowsFor(kycId);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.action).toBe(VENDOR_AUDIT_ACTIONS.KYC_APPROVED);
+        expect(rows[0]?.entity_type).toBe('VendorKyc');
+        expect(rows[0]?.actor_id).toBe(userId);
+        expect(rows[0]?.reason).toBeNull();
+      });
+
+      it('carries no key material, fingerprint or object key', async () => {
+        const { token, userId } = await adminFor('RISK_ANALYST');
+        const { kycId } = await seedSubmission({ claimedBy: userId });
+
+        await decide(token, kycId, { decision: 'APPROVE' }).expect(200);
+
+        const [row] = await auditRowsFor(kycId);
+        const serialised = JSON.stringify(row);
+        for (const forbidden of [
+          'wrappedDataKey',
+          'wrapped-key-material',
+          'panFingerprint',
+          'bankFingerprint',
+          'a'.repeat(64),
+          'b'.repeat(64),
+          'objectKey',
+          '.enc',
+        ]) {
+          expect(serialised).not.toContain(forbidden);
+        }
+      });
+
+      it('writes no audit row when the decision is refused because nobody claimed it', async () => {
+        const { token } = await adminFor('RISK_ANALYST');
+        const { kycId } = await seedSubmission();
+
+        await decide(token, kycId, { decision: 'APPROVE' });
+
+        expect(await auditRowsFor(kycId)).toHaveLength(0);
+      });
+
+      it('rolls back the decision and the vendor transition when the audit write fails', async () => {
+        const { userId } = await adminFor('RISK_ANALYST');
+        const { kycId, vendorId } = await seedSubmission({ claimedBy: userId });
+        const { decideVendorKycUseCase } = decisionUseCases(new FailingAuditWriter());
+
+        await expect(
+          decideVendorKycUseCase.execute({
+            principal: principalOf(userId),
+            kycId: toKycId(kycId),
+            command: { decision: 'APPROVE' },
+          }),
+        ).rejects.toThrow(/audit log unavailable/);
+
+        const row = await db.vendorKycSubmission.findUniqueOrThrow({ where: { id: kycId } });
+        expect(row.decidedAt).toBeNull();
+        const vendor = await db.vendorProfile.findUniqueOrThrow({ where: { id: vendorId } });
+        expect(vendor.status).toBe('KYC_UNDER_REVIEW');
+        expect(await auditRowsFor(kycId)).toHaveLength(0);
+      });
+    });
+
+    describe('rejection', () => {
+      it('writes exactly one audit row with the coded reason and no free-text note', async () => {
+        const { token, userId } = await adminFor('RISK_ANALYST');
+        const { kycId } = await seedSubmission({ claimedBy: userId });
+        const note = 'Business name on the certificate does not match the application.';
+
+        await decide(token, kycId, { decision: 'REJECT', reason: 'OTHER', note }).expect(200);
+
+        const rows = await auditRowsFor(kycId);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.action).toBe(VENDOR_AUDIT_ACTIONS.KYC_REJECTED);
+        expect(rows[0]?.reason).toBe('OTHER');
+        expect(JSON.stringify(rows[0])).not.toContain(note);
+      });
+
+      it('records the specific coded reason', async () => {
+        const { token, userId } = await adminFor('RISK_ANALYST');
+        const { kycId } = await seedSubmission({ claimedBy: userId });
+
+        await decide(token, kycId, {
+          decision: 'REJECT',
+          reason: 'BANK_DETAILS_MISMATCH',
+        }).expect(200);
+
+        const [row] = await auditRowsFor(kycId);
+        expect(row?.reason).toBe('BANK_DETAILS_MISMATCH');
+      });
+
+      it('rolls back the decision and the vendor transition when the audit write fails', async () => {
+        const { userId } = await adminFor('RISK_ANALYST');
+        const { kycId, vendorId } = await seedSubmission({ claimedBy: userId });
+        const { decideVendorKycUseCase } = decisionUseCases(new FailingAuditWriter());
+
+        await expect(
+          decideVendorKycUseCase.execute({
+            principal: principalOf(userId),
+            kycId: toKycId(kycId),
+            command: { decision: 'REJECT', reason: 'DOCUMENT_UNCLEAR' },
+          }),
+        ).rejects.toThrow(/audit log unavailable/);
+
+        const row = await db.vendorKycSubmission.findUniqueOrThrow({ where: { id: kycId } });
+        expect(row.decidedAt).toBeNull();
+        const vendor = await db.vendorProfile.findUniqueOrThrow({ where: { id: vendorId } });
+        expect(vendor.status).toBe('KYC_UNDER_REVIEW');
+        expect(await auditRowsFor(kycId)).toHaveLength(0);
+      });
+    });
+
+    describe('concurrency', () => {
+      it('produces exactly one claim audit row when two claims race', async () => {
+        const { kycId } = await seedSubmission();
+        const first = await adminFor('RISK_ANALYST');
+        const second = await adminFor('SUPER_ADMIN');
+
+        await Promise.all([claim(first.token, kycId), claim(second.token, kycId)]);
+
+        const rows = (await auditRowsFor(kycId)).filter(
+          (row) => row.action === VENDOR_AUDIT_ACTIONS.KYC_REVIEW_STARTED,
+        );
+        expect(rows).toHaveLength(1);
+        expect([first.userId, second.userId]).toContain(rows[0]?.actor_id);
+      });
+
+      it('produces exactly one decision audit row when two decisions race, agreeing with the winner', async () => {
+        const { token, userId } = await adminFor('RISK_ANALYST');
+        const { kycId, vendorId } = await seedSubmission({ claimedBy: userId });
+
+        await Promise.all([
+          decide(token, kycId, { decision: 'APPROVE' }),
+          decide(token, kycId, { decision: 'REJECT', reason: 'DOCUMENT_UNCLEAR' }),
+        ]);
+
+        const rows = (await auditRowsFor(kycId)).filter((row) =>
+          [
+            VENDOR_AUDIT_ACTIONS.KYC_APPROVED as string,
+            VENDOR_AUDIT_ACTIONS.KYC_REJECTED as string,
+          ].includes(row.action),
+        );
+        expect(rows).toHaveLength(1);
+
+        const vendor = await db.vendorProfile.findUniqueOrThrow({ where: { id: vendorId } });
+        const winnerAction =
+          vendor.status === 'KYC_APPROVED'
+            ? VENDOR_AUDIT_ACTIONS.KYC_APPROVED
+            : VENDOR_AUDIT_ACTIONS.KYC_REJECTED;
+        expect(rows[0]?.action).toBe(winnerAction);
+      });
     });
   });
 

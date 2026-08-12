@@ -4,6 +4,8 @@ import type { PrismaClient } from '@prisma/client';
 import type { Router } from 'express';
 import type { Clock, IdGenerator, Logger } from '@leen-mart/domain-kit';
 import type { Env } from '../../shared/config/env.js';
+import { AmbientAuditWriter, type AuditWriter } from '../audit/index.js';
+import { PrismaAuditLogRepository } from '../audit/infrastructure/persistence/prisma-audit-log.repository.js';
 import type { AccessTokenService, SessionDenylist, UserId, VendorId } from '../identity/index.js';
 import type { DataKeyCipher } from './application/ports/data-key-cipher.port.js';
 import { DevDataKeyCipher } from './infrastructure/crypto/dev-data-key-cipher.js';
@@ -123,6 +125,7 @@ const buildKycUseCases = (params: {
   objectStore: S3ObjectStore;
   dataKeyCipher: DataKeyCipher;
   transactionRunner: PrismaTransactionRunner;
+  auditWriter: AuditWriter;
   idGenerator: IdGenerator;
   clock: Clock;
   logger: Logger;
@@ -144,6 +147,7 @@ const buildKycUseCases = (params: {
     objectStore: params.objectStore,
     fingerprinter: new HmacIdentifierFingerprinter(params.env.KYC_FINGERPRINT_PEPPER),
     transactionRunner: params.transactionRunner,
+    auditWriter: params.auditWriter,
     idGenerator: params.idGenerator,
     clock: params.clock,
     logger: params.logger,
@@ -198,6 +202,7 @@ const buildAdminKycDecisionUseCases = (params: {
   vendorKycRepository: PrismaVendorKycRepository;
   vendorRepository: PrismaVendorRepository;
   transactionRunner: AdminTransactionRunner;
+  auditWriter: AuditWriter;
   clock: Clock;
   logger: Logger;
 }): {
@@ -208,10 +213,87 @@ const buildAdminKycDecisionUseCases = (params: {
   decideVendorKycUseCase: new DecideVendorKycUseCase(params),
 });
 
+/**
+ * SDD 5.1 lets any module call `audit` directly through its published
+ * interface. Mirrors `identity.module.ts`'s `buildAuditWriter` exactly — one
+ * instance per Prisma client, since this module, unlike identity, writes
+ * across two: the tenant-scoped client for the vendor-facing submission path,
+ * and `adminPrisma` for the admin claim/decision path.
+ */
+const buildAuditWriter = (deps: {
+  prisma: PrismaClient;
+  idGenerator: IdGenerator;
+  clock: Clock;
+}): AmbientAuditWriter =>
+  new AmbientAuditWriter({
+    auditLogRepository: new PrismaAuditLogRepository(deps.prisma),
+    idGenerator: deps.idGenerator,
+    clock: deps.clock,
+  });
+
+/**
+ * Everything the vendor-facing router needs: registration and the two KYC use
+ * cases, all built on the tenant-scoped client. Split out of
+ * `createVendorModule` for the same reason the builders above it were — to
+ * keep the composition root under this file's function-length budget.
+ */
+const buildVendorFacingUseCases = (params: {
+  prisma: PrismaClient;
+  env: Env;
+  sessionDenylist: SessionDenylist;
+  accessTokenTtlSeconds: number;
+  idGenerator: IdGenerator;
+  clock: Clock;
+  logger: Logger;
+}): {
+  vendorRepository: PrismaVendorRepository;
+  registerVendorUseCase: RegisterVendorUseCase;
+  createKycUploadIntentUseCase: CreateKycUploadIntentUseCase;
+  submitVendorKycUseCase: SubmitVendorKycUseCase;
+} => {
+  const { prisma, env, sessionDenylist, accessTokenTtlSeconds, idGenerator, clock, logger } =
+    params;
+  const vendorRepository = new PrismaVendorRepository(prisma);
+  const objectStore = new S3ObjectStore(createKycS3Client(env), { bucket: env.KYC_S3_BUCKET });
+  const transactionRunner = new PrismaTransactionRunner(prisma);
+  const auditWriter = buildAuditWriter({ prisma, idGenerator, clock });
+
+  const registerVendorUseCase = buildRegisterVendorUseCase({
+    prisma,
+    vendorRepository,
+    sessionDenylist,
+    transactionRunner,
+    accessTokenTtlSeconds,
+    idGenerator,
+    clock,
+    logger,
+  });
+  const { createKycUploadIntentUseCase, submitVendorKycUseCase } = buildKycUseCases({
+    prisma,
+    env,
+    vendorRepository,
+    objectStore,
+    dataKeyCipher: createDataKeyCipher(env),
+    transactionRunner,
+    auditWriter,
+    idGenerator,
+    clock,
+    logger,
+  });
+
+  return {
+    vendorRepository,
+    registerVendorUseCase,
+    createKycUploadIntentUseCase,
+    submitVendorKycUseCase,
+  };
+};
+
 const buildAdminKycRouter = (params: {
   adminPrisma: PrismaClient;
   accessTokenService: AccessTokenService;
   sessionDenylist: SessionDenylist;
+  idGenerator: IdGenerator;
   clock: Clock;
   logger: Logger;
 }): Router => {
@@ -225,6 +307,13 @@ const buildAdminKycRouter = (params: {
   // transaction and refuses without a tenant context, which these routes
   // deliberately never establish.
   const transactionRunner = new AdminTransactionRunner(params.adminPrisma);
+  // Built on `adminPrisma` too, so the audit write joins the same transaction
+  // as the decision it records rather than crossing to a different client.
+  const auditWriter = buildAuditWriter({
+    prisma: params.adminPrisma,
+    idGenerator: params.idGenerator,
+    clock: params.clock,
+  });
 
   return createAdminKycRouter(
     createAdminKycController({
@@ -233,6 +322,7 @@ const buildAdminKycRouter = (params: {
         vendorKycRepository,
         vendorRepository,
         transactionRunner,
+        auditWriter,
         clock: params.clock,
         logger: params.logger,
       }),
@@ -261,30 +351,16 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
   } = deps;
   const moduleLogger = logger.child({ module: 'vendor' });
 
-  const vendorRepository = new PrismaVendorRepository(prisma);
-  const objectStore = new S3ObjectStore(createKycS3Client(env), { bucket: env.KYC_S3_BUCKET });
-  const dataKeyCipher = createDataKeyCipher(env);
-
-  const transactionRunner = new PrismaTransactionRunner(prisma);
-
-  const registerVendorUseCase = buildRegisterVendorUseCase({
-    prisma,
+  const {
     vendorRepository,
-    sessionDenylist,
-    transactionRunner,
-    accessTokenTtlSeconds,
-    idGenerator,
-    clock,
-    logger: moduleLogger,
-  });
-
-  const { createKycUploadIntentUseCase, submitVendorKycUseCase } = buildKycUseCases({
+    registerVendorUseCase,
+    createKycUploadIntentUseCase,
+    submitVendorKycUseCase,
+  } = buildVendorFacingUseCases({
     prisma,
     env,
-    vendorRepository,
-    objectStore,
-    dataKeyCipher,
-    transactionRunner,
+    sessionDenylist,
+    accessTokenTtlSeconds,
     idGenerator,
     clock,
     logger: moduleLogger,
@@ -308,6 +384,7 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
     adminPrisma,
     accessTokenService,
     sessionDenylist,
+    idGenerator,
     clock,
     logger: moduleLogger,
   });
