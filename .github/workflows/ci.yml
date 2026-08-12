@@ -89,11 +89,28 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:generate
 
+      # Provisioning, in the order the roles require: the schema and the roles
+      # come from migrations, then the roles get the passwords the runtime URLs
+      # below use. Until now CI ran the integration suite against a database
+      # with no tables at all.
+      - name: Provision the test database
+        working-directory: apps/api
+        env:
+          ENV_FILE: .env.test
+          DATABASE_URL: postgresql://leenmart:leenmart@localhost:5432/leenmart_test?schema=public
+          APP_DATABASE_URL: postgresql://leenmart_app:leenmart_app_dev@localhost:5432/leenmart_test?schema=public
+          ADMIN_DATABASE_URL: postgresql://leenmart_admin:leenmart_admin_dev@localhost:5432/leenmart_test?schema=public
+        run: |
+          pnpm db:migrate:deploy
+          pnpm db:provision-roles
+
       - name: Run integration tests
         working-directory: apps/api
         env:
           ENV_FILE: .env.test
           DATABASE_URL: postgresql://leenmart:leenmart@localhost:5432/leenmart_test?schema=public
+          APP_DATABASE_URL: postgresql://leenmart_app:leenmart_app_dev@localhost:5432/leenmart_test?schema=public
+          ADMIN_DATABASE_URL: postgresql://leenmart_admin:leenmart_admin_dev@localhost:5432/leenmart_test?schema=public
           REDIS_URL: redis://localhost:6379/1
         run: pnpm test:integration
 

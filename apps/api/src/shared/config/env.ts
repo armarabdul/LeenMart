@@ -100,6 +100,45 @@ const assertProductionKycConfig = (
   }
 };
 
+/**
+ * Production must not serve requests on the owner connection.
+ *
+ * Outside production the runtime URLs fall back to `DATABASE_URL`, so a
+ * developer who has not reprovisioned still gets a working `pnpm dev`. In
+ * production that fallback is the whole vulnerability: the owner role is
+ * SUPERUSER with BYPASSRLS, so every policy KYC-2B-3 adds would be skipped and
+ * nothing would report it.
+ *
+ * Also refuses runtime URLs that are merely a copy of the owner URL — the
+ * likeliest way to satisfy the check above without actually separating
+ * anything.
+ */
+const assertProductionDatabaseRoles = (
+  env: {
+    DATABASE_URL: string;
+    APP_DATABASE_URL?: string | undefined;
+    ADMIN_DATABASE_URL?: string | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void => {
+  for (const key of ['APP_DATABASE_URL', 'ADMIN_DATABASE_URL'] as const) {
+    const value = env[key];
+    if (!value) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key],
+        message: `${key} must be set in production: serving requests on the owner connection bypasses row-level security entirely.`,
+      });
+    } else if (value === env.DATABASE_URL) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key],
+        message: `${key} must not be the owner connection — it defeats the role separation it exists to provide.`,
+      });
+    }
+  }
+};
+
 const envSchema = z
   .object({
     // --- runtime ---
@@ -117,7 +156,35 @@ const envSchema = z
     LOG_PRETTY: booleanFromString.default('false'),
 
     // --- data stores ---
+    /**
+     * The **owner** connection (`leenmart`). Migrations and schema tools only.
+     *
+     * Deliberately still the Prisma datasource `url` in schema.prisma, so
+     * `prisma migrate`, `prisma generate` and `prisma studio` keep working
+     * unchanged. Prisma's own `directUrl` convention was considered and not
+     * used: it provides two URLs and this platform needs three (owner, app,
+     * admin), and repointing the default datasource at the restricted role in
+     * the same change that introduces that role would silently move every
+     * existing tool and test onto it at once.
+     */
     DATABASE_URL: z.string().url().startsWith('postgres'),
+    /**
+     * The vendor-facing runtime connection (`leenmart_app`). Cannot bypass RLS
+     * and cannot alter the schema, which is what will make KYC-2B-3's policies
+     * mean something.
+     *
+     * Optional, and falls back to the owner connection: this chunk introduces
+     * the roles without forcing every developer to reprovision before their
+     * next `pnpm dev`. Production is refused below without it.
+     */
+    APP_DATABASE_URL: z.string().url().startsWith('postgres').optional(),
+    /**
+     * The admin/reviewer runtime connection (`leenmart_admin`). A separate
+     * credential from `APP_DATABASE_URL` on purpose — that separation *is* the
+     * elevated-access trust boundary, in place of a flag the application sets
+     * for itself.
+     */
+    ADMIN_DATABASE_URL: z.string().url().startsWith('postgres').optional(),
     DATABASE_POOL_SIZE: z.coerce.number().int().positive().max(100).default(10),
     REDIS_URL: z.string().url().startsWith('redis'),
 
@@ -243,6 +310,7 @@ const envSchema = z
         });
       }
       assertProductionKycConfig(env, ctx);
+      assertProductionDatabaseRoles(env, ctx);
     }
   });
 

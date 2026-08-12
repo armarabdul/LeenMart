@@ -21,6 +21,8 @@ const productionEnv = {
   KYC_KMS_KEY_ID: 'arn:aws:kms:ap-south-1:000000000000:key/real',
   KYC_S3_SECRET_ACCESS_KEY: 'a-real-object-storage-secret',
   KYC_FINGERPRINT_PEPPER: '9'.repeat(64),
+  APP_DATABASE_URL: 'postgresql://leenmart_app:secret@db:5432/leenmart?schema=public',
+  ADMIN_DATABASE_URL: 'postgresql://leenmart_admin:secret@db:5432/leenmart?schema=public',
 };
 
 describe('environment configuration', () => {
@@ -179,6 +181,48 @@ describe('environment configuration', () => {
 
       expect(env.KYC_USE_DEV_DATA_KEY_CIPHER).toBe(false);
       expect(env.KYC_KMS_KEY_ID).toBe('arn:aws:kms:ap-south-1:000000000000:key/real');
+    });
+  });
+
+  describe('runtime database roles (KYC-2B-1)', () => {
+    it('falls back to the owner connection outside production', () => {
+      // So a developer who has not run `db:provision-roles` still gets a
+      // working `pnpm dev` rather than a startup failure.
+      const env = loadEnv({ ...validEnv });
+
+      expect(env.APP_DATABASE_URL).toBeUndefined();
+      expect(env.ADMIN_DATABASE_URL).toBeUndefined();
+    });
+
+    it.each(['APP_DATABASE_URL', 'ADMIN_DATABASE_URL'] as const)(
+      'requires %s in production',
+      (variable) => {
+        // In production that fallback is the whole vulnerability: the owner
+        // role is SUPERUSER/BYPASSRLS, so every future policy would be skipped
+        // and nothing would report it.
+        const withoutRole: NodeJS.ProcessEnv = { ...productionEnv };
+        delete withoutRole[variable];
+
+        expect(() => loadEnv(withoutRole)).toThrow(new RegExp(variable));
+      },
+    );
+
+    it.each(['APP_DATABASE_URL', 'ADMIN_DATABASE_URL'])(
+      'refuses %s when it is merely a copy of the owner connection',
+      (variable) => {
+        // The likeliest way to satisfy the check above without separating
+        // anything at all.
+        expect(() => loadEnv({ ...productionEnv, [variable]: productionEnv.DATABASE_URL })).toThrow(
+          new RegExp(variable),
+        );
+      },
+    );
+
+    it('accepts distinct runtime connections in production', () => {
+      const env = loadEnv({ ...productionEnv });
+
+      expect(env.APP_DATABASE_URL).not.toBe(env.DATABASE_URL);
+      expect(env.ADMIN_DATABASE_URL).not.toBe(env.APP_DATABASE_URL);
     });
   });
 
