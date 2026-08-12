@@ -1,7 +1,11 @@
 import { Router } from 'express';
-import { registerVendorRequestSchema } from '@leen-mart/contracts';
+import {
+  createKycUploadIntentRequestSchema,
+  registerVendorRequestSchema,
+} from '@leen-mart/contracts';
 import { asyncHandler } from '../../../../shared/interface/http/middleware/async-handler.js';
 import { authenticate } from '../../../../shared/interface/http/middleware/authenticate.js';
+import { requirePermission } from '../../../../shared/interface/http/middleware/authorize.js';
 import {
   tenantContext,
   type VendorTenantResolver,
@@ -38,6 +42,27 @@ export const createVendorRouter = (
     tenantContext(resolveVendorTenant),
     validate({ body: registerVendorRequestSchema }),
     asyncHandler(controller.register),
+  );
+
+  // Phase 1 of KYC submission (SDD 12.2/12.3). The order is load-bearing and
+  // is SDD 7.4's three questions in sequence: `authenticate` answers "who is
+  // this?", `tenantContext` binds the database session to that caller's
+  // vendor, `requirePermission` answers "may this role do this at all?" —
+  // step 2, declarative, in the interface layer — and only then is the body
+  // parsed. Validation runs last on purpose: an unauthorised caller is
+  // refused without their payload ever being read.
+  //
+  // This is `requirePermission`'s first production consumer. Step 3 ("may
+  // *this* principal act on *this* object?") stays in the use case, which
+  // loads the caller's own vendor profile and never accepts a vendor id from
+  // the request.
+  router.post(
+    '/me/kyc/documents',
+    authenticate(accessTokenService, sessionDenylist),
+    tenantContext(resolveVendorTenant),
+    requirePermission('SUBMIT_OR_EDIT_KYC'),
+    validate({ body: createKycUploadIntentRequestSchema }),
+    asyncHandler(controller.createKycUploadIntent),
   );
 
   return router;

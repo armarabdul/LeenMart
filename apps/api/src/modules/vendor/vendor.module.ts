@@ -1,7 +1,15 @@
+import { KMSClient } from '@aws-sdk/client-kms';
+import { S3Client } from '@aws-sdk/client-s3';
 import type { PrismaClient } from '@prisma/client';
 import type { Router } from 'express';
 import type { Clock, IdGenerator, Logger } from '@leen-mart/domain-kit';
+import type { Env } from '../../shared/config/env.js';
 import type { AccessTokenService, SessionDenylist } from '../identity/index.js';
+import type { DataKeyCipher } from './application/ports/data-key-cipher.port.js';
+import { DevDataKeyCipher } from './infrastructure/crypto/dev-data-key-cipher.js';
+import { KmsDataKeyCipher } from './infrastructure/crypto/kms-data-key-cipher.js';
+import { S3ObjectStore } from './infrastructure/storage/s3-object-store.js';
+import { CreateKycUploadIntentUseCase } from './application/use-cases/create-kyc-upload-intent.use-case.js';
 import { PrismaVendorRepository } from './infrastructure/persistence/prisma-vendor.repository.js';
 import { PrismaUserRepository } from '../identity/infrastructure/persistence/prisma-user.repository.js';
 import { PrismaRefreshTokenRepository } from '../identity/infrastructure/persistence/prisma-refresh-token.repository.js';
@@ -12,6 +20,13 @@ import { createVendorRouter } from './interface/http/vendor.routes.js';
 
 export interface VendorModuleDeps {
   readonly prisma: PrismaClient;
+  /**
+   * Read here rather than pre-resolved into the container, so the AWS SDK
+   * clients this module needs stay inside it. `Container` deliberately does
+   * not know what an `S3Client` is — the same reason `identity` builds its own
+   * argon2 and JWT adapters instead of the composition root doing it.
+   */
+  readonly env: Env;
   /**
    * Verifies the caller's access token. Injected rather than constructed
    * here: SDD 5 makes `identity` the sole owner of tokens, so this module
@@ -38,6 +53,42 @@ export interface VendorModule {
 }
 
 /**
+ * One client for MinIO locally and R2 in production — the difference is
+ * entirely endpoint and credentials, which is exactly what `S3ObjectStore`'s
+ * own comment says it should be. No branch on environment.
+ */
+const createKycS3Client = (env: Env): S3Client =>
+  new S3Client({
+    region: env.KYC_S3_REGION,
+    endpoint: env.KYC_S3_ENDPOINT,
+    forcePathStyle: env.KYC_S3_FORCE_PATH_STYLE,
+    credentials: {
+      accessKeyId: env.KYC_S3_ACCESS_KEY_ID,
+      secretAccessKey: env.KYC_S3_SECRET_ACCESS_KEY,
+    },
+  });
+
+/**
+ * KMS in production, the AES-GCM stand-in outside it.
+ *
+ * The choice is `env.ts`'s, not this function's: `KYC_USE_DEV_DATA_KEY_CIPHER`
+ * is refused in production by a `superRefine` guard, and `DevDataKeyCipher`'s
+ * constructor refuses to build there as well. Two independent refusals, so
+ * neither has to be the only one that works.
+ */
+const createDataKeyCipher = (env: Env): DataKeyCipher => {
+  if (env.KYC_USE_DEV_DATA_KEY_CIPHER) {
+    return new DevDataKeyCipher(Buffer.from(env.KYC_DEV_WRAPPING_KEY, 'hex'), env.NODE_ENV);
+  }
+  if (!env.KYC_KMS_KEY_ID) {
+    throw new Error('KYC_KMS_KEY_ID must be set when the KMS data-key cipher is selected.');
+  }
+  return new KmsDataKeyCipher(new KMSClient({ region: env.KYC_KMS_REGION }), {
+    keyId: env.KYC_KMS_KEY_ID,
+  });
+};
+
+/**
  * This module's own composition root (SDD 2.3), mirroring
  * `createIdentityModule`: `app.ts` knows nothing about Prisma or the vendor
  * lifecycle — it hands over the shared container's ports and gets a router.
@@ -45,6 +96,7 @@ export interface VendorModule {
 export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
   const {
     prisma,
+    env,
     accessTokenService,
     sessionDenylist,
     accessTokenTtlSeconds,
@@ -55,6 +107,8 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
   const moduleLogger = logger.child({ module: 'vendor' });
 
   const vendorRepository = new PrismaVendorRepository(prisma);
+  const objectStore = new S3ObjectStore(createKycS3Client(env), { bucket: env.KYC_S3_BUCKET });
+  const dataKeyCipher = createDataKeyCipher(env);
 
   const registerVendorUseCase = new RegisterVendorUseCase({
     vendorRepository,
@@ -68,7 +122,19 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
     logger: moduleLogger,
   });
 
-  const controller = createVendorController({ registerVendorUseCase });
+  const createKycUploadIntentUseCase = new CreateKycUploadIntentUseCase({
+    vendorRepository,
+    objectStore,
+    dataKeyCipher,
+    idGenerator,
+    clock,
+    logger: moduleLogger,
+  });
+
+  const controller = createVendorController({
+    registerVendorUseCase,
+    createKycUploadIntentUseCase,
+  });
   const router = createVendorRouter(
     controller,
     accessTokenService,

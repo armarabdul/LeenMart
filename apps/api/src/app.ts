@@ -51,6 +51,7 @@ const mountBusinessModules = (
   app: Express,
   params: {
     prisma: Container['prisma'];
+    env: Container['env'];
     accessTokenService: AccessTokenService;
     sessionDenylist: SessionDenylist;
     accessTokenTtlSeconds: number;
@@ -143,6 +144,7 @@ export const createApp = (container: Container): Express => {
 
   mountBusinessModules(app, {
     prisma,
+    env,
     accessTokenService: identityModule.accessTokenService,
     sessionDenylist: identityModule.sessionDenylist,
     accessTokenTtlSeconds: env.JWT_ACCESS_TTL_SECONDS,
