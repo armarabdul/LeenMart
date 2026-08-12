@@ -4,7 +4,7 @@ import type { PrismaClient } from '@prisma/client';
 import type { Router } from 'express';
 import type { Clock, IdGenerator, Logger } from '@leen-mart/domain-kit';
 import type { Env } from '../../shared/config/env.js';
-import type { AccessTokenService, SessionDenylist } from '../identity/index.js';
+import type { AccessTokenService, SessionDenylist, UserId, VendorId } from '../identity/index.js';
 import type { DataKeyCipher } from './application/ports/data-key-cipher.port.js';
 import { DevDataKeyCipher } from './infrastructure/crypto/dev-data-key-cipher.js';
 import { KmsDataKeyCipher } from './infrastructure/crypto/kms-data-key-cipher.js';
@@ -20,9 +20,21 @@ import { PrismaTransactionRunner } from '../../shared/infrastructure/persistence
 import { RegisterVendorUseCase } from './application/use-cases/register-vendor.use-case.js';
 import { createVendorController } from './interface/http/vendor.controller.js';
 import { createVendorRouter } from './interface/http/vendor.routes.js';
+import { createAdminKycController } from './interface/http/admin-kyc.controller.js';
+import { createAdminKycRouter } from './interface/http/admin-kyc.routes.js';
+import { PrismaKycReviewQuery } from './infrastructure/persistence/prisma-kyc-review-query.js';
+import { ListKycReviewQueueUseCase } from './application/use-cases/list-kyc-review-queue.use-case.js';
+import { GetKycReviewSubmissionUseCase } from './application/use-cases/get-kyc-review-submission.use-case.js';
 
 export interface VendorModuleDeps {
   readonly prisma: PrismaClient;
+  /**
+   * The elevated, non-tenant-scoped credential (KYC-2B-1), used by the admin
+   * review queue and nothing else. Separate from `prisma` on purpose: that one
+   * is bound by RLS to one vendor per request, and a cross-tenant queue cannot
+   * be served through it.
+   */
+  readonly adminPrisma: PrismaClient;
   /**
    * Read here rather than pre-resolved into the container, so the AWS SDK
    * clients this module needs stay inside it. `Container` deliberately does
@@ -53,6 +65,8 @@ export interface VendorModuleDeps {
 
 export interface VendorModule {
   readonly router: Router;
+  /** Mounted separately at `/api/v1/admin/kyc` — a distinct surface (SDD 9.4). */
+  readonly adminKycRouter: Router;
 }
 
 /**
@@ -132,6 +146,37 @@ const buildKycUseCases = (params: {
 });
 
 /**
+ * The read-only admin review surface (KYC-5 Commit 2).
+ *
+ * Split out for the same reason `buildKycUseCases` was: to keep this module's
+ * composition root under its function-length budget. Built on `adminPrisma`
+ * because the queue reads across tenants — the vendor-facing client is bound
+ * by RLS to one vendor per request and would return nothing here.
+ */
+const buildAdminKycRouter = (params: {
+  adminPrisma: PrismaClient;
+  accessTokenService: AccessTokenService;
+  sessionDenylist: SessionDenylist;
+  logger: Logger;
+}): Router => {
+  const kycReviewQuery = new PrismaKycReviewQuery(params.adminPrisma);
+  return createAdminKycRouter(
+    createAdminKycController({
+      listKycReviewQueueUseCase: new ListKycReviewQueueUseCase({
+        kycReviewQuery,
+        logger: params.logger,
+      }),
+      getKycReviewSubmissionUseCase: new GetKycReviewSubmissionUseCase({
+        kycReviewQuery,
+        logger: params.logger,
+      }),
+    }),
+    params.accessTokenService,
+    params.sessionDenylist,
+  );
+};
+
+/**
  * This module's own composition root (SDD 2.3), mirroring
  * `createIdentityModule`: `app.ts` knows nothing about Prisma or the vendor
  * lifecycle — it hands over the shared container's ports and gets a router.
@@ -139,6 +184,7 @@ const buildKycUseCases = (params: {
 export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
   const {
     prisma,
+    adminPrisma,
     env,
     accessTokenService,
     sessionDenylist,
@@ -184,14 +230,21 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
     createKycUploadIntentUseCase,
     submitVendorKycUseCase,
   });
+  const resolveVendorTenant = async (userId: UserId): Promise<VendorId | null> =>
+    (await vendorRepository.findByUserId(userId))?.id ?? null;
   const router = createVendorRouter(
     controller,
     accessTokenService,
     sessionDenylist,
-    async (userId) => {
-      const profile = await vendorRepository.findByUserId(userId);
-      return profile?.id ?? null;
-    },
+    resolveVendorTenant,
   );
-  return { router };
+
+  const adminKycRouter = buildAdminKycRouter({
+    adminPrisma,
+    accessTokenService,
+    sessionDenylist,
+    logger: moduleLogger,
+  });
+
+  return { router, adminKycRouter };
 };

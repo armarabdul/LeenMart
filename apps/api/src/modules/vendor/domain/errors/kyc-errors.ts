@@ -1,4 +1,9 @@
-import { type AppErrorOptions, DomainRuleError, ValidationError } from '@leen-mart/domain-kit';
+import {
+  type AppErrorOptions,
+  DomainRuleError,
+  NotFoundError,
+  ValidationError,
+} from '@leen-mart/domain-kit';
 
 /**
  * A supplied identifier is not the shape it claims to be.
@@ -61,5 +66,21 @@ export class InvalidKycOperationError extends DomainRuleError {
         details: [{ field: operation, issue }],
       },
     );
+  }
+}
+
+/**
+ * No KYC submission exists with the requested id.
+ *
+ * A plain 404 with no distinction between "never existed" and "exists but you
+ * may not see it". Only an administrator holding
+ * `APPROVE_OR_REJECT_VENDOR_KYC` reaches the lookup at all, and their SELECT
+ * policy spans every vendor — so for this caller the two cases genuinely are
+ * the same case, and a narrower message would only describe the id back to
+ * whoever guessed it.
+ */
+export class KycSubmissionNotFoundError extends NotFoundError {
+  constructor(options: AppErrorOptions = {}) {
+    super('No KYC submission was found.', { ...options, code: 'KYC_SUBMISSION_NOT_FOUND' });
   }
 }

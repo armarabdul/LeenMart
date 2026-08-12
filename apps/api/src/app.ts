@@ -51,6 +51,7 @@ const mountBusinessModules = (
   app: Express,
   params: {
     prisma: Container['prisma'];
+    adminPrisma: Container['adminPrisma'];
     env: Container['env'];
     accessTokenService: AccessTokenService;
     sessionDenylist: SessionDenylist;
@@ -62,6 +63,14 @@ const mountBusinessModules = (
 ): void => {
   const vendorModule = createVendorModule(params);
   app.use('/api/v1/vendors', vendorModule.router);
+  // The admin review surface (SDD 9.4), separate from the vendor-facing
+  // router: it reads across tenants on the elevated credential and never
+  // establishes a tenant context.
+  app.use('/api/v1/admin/kyc', vendorModule.adminKycRouter);
+  // The admin review surface (SDD 9.4), mounted apart from the vendor-facing
+  // router: it establishes no tenant context and reads on the elevated
+  // credential.
+  app.use('/api/v1/admin/kyc', vendorModule.adminKycRouter);
 
   const customerModule = createCustomerModule(params);
   app.use('/api/v1/me', customerModule.router);
@@ -88,7 +97,7 @@ const mountBusinessModules = (
  *   8. error handler     — always last; Express identifies it by arity
  */
 export const createApp = (container: Container): Express => {
-  const { env, rootLogger, idGenerator, prisma, redis, clock, logger } = container;
+  const { env, rootLogger, idGenerator, prisma, adminPrisma, redis, clock, logger } = container;
   const app = express();
 
   // Behind an ALB/Cloudflare: trust exactly as many proxies as we actually run,
@@ -144,6 +153,7 @@ export const createApp = (container: Container): Express => {
 
   mountBusinessModules(app, {
     prisma,
+    adminPrisma,
     env,
     accessTokenService: identityModule.accessTokenService,
     sessionDenylist: identityModule.sessionDenylist,
