@@ -392,17 +392,104 @@ describe('tenant RLS isolation', () => {
       expect(Number(rows[0]?.count)).toBe(2);
     });
 
-    it('cannot write, because only read policies exist for it', async () => {
-      // Not "admin can do anything because the role exists": deciding a review
-      // is an UPDATE that arrives with KYC-5 and gets its own policy then.
+    it('records a decision on a submission — the KYC-5 UPDATE policy', async () => {
+      // The counterpart of the assertion this replaces. Until KYC-5 this
+      // UPDATE affected zero rows, and the policy that changed it is the only
+      // thing that changed: `leenmart_admin` has held the UPDATE *privilege*
+      // since role separation.
+      // A whole decision, not a single column: the four CHECK constraints on
+      // this table refuse a half-written review, so anything less would prove
+      // the policy nothing.
       const affected = await admin.$executeRawUnsafe(
-        `UPDATE vendor_kyc_submissions SET rejection_note = 'admin' WHERE id = $1::uuid`,
+        `UPDATE vendor_kyc_submissions
+            SET reviewed_by = $2::uuid, started_at = now(),
+                decided_by = $2::uuid, decided_at = now()
+          WHERE id = $1::uuid`,
+        kycA,
+        userA,
+      );
+
+      expect(affected).toBe(1);
+      const written = await owner.vendorKycSubmission.findUnique({ where: { id: kycA } });
+      expect(written?.decidedBy).toBe(userA);
+      expect(written?.decidedAt).not.toBeNull();
+
+      // Restored so the rest of the suite sees the undecided row it seeded —
+      // `uq_vendor_kyc_one_undecided` is predicated on exactly this column.
+      await owner.vendorKycSubmission.update({
+        where: { id: kycA },
+        data: { reviewedBy: null, startedAt: null, decidedBy: null, decidedAt: null },
+      });
+    });
+
+    it('moves a vendor through its lifecycle, across tenants', async () => {
+      // The other half of one decision. Both tables or the transaction KYC-5
+      // opens is pointless.
+      const affected = await admin.$executeRawUnsafe(
+        `UPDATE vendors SET status = 'KYC_UNDER_REVIEW' WHERE id = $1::uuid`,
+        vendorB,
+      );
+
+      expect(affected).toBe(1);
+      const moved = await owner.vendorProfile.findUnique({ where: { id: vendorB } });
+      expect(moved?.status).toBe('KYC_UNDER_REVIEW');
+
+      await owner.vendorProfile.update({ where: { id: vendorB }, data: { status: 'REGISTERED' } });
+    });
+
+    it('still cannot touch a document — review changes the decision, not the evidence', async () => {
+      // `kyc_documents` deliberately got no UPDATE policy: KYC-1 makes a
+      // submission's documents immutable once written.
+      const affected = await admin.$executeRawUnsafe(
+        `UPDATE kyc_documents SET content_type = 'text/plain' WHERE vendor_id = $1::uuid`,
+        vendorA,
+      );
+
+      expect(affected).toBe(0);
+    });
+
+    it('still cannot insert a submission — the new policy is UPDATE only', async () => {
+      // A real INSERT, not one behind `WHERE false`: with the privilege held
+      // and no policy admitting it, PostgreSQL refuses the row outright.
+      await expect(
+        admin.$executeRawUnsafe(
+          `INSERT INTO vendor_kyc_submissions
+             (id, vendor_id, pan_fingerprint, pan_last4, gstin, bank_fingerprint,
+              bank_account_last4, ifsc, submitted_at, created_at, updated_at)
+           VALUES ($1::uuid, $2::uuid, $3, '234F', '27ABCDE1234F1Z0', $4,
+                   '9012', 'HDFC0001234', now(), now(), now())`,
+          ids.generate(),
+          vendorA,
+          'c'.repeat(64),
+          'd'.repeat(64),
+        ),
+      ).rejects.toThrow();
+    });
+
+    it('still cannot delete a submission — decisions cannot erase their own evidence', async () => {
+      const affected = await admin.$executeRawUnsafe(
+        `DELETE FROM vendor_kyc_submissions WHERE id = $1::uuid`,
         kycA,
       );
 
       expect(affected).toBe(0);
-      const untouched = await owner.vendorKycSubmission.findUnique({ where: { id: kycA } });
-      expect(untouched?.rejectionNote).toBeNull();
+      expect(await owner.vendorKycSubmission.findUnique({ where: { id: kycA } })).not.toBeNull();
+    });
+
+    it('holds exactly the policies KYC-5 intends — three reads and two updates', async () => {
+      // The narrowness assertion. A later `FOR ALL` added "because the role
+      // exists" would fail here rather than quietly widening the boundary.
+      const rows = await owner.$queryRaw<{ tablename: string; cmd: string }[]>`
+        SELECT tablename, cmd FROM pg_policies
+        WHERE 'leenmart_admin' = ANY(roles) ORDER BY tablename, cmd`;
+
+      expect(rows).toEqual([
+        { tablename: 'kyc_documents', cmd: 'SELECT' },
+        { tablename: 'vendor_kyc_submissions', cmd: 'SELECT' },
+        { tablename: 'vendor_kyc_submissions', cmd: 'UPDATE' },
+        { tablename: 'vendors', cmd: 'SELECT' },
+        { tablename: 'vendors', cmd: 'UPDATE' },
+      ]);
     });
 
     it('cannot insert a vendor', async () => {
