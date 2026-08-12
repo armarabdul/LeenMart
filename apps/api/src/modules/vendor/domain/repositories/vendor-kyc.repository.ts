@@ -62,6 +62,18 @@ export interface VendorKycRepository {
    * PAN, and matching against themselves would make every resubmission look
    * like ban evasion. It is a *lookup*, not a verdict — SDD 16 scores the
    * signal and a human decides (SDD 15.1).
+   *
+   * **This is the one operation here that must NOT run on the vendor-scoped
+   * client.** It searches across tenants by design, and the KYC-2B-3 policies
+   * correctly refuse that — a vendor-scoped caller gets zero rows, with no
+   * error and nothing failing, which is ban-evasion detection silently
+   * switched off. It belongs on the `leenmart_admin` credential
+   * (`adminPrisma`), behind an authorisation decision made in the interface
+   * layer (SDD 7.4).
+   *
+   * Deliberately unwired for now: it has no production caller, and giving it
+   * one is KYC-4/KYC-5's job together with the authorisation that must sit in
+   * front of it. A unit test asserts it stays uncalled until then.
    */
   findByIdentifierFingerprints(input: {
     vendorId: VendorId;

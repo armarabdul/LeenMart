@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { PrismaClient } from '@prisma/client';
 import request from 'supertest';
 import type { Express } from 'express';
 import { createApp } from '../../src/app.js';
@@ -49,6 +50,16 @@ describe('vendor endpoints', () => {
   const registerVendor = (token: string): request.Test =>
     request(app).post('/api/v1/vendors').set('Authorization', `Bearer ${token}`).send({});
 
+  /**
+   * Test setup and assertions observe the database as the **owner**, not
+   * through `container.prisma`. The container's client is the vendor-scoped
+   * runtime client (KYC-2B-2/2B-3): outside a request it has no tenant
+   * context, so a tenant-scoped read through it fails closed — correctly. A
+   * test inspecting stored state is acting as an operator, and should connect
+   * like one.
+   */
+  const db = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL ?? '' } } });
+
   beforeAll(() => {
     process.env.ENV_FILE = '.env.test';
     container = createContainer();
@@ -56,13 +67,14 @@ describe('vendor endpoints', () => {
   });
 
   afterAll(async () => {
-    const users = await container.prisma.user.findMany({
+    const users = await db.user.findMany({
       where: { email: { contains: EMAIL_PREFIX } },
       select: { id: true },
     });
     const ids = users.map((user) => user.id);
-    await container.prisma.vendorProfile.deleteMany({ where: { userId: { in: ids } } });
-    await container.prisma.user.deleteMany({ where: { id: { in: ids } } });
+    await db.vendorProfile.deleteMany({ where: { userId: { in: ids } } });
+    await db.user.deleteMany({ where: { id: { in: ids } } });
+    await db.$disconnect();
     await container.dispose();
   });
 
@@ -89,7 +101,7 @@ describe('vendor endpoints', () => {
 
     const response = await registerVendor(token).expect(201);
 
-    const stored = await container.prisma.vendorProfile.findUniqueOrThrow({ where: { userId } });
+    const stored = await db.vendorProfile.findUniqueOrThrow({ where: { userId } });
     expect(stored.id).toBe((response.body as VendorBody).data.id);
     expect(stored.status).toBe('REGISTERED');
   });
@@ -99,7 +111,7 @@ describe('vendor endpoints', () => {
 
     await registerVendor(token).expect(201);
 
-    const user = await container.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const user = await db.user.findUniqueOrThrow({ where: { id: userId } });
     expect(user.role).toBe('CUSTOMER');
   });
 
@@ -149,6 +161,6 @@ describe('vendor endpoints', () => {
       .send({ userId: 'someone-else' })
       .expect(400);
 
-    expect(await container.prisma.vendorProfile.findUnique({ where: { userId } })).toBeNull();
+    expect(await db.vendorProfile.findUnique({ where: { userId } })).toBeNull();
   });
 });

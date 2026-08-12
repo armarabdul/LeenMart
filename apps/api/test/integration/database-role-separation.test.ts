@@ -4,11 +4,11 @@ import { PrismaClient } from '@prisma/client';
 /**
  * Proves the KYC-2B-1 role separation is real rather than declared.
  *
- * **No tenant isolation is asserted here, because none exists yet.** This
- * chunk deliberately adds no policies and enables RLS nowhere; what it
- * establishes is the precondition that made RLS impossible before — a runtime
- * role that cannot bypass it. KYC-2B-3 adds the policies and the isolation
- * suite that goes with them.
+ * **Cross-tenant isolation is asserted in `tenant-rls-isolation.test.ts`, not
+ * here.** This file covers the precondition that made RLS possible at all — a
+ * runtime role that cannot bypass it — and the two RLS facts that depend
+ * directly on the role model, so a change to either half is caught from both
+ * sides.
  *
  * The security assertions below are the load-bearing part. A future policy is
  * worth exactly nothing if `leenmart_app` ever regains SUPERUSER or BYPASSRLS,
@@ -231,21 +231,28 @@ describe('database role separation', () => {
     });
   });
 
-  describe('row-level security is not yet enabled (KYC-2B-3)', () => {
-    it('has no policies and no RLS-enabled tables', async () => {
-      // Stated as a fact rather than left implicit, so that the day someone
-      // adds a policy without the rest of KYC-2B-3, this test tells them.
-      const [policies] = await owner.$queryRawUnsafe<{ count: bigint }[]>(
-        'SELECT count(*) AS count FROM pg_policies WHERE schemaname = $1',
-        'public',
-      );
-      const [enabled] = await owner.$queryRawUnsafe<{ count: bigint }[]>(
-        'SELECT count(*) AS count FROM pg_tables WHERE schemaname = $1 AND rowsecurity',
+  describe('row-level security rests on this role model (KYC-2B-3)', () => {
+    it('enables RLS only on the tenant tables', async () => {
+      // The role separation above is what gives these policies teeth; asserted
+      // here too so a change to either half is caught from both sides.
+      const rows = await owner.$queryRawUnsafe<{ tablename: string }[]>(
+        'SELECT tablename FROM pg_tables WHERE schemaname = $1 AND rowsecurity ORDER BY tablename',
         'public',
       );
 
-      expect(Number(policies?.count)).toBe(0);
-      expect(Number(enabled?.count)).toBe(0);
+      expect(rows.map((row) => row.tablename)).toEqual([
+        'kyc_documents',
+        'vendor_kyc_submissions',
+        'vendors',
+      ]);
+    });
+
+    it('forces RLS on nothing, so the owner can still migrate', async () => {
+      const [forced] = await owner.$queryRawUnsafe<{ count: bigint }[]>(
+        'SELECT count(*) AS count FROM pg_class WHERE relforcerowsecurity',
+      );
+
+      expect(Number(forced?.count)).toBe(0);
     });
   });
 });
