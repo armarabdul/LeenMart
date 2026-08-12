@@ -12,6 +12,7 @@ import type {
   PresignedDownload,
   PresignedUpload,
   StoredObject,
+  TemporaryObject,
 } from '../../../../../src/modules/vendor/application/ports/object-store.port.js';
 import type { VendorRepository } from '../../../../../src/modules/vendor/domain/repositories/vendor.repository.js';
 import { VendorProfile } from '../../../../../src/modules/vendor/domain/entities/vendor-profile.entity.js';
@@ -84,6 +85,14 @@ class RecordingObjectStore implements ObjectStore {
   }
 
   head(): Promise<StoredObject | null> {
+    throw new Error('not used by this use case');
+  }
+
+  getObject(): Promise<Buffer | null> {
+    throw new Error('not used by this use case');
+  }
+
+  writeTemporaryObject(): Promise<TemporaryObject> {
     throw new Error('not used by this use case');
   }
 

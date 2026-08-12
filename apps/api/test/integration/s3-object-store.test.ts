@@ -225,4 +225,96 @@ describe('S3ObjectStore against MinIO', () => {
       await expect(store.delete(newKey())).resolves.toBeUndefined();
     });
   });
+
+  describe('server-side byte capabilities (KYC-7 preparatory)', () => {
+    it('reads back the exact bytes a server-side write put there', async () => {
+      const written = await store.writeTemporaryObject(
+        Buffer.from('server-written plaintext'),
+        'application/octet-stream',
+      );
+      created.push(written.key);
+
+      expect(await store.getObject(written.key)).toEqual(Buffer.from('server-written plaintext'));
+    });
+
+    it('preserves arbitrary binary bytes exactly through a write/read round trip', async () => {
+      const body = Buffer.from([0x00, 0xff, 0x10, 0x02, 0xfe, 0x7f, 0x80, 0x01]);
+      const written = await store.writeTemporaryObject(body, 'application/octet-stream');
+      created.push(written.key);
+
+      expect(await store.getObject(written.key)).toEqual(body);
+    });
+
+    it('returns null from getObject for a key that was never written', async () => {
+      expect(await store.getObject(newKey())).toBeNull();
+    });
+
+    it('writes under the dedicated temporary-delivery prefix, never the permanent kyc-0-test prefix', async () => {
+      const written = await store.writeTemporaryObject(
+        Buffer.from('x'),
+        'application/octet-stream',
+      );
+      created.push(written.key);
+
+      expect(written.key.startsWith('kyc-temp-delivery/')).toBe(true);
+    });
+
+    it('never accepts a caller-supplied key — two writes of the same bytes land at different keys', async () => {
+      const first = await store.writeTemporaryObject(
+        Buffer.from('same'),
+        'application/octet-stream',
+      );
+      const second = await store.writeTemporaryObject(
+        Buffer.from('same'),
+        'application/octet-stream',
+      );
+      created.push(first.key, second.key);
+
+      expect(first.key).not.toBe(second.key);
+    });
+
+    it('a temporary object is reachable through the existing presignGet, unchanged', async () => {
+      const body = Buffer.from('temporary-plaintext-for-delivery');
+      const written = await store.writeTemporaryObject(body, 'application/pdf');
+      created.push(written.key);
+
+      const download = await store.presignGet(written.key);
+      const response = await fetch(download.url);
+
+      expect(response.status).toBe(200);
+      expect(Buffer.from(await response.arrayBuffer()).equals(body)).toBe(true);
+      // Same 60-second ceiling as every other presignGet call — nothing about
+      // the TTL changes for a temporary object.
+      expect(Number(new URL(download.url).searchParams.get('X-Amz-Expires'))).toBeLessThanOrEqual(
+        60,
+      );
+    });
+
+    it('the existing delete() removes a temporary object, after which getObject reports it gone', async () => {
+      const written = await store.writeTemporaryObject(
+        Buffer.from('cleanup me'),
+        'application/pdf',
+      );
+
+      await store.delete(written.key);
+
+      expect(await store.getObject(written.key)).toBeNull();
+    });
+
+    it('getObject reads a permanently-stored object uploaded via the existing presignPut flow, unchanged', async () => {
+      const key = newKey();
+      const body = Buffer.from('permanent-object-bytes');
+      const upload = await store.presignPut({
+        key,
+        contentType: 'application/pdf',
+        contentLength: body.byteLength,
+      });
+      await putViaUrl(upload.url, body, {
+        'Content-Type': 'application/pdf',
+        'Content-Length': String(body.byteLength),
+      });
+
+      expect(await store.getObject(key)).toEqual(body);
+    });
+  });
 });

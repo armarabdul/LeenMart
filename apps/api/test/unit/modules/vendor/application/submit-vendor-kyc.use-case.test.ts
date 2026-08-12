@@ -15,6 +15,7 @@ import type {
   PresignedDownload,
   PresignedUpload,
   StoredObject,
+  TemporaryObject,
 } from '../../../../../src/modules/vendor/application/ports/object-store.port.js';
 import type { VendorKycRepository } from '../../../../../src/modules/vendor/domain/repositories/vendor-kyc.repository.js';
 import type { VendorRepository } from '../../../../../src/modules/vendor/domain/repositories/vendor.repository.js';
@@ -94,6 +95,14 @@ class MapObjectStore implements ObjectStore {
   }
 
   presignGet(): Promise<PresignedDownload> {
+    throw new Error('not used by this use case');
+  }
+
+  getObject(): Promise<Buffer | null> {
+    throw new Error('not used by this use case');
+  }
+
+  writeTemporaryObject(): Promise<TemporaryObject> {
     throw new Error('not used by this use case');
   }
 

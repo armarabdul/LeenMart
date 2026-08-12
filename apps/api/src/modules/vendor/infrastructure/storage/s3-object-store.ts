@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -13,6 +14,7 @@ import type {
   PresignedDownload,
   PresignedUpload,
   StoredObject,
+  TemporaryObject,
 } from '../../application/ports/object-store.port.js';
 
 /**
@@ -34,6 +36,14 @@ export const UPLOAD_URL_TTL_SECONDS = 5 * 60;
 
 /** SDD 12.1: "Presigned GET ≤ 60 s". A ceiling, not a default. */
 export const DOWNLOAD_URL_TTL_SECONDS = 60;
+
+/**
+ * KYC-7's temporary-delivery objects live under this prefix, distinct from
+ * `vendor/` (permanent documents) by construction — a caller cannot land a
+ * write here under a permanent key even by mistake, because
+ * `writeTemporaryObject` never accepts one.
+ */
+export const TEMPORARY_DELIVERY_PREFIX = 'kyc-temp-delivery/';
 
 export interface S3ObjectStoreConfig {
   readonly bucket: string;
@@ -140,6 +150,41 @@ export class S3ObjectStore implements ObjectStore {
       // upload-completion check say "not there yet" without a thrown error.
       if (isNotFound(error)) return null;
       throw new IntegrationError('object-storage', 'Could not read object metadata.', {
+        cause: error,
+      });
+    }
+  }
+
+  async getObject(key: string): Promise<Buffer | null> {
+    try {
+      const result = await this.client.send(
+        new GetObjectCommand({ Bucket: this.config.bucket, Key: key }),
+      );
+      const bytes = await result.Body?.transformToByteArray();
+      return bytes ? Buffer.from(bytes) : Buffer.alloc(0);
+    } catch (error) {
+      if (isNotFound(error)) return null;
+      throw new IntegrationError('object-storage', 'Could not read object contents.', {
+        cause: error,
+      });
+    }
+  }
+
+  async writeTemporaryObject(bytes: Buffer, contentType: string): Promise<TemporaryObject> {
+    const key = `${TEMPORARY_DELIVERY_PREFIX}${randomBytes(32).toString('hex')}`;
+    try {
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.config.bucket,
+          Key: key,
+          Body: bytes,
+          ContentType: contentType,
+          ContentLength: bytes.length,
+        }),
+      );
+      return { key };
+    } catch (error) {
+      throw new IntegrationError('object-storage', 'Could not write a temporary object.', {
         cause: error,
       });
     }
