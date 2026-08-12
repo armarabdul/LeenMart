@@ -1,14 +1,36 @@
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
 import { z } from 'zod';
-import { adminKycQueueQuerySchema } from '@leen-mart/contracts';
+import {
+  adminKycQueueQuerySchema,
+  decideVendorKycRequestSchema,
+  startKycReviewRequestSchema,
+} from '@leen-mart/contracts';
 import { asyncHandler } from '../../../../shared/interface/http/middleware/async-handler.js';
 import { authenticate } from '../../../../shared/interface/http/middleware/authenticate.js';
 import { requirePermission } from '../../../../shared/interface/http/middleware/authorize.js';
 import { validate } from '../../../../shared/interface/http/middleware/validate.js';
-import type { AccessTokenService, SessionDenylist } from '../../../identity/index.js';
+import {
+  UnauthorizedError,
+  type AccessTokenService,
+  type SessionDenylist,
+} from '../../../identity/index.js';
 import type { AdminKycController } from './admin-kyc.controller.js';
 
 const kycIdParamsSchema = z.object({ kycId: z.string().uuid() }).strict();
+
+/**
+ * Refuses a grant the matrix marks `READ_ONLY`.
+ *
+ * Not a second authorisation mechanism and not a role check: it reads the
+ * `accessLevel` `requirePermission` already derived from `PERMISSION_MATRIX`,
+ * so the matrix stays the only place roles are named. SDD 7.4 step 2 asks "may
+ * this role perform this action at all?", and for a writing route the honest
+ * answer for a READ_ONLY grant is no — the same 403, since a caller learning
+ * *which* half of the grant they lack learns the shape of the model.
+ */
+const requireFullAccess: RequestHandler = (req, _res, next) => {
+  next(req.accessLevel === 'FULL' ? undefined : new UnauthorizedError());
+};
 
 /**
  * Mounted at `/api/v1/admin/kyc` — the admin surface (SDD 9.4), separate from
@@ -56,6 +78,31 @@ export const createAdminKycRouter = (
     requirePermission('APPROVE_OR_REJECT_VENDOR_KYC'),
     validate({ params: kycIdParamsSchema }),
     asyncHandler(controller.getSubmission),
+  );
+
+  // The decision routes carry the same permission as the reads above. SDD
+  // 8.2's matrix already draws the line this commit needs: RISK_ANALYST and
+  // SUPER_ADMIN hold `APPROVE_OR_REJECT_VENDOR_KYC` as FULL, CATALOGUE_MODERATOR
+  // and FINANCE_ADMIN as READ_ONLY. `requirePermission` surfaces that as
+  // `req.accessLevel`, and `requireFullAccess` below is what turns a READ_ONLY
+  // grant into a refusal — the read/write distinction the matrix has always
+  // encoded, enforced at the first route that can write.
+  router.post(
+    '/submissions/:kycId/review',
+    authenticate(accessTokenService, sessionDenylist),
+    requirePermission('APPROVE_OR_REJECT_VENDOR_KYC'),
+    requireFullAccess,
+    validate({ params: kycIdParamsSchema, body: startKycReviewRequestSchema }),
+    asyncHandler(controller.startReview),
+  );
+
+  router.post(
+    '/submissions/:kycId/decision',
+    authenticate(accessTokenService, sessionDenylist),
+    requirePermission('APPROVE_OR_REJECT_VENDOR_KYC'),
+    requireFullAccess,
+    validate({ params: kycIdParamsSchema, body: decideVendorKycRequestSchema }),
+    asyncHandler(controller.decide),
   );
 
   return router;

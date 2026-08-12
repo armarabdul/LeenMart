@@ -82,6 +82,37 @@ export interface VendorKycRepository {
   saveReview(kyc: VendorKyc): Promise<void>;
 
   /**
+   * Records a reviewer's claim, but only if nobody else already holds it.
+   *
+   * Returns whether *this* call was the one that won. A plain `saveReview`
+   * cannot answer that: it updates by primary key, so two admins claiming the
+   * same submission both succeed and the later write silently becomes the
+   * recorded reviewer. The condition lives in the `WHERE` clause for the same
+   * reason `MfaChallengeRepository.consumeIfActive` puts it there — a
+   * read-then-write cannot arbitrate a race, because both racers read the same
+   * unclaimed row before either writes.
+   *
+   * `false` means someone else claimed it first. It is not an error here; the
+   * caller decides what to do about it.
+   */
+  claimForReviewIfUnclaimed(kyc: VendorKyc): Promise<boolean>;
+
+  /**
+   * Records a decision, but only if none has been recorded yet.
+   *
+   * The arbiter of concurrent approve/reject. Same reasoning as the claim
+   * above, and the reason this exists rather than `saveReview` being made
+   * conditional: `saveReview` is KYC-2A's published contract and the
+   * submission path depends on it staying exactly as it is.
+   *
+   * Callers must run this inside the same transaction as the vendor's
+   * lifecycle transition, so that a failure after the decision is recorded
+   * rolls the decision back rather than leaving a decided submission beside an
+   * untransitioned vendor.
+   */
+  saveDecisionIfUndecided(kyc: VendorKyc): Promise<boolean>;
+
+  /**
    * Submissions sharing a fingerprint with the supplied ones, excluding the
    * vendor's own — the SEC-17 lookup ("Link identities on PAN/bank
    * account/…; block at KYC").

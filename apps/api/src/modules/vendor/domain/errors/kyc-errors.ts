@@ -1,5 +1,6 @@
 import {
   type AppErrorOptions,
+  ConflictError,
   DomainRuleError,
   NotFoundError,
   ValidationError,
@@ -82,5 +83,44 @@ export class InvalidKycOperationError extends DomainRuleError {
 export class KycSubmissionNotFoundError extends NotFoundError {
   constructor(options: AppErrorOptions = {}) {
     super('No KYC submission was found.', { ...options, code: 'KYC_SUBMISSION_NOT_FOUND' });
+  }
+}
+
+/**
+ * Another reviewer claimed this submission first.
+ *
+ * A `ConflictError` rather than a `DomainRuleError`: the caller did nothing
+ * wrong and the request was well formed — the state simply changed underneath
+ * them, which is what 409 means. Mirrors `VendorAlreadyRegisteredError`, the
+ * other "someone got there first" case in this module.
+ *
+ * Names no reviewer. Which colleague holds it is visible in the queue to
+ * anyone entitled to see it, and putting it in an error message would put it
+ * in every client log that captured the failure.
+ */
+export class KycReviewAlreadyClaimedError extends ConflictError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This KYC submission is already under review by another reviewer.', {
+      ...options,
+      code: 'KYC_REVIEW_ALREADY_CLAIMED',
+    });
+  }
+}
+
+/**
+ * The submission was decided by someone else between this reviewer loading it
+ * and deciding it.
+ *
+ * Distinct from `InvalidKycOperationError`, which the aggregate raises when
+ * the *loaded* state already forbids the operation. This one is the race the
+ * aggregate cannot see: both reviewers loaded an undecided submission, and
+ * only one conditional update could win.
+ */
+export class KycAlreadyDecidedError extends ConflictError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This KYC submission has already been decided.', {
+      ...options,
+      code: 'KYC_ALREADY_DECIDED',
+    });
   }
 }

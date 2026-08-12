@@ -195,3 +195,32 @@ export class PrismaTransactionRunner implements TransactionRunner {
     return runInTenantTransaction(this.prisma, (tx) => work(tx as unknown as TransactionScope));
   }
 }
+
+/**
+ * `TransactionRunner` for the **admin credential**, which needs no tenant
+ * settings.
+ *
+ * A second adapter of the same port rather than a change to the one above,
+ * because the two answer to different authorities. `PrismaTransactionRunner`
+ * serves the vendor-facing client, whose RLS policies compare `vendor_id` to
+ * `app.vendor_id` — so it must refuse to open without a tenant context, and
+ * that refusal is what makes a missing context fail closed instead of
+ * returning another vendor's rows.
+ *
+ * `leenmart_admin`'s policies are `USING (true)`: there is no setting for them
+ * to read, so demanding one would only require inventing a tenant an
+ * administrator does not have. The admin routes deliberately establish no
+ * tenant context (KYC-5 Commit 2), and this is the transaction boundary that
+ * fact requires.
+ *
+ * Still one transaction, so a decision and the vendor's lifecycle transition
+ * commit or roll back together — the atomicity guarantee is identical, only
+ * the session configuration differs.
+ */
+export class AdminTransactionRunner implements TransactionRunner {
+  constructor(private readonly adminPrisma: PrismaClient) {}
+
+  async run<T>(work: (scope: TransactionScope) => Promise<T>): Promise<T> {
+    return this.adminPrisma.$transaction((tx) => work(tx as unknown as TransactionScope));
+  }
+}

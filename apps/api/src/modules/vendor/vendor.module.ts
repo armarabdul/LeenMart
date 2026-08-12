@@ -16,7 +16,10 @@ import { HmacIdentifierFingerprinter } from './infrastructure/security/hmac-iden
 import { PrismaVendorRepository } from './infrastructure/persistence/prisma-vendor.repository.js';
 import { PrismaUserRepository } from '../identity/infrastructure/persistence/prisma-user.repository.js';
 import { PrismaRefreshTokenRepository } from '../identity/infrastructure/persistence/prisma-refresh-token.repository.js';
-import { PrismaTransactionRunner } from '../../shared/infrastructure/persistence/tenant-prisma.js';
+import {
+  AdminTransactionRunner,
+  PrismaTransactionRunner,
+} from '../../shared/infrastructure/persistence/tenant-prisma.js';
 import { RegisterVendorUseCase } from './application/use-cases/register-vendor.use-case.js';
 import { createVendorController } from './interface/http/vendor.controller.js';
 import { createVendorRouter } from './interface/http/vendor.routes.js';
@@ -25,6 +28,8 @@ import { createAdminKycRouter } from './interface/http/admin-kyc.routes.js';
 import { PrismaKycReviewQuery } from './infrastructure/persistence/prisma-kyc-review-query.js';
 import { ListKycReviewQueueUseCase } from './application/use-cases/list-kyc-review-queue.use-case.js';
 import { GetKycReviewSubmissionUseCase } from './application/use-cases/get-kyc-review-submission.use-case.js';
+import { StartKycReviewUseCase } from './application/use-cases/start-kyc-review.use-case.js';
+import { DecideVendorKycUseCase } from './application/use-cases/decide-vendor-kyc.use-case.js';
 
 export interface VendorModuleDeps {
   readonly prisma: PrismaClient;
@@ -153,21 +158,82 @@ const buildKycUseCases = (params: {
  * because the queue reads across tenants — the vendor-facing client is bound
  * by RLS to one vendor per request and would return nothing here.
  */
+/** Vendor registration's dependencies, split out to keep the composition root readable. */
+const buildRegisterVendorUseCase = (params: {
+  prisma: PrismaClient;
+  vendorRepository: PrismaVendorRepository;
+  sessionDenylist: SessionDenylist;
+  transactionRunner: PrismaTransactionRunner;
+  accessTokenTtlSeconds: number;
+  idGenerator: IdGenerator;
+  clock: Clock;
+  logger: Logger;
+}): RegisterVendorUseCase =>
+  new RegisterVendorUseCase({
+    vendorRepository: params.vendorRepository,
+    userRepository: new PrismaUserRepository(params.prisma),
+    sessionRepository: new PrismaRefreshTokenRepository(params.prisma),
+    sessionDenylist: params.sessionDenylist,
+    transactionRunner: params.transactionRunner,
+    accessTokenTtlSeconds: params.accessTokenTtlSeconds,
+    idGenerator: params.idGenerator,
+    clock: params.clock,
+    logger: params.logger,
+  });
+
+/** The two read use cases, split out to keep the router builder under its line budget. */
+const buildAdminKycReadUseCases = (
+  kycReviewQuery: PrismaKycReviewQuery,
+  logger: Logger,
+): {
+  listKycReviewQueueUseCase: ListKycReviewQueueUseCase;
+  getKycReviewSubmissionUseCase: GetKycReviewSubmissionUseCase;
+} => ({
+  listKycReviewQueueUseCase: new ListKycReviewQueueUseCase({ kycReviewQuery, logger }),
+  getKycReviewSubmissionUseCase: new GetKycReviewSubmissionUseCase({ kycReviewQuery, logger }),
+});
+
+/** The claim and decision use cases, split out for the same reason as the reads above. */
+const buildAdminKycDecisionUseCases = (params: {
+  vendorKycRepository: PrismaVendorKycRepository;
+  vendorRepository: PrismaVendorRepository;
+  transactionRunner: AdminTransactionRunner;
+  clock: Clock;
+  logger: Logger;
+}): {
+  startKycReviewUseCase: StartKycReviewUseCase;
+  decideVendorKycUseCase: DecideVendorKycUseCase;
+} => ({
+  startKycReviewUseCase: new StartKycReviewUseCase(params),
+  decideVendorKycUseCase: new DecideVendorKycUseCase(params),
+});
+
 const buildAdminKycRouter = (params: {
   adminPrisma: PrismaClient;
   accessTokenService: AccessTokenService;
   sessionDenylist: SessionDenylist;
+  clock: Clock;
   logger: Logger;
 }): Router => {
   const kycReviewQuery = new PrismaKycReviewQuery(params.adminPrisma);
+  // Decisions write across tenants too, so their repositories and transaction
+  // runner are built on `adminPrisma` — the same credential the reads use, and
+  // the one KYC-5 Commit 1's UPDATE policies were written for.
+  const vendorKycRepository = new PrismaVendorKycRepository(params.adminPrisma);
+  const vendorRepository = new PrismaVendorRepository(params.adminPrisma);
+  // The admin runner, not `PrismaTransactionRunner`: that one opens a tenant
+  // transaction and refuses without a tenant context, which these routes
+  // deliberately never establish.
+  const transactionRunner = new AdminTransactionRunner(params.adminPrisma);
+
   return createAdminKycRouter(
     createAdminKycController({
-      listKycReviewQueueUseCase: new ListKycReviewQueueUseCase({
-        kycReviewQuery,
-        logger: params.logger,
-      }),
-      getKycReviewSubmissionUseCase: new GetKycReviewSubmissionUseCase({
-        kycReviewQuery,
+      ...buildAdminKycReadUseCases(kycReviewQuery, params.logger),
+      ...buildAdminKycDecisionUseCases({
+        vendorKycRepository,
+        vendorRepository,
+        transactionRunner,
+        clock: params.clock,
         logger: params.logger,
       }),
     }),
@@ -201,10 +267,9 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
 
   const transactionRunner = new PrismaTransactionRunner(prisma);
 
-  const registerVendorUseCase = new RegisterVendorUseCase({
+  const registerVendorUseCase = buildRegisterVendorUseCase({
+    prisma,
     vendorRepository,
-    userRepository: new PrismaUserRepository(prisma),
-    sessionRepository: new PrismaRefreshTokenRepository(prisma),
     sessionDenylist,
     transactionRunner,
     accessTokenTtlSeconds,
@@ -243,6 +308,7 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
     adminPrisma,
     accessTokenService,
     sessionDenylist,
+    clock,
     logger: moduleLogger,
   });
 

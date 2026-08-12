@@ -258,6 +258,33 @@ export class PrismaVendorKycRepository implements VendorKycRepository {
   }
 
   /** Review columns only — everything else about a submission is immutable. */
+  async claimForReviewIfUnclaimed(kyc: VendorKyc): Promise<boolean> {
+    // One conditional UPDATE, not a read-then-write: the WHERE clause is the
+    // atomicity guarantee, exactly as in `consumeIfActive`. Only one statement
+    // can flip `reviewedBy` away from null, so `count` says unambiguously
+    // whether this call was the winner.
+    //
+    // `decidedAt: null` is in the condition too: a submission that was somehow
+    // decided without a recorded claim must not become claimable afterwards.
+    const result = await this.prisma.vendorKycSubmission.updateMany({
+      where: { id: kyc.id, reviewedBy: null, decidedAt: null },
+      data: { ...toReviewColumns(kyc.review), updatedAt: kyc.updatedAt },
+    });
+    return result.count === 1;
+  }
+
+  async saveDecisionIfUndecided(kyc: VendorKyc): Promise<boolean> {
+    // The concurrency arbiter for approve/reject. Inside a transaction a
+    // competing statement blocks on this row's lock and then re-evaluates the
+    // condition after the commit, finding `decided_at` set and matching
+    // nothing — so the second decider loses rather than overwriting the first.
+    const result = await this.prisma.vendorKycSubmission.updateMany({
+      where: { id: kyc.id, decidedAt: null },
+      data: { ...toReviewColumns(kyc.review), updatedAt: kyc.updatedAt },
+    });
+    return result.count === 1;
+  }
+
   async saveReview(kyc: VendorKyc): Promise<void> {
     await this.prisma.vendorKycSubmission.update({
       where: { id: kyc.id },

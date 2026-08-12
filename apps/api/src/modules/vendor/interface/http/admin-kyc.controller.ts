@@ -3,25 +3,35 @@ import type {
   AdminKycQueueItem,
   AdminKycQueueQuery,
   AdminKycSubmissionDetail,
+  DecideVendorKycRequest,
+  DecideVendorKycResponse,
+  StartKycReviewResponse,
 } from '@leen-mart/contracts';
 import { getRequestId } from '../../../../shared/interface/http/middleware/request-context.js';
 import { validatedData } from '../../../../shared/interface/http/middleware/validate.js';
 import { toKycId } from '../../domain/value-objects/kyc-id.value-object.js';
+import type { VendorKyc } from '../../domain/entities/vendor-kyc.entity.js';
 import type {
   KycReviewQueueItem,
   KycReviewSubmissionDetail,
 } from '../../application/ports/kyc-review-query.port.js';
 import type { GetKycReviewSubmissionUseCase } from '../../application/use-cases/get-kyc-review-submission.use-case.js';
 import type { ListKycReviewQueueUseCase } from '../../application/use-cases/list-kyc-review-queue.use-case.js';
+import type { StartKycReviewUseCase } from '../../application/use-cases/start-kyc-review.use-case.js';
+import type { DecideVendorKycUseCase } from '../../application/use-cases/decide-vendor-kyc.use-case.js';
 
 export interface AdminKycController {
   readonly listQueue: (req: Request, res: Response) => Promise<void>;
   readonly getSubmission: (req: Request, res: Response) => Promise<void>;
+  readonly startReview: (req: Request, res: Response) => Promise<void>;
+  readonly decide: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface AdminKycControllerDeps {
   readonly listKycReviewQueueUseCase: ListKycReviewQueueUseCase;
   readonly getKycReviewSubmissionUseCase: GetKycReviewSubmissionUseCase;
+  readonly startKycReviewUseCase: StartKycReviewUseCase;
+  readonly decideVendorKycUseCase: DecideVendorKycUseCase;
 }
 
 /**
@@ -67,6 +77,53 @@ const toDetail = (detail: KycReviewSubmissionDetail): AdminKycSubmissionDetail =
 });
 
 /**
+ * The review is present on both paths: the use cases return an aggregate that
+ * carries one or they throw. Reading it once, here, keeps that assumption in a
+ * single place rather than as a fallback value at each field.
+ */
+const reviewOf = (kyc: VendorKyc): NonNullable<VendorKyc['review']> => {
+  const { review } = kyc;
+  if (!review) {
+    throw new Error(`KYC ${kyc.id} came back from a review operation without a review.`);
+  }
+  return review;
+};
+
+const toReviewResponse = (kyc: VendorKyc): StartKycReviewResponse => {
+  const review = reviewOf(kyc);
+  return {
+    kycId: kyc.id,
+    vendorStatus: 'KYC_UNDER_REVIEW',
+    reviewedBy: review.reviewedBy,
+    startedAt: review.startedAt.toISOString(),
+  };
+};
+
+const toDecisionResponse = (
+  kyc: VendorKyc,
+  vendorStatus: DecideVendorKycResponse['vendorStatus'],
+): DecideVendorKycResponse => {
+  const review = reviewOf(kyc);
+  return {
+    kycId: kyc.id,
+    vendorStatus,
+    decidedBy: review.decidedBy ?? '',
+    decidedAt: (review.decidedAt ?? review.startedAt).toISOString(),
+    rejectionReason:
+      (review.rejectionReason?.name as DecideVendorKycResponse['rejectionReason']) ?? null,
+    rejectionNote: review.rejectionNote,
+  };
+};
+
+/** Narrows the wire union to the use case's command; the two shapes are deliberately separate. */
+const toDecisionCommand = (
+  body: DecideVendorKycRequest,
+): { decision: 'APPROVE' } | { decision: 'REJECT'; reason: string; note?: string | undefined } =>
+  body.decision === 'APPROVE'
+    ? { decision: 'APPROVE' }
+    : { decision: 'REJECT', reason: body.reason, note: body.note };
+
+/**
  * Thin HTTP adapter for the admin review queue. Parses nothing itself, decides
  * nothing, and translates no errors — `validate()` and the global error handler
  * own those (SDD 17.1).
@@ -93,6 +150,42 @@ export const createAdminKycController = (deps: AdminKycControllerDeps): AdminKyc
         requestId: getRequestId(),
         pagination: { nextCursor: page.nextCursor, hasMore: page.hasMore },
       },
+    });
+  },
+
+  startReview: async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'POST /admin/kyc/submissions/:kycId/review reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+    const { params } = validatedData<unknown, unknown, { kycId: string }>(req);
+
+    const { kyc } = await deps.startKycReviewUseCase.execute({
+      principal: req.principal,
+      kycId: toKycId(params.kycId),
+    });
+
+    res.status(200).json({ data: toReviewResponse(kyc), meta: { requestId: getRequestId() } });
+  },
+
+  decide: async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'POST /admin/kyc/submissions/:kycId/decision reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+    const { body, params } = validatedData<DecideVendorKycRequest, unknown, { kycId: string }>(req);
+
+    const { kyc, vendor } = await deps.decideVendorKycUseCase.execute({
+      principal: req.principal,
+      kycId: toKycId(params.kycId),
+      command: toDecisionCommand(body),
+    });
+
+    res.status(200).json({
+      data: toDecisionResponse(kyc, vendor.status.name),
+      meta: { requestId: getRequestId() },
     });
   },
 

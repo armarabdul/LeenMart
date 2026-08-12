@@ -130,7 +130,73 @@ export const adminKycSubmissionDetailSchema = z
   })
   .strict();
 
+/**
+ * Claiming carries no body. The reviewer's identity comes from the verified
+ * access token, never from the request — accepting it here would let one
+ * administrator record a decision under a colleague's name.
+ */
+export const startKycReviewRequestSchema = z.object({}).strict();
+
+/** The closed rejection vocabulary, mirroring the domain's `KycRejectionReason`. */
+export const kycRejectionReasonSchema = z.enum([
+  'DOCUMENT_UNCLEAR',
+  'DOCUMENT_INVALID',
+  'DETAILS_MISMATCH',
+  'BANK_DETAILS_MISMATCH',
+  'DUPLICATE_IDENTITY',
+  'OTHER',
+]);
+
+/**
+ * One endpoint, two shapes, discriminated on `decision`.
+ *
+ * A discriminated union rather than optional fields so `reason` is impossible
+ * to supply with an approval and impossible to omit from a rejection — the
+ * wire shape refuses what the domain would refuse anyway, one layer earlier.
+ *
+ * `note` is optional here even for `OTHER`: whether it is *required* is
+ * `KycRejectionReason.requiresExplanation()`'s decision, and duplicating that
+ * rule in the schema would give two places to change it and one to forget.
+ */
+export const decideVendorKycRequestSchema = z.discriminatedUnion('decision', [
+  z.object({ decision: z.literal('APPROVE') }).strict(),
+  z
+    .object({
+      decision: z.literal('REJECT'),
+      reason: kycRejectionReasonSchema,
+      note: z.string().trim().min(1).max(1000).optional(),
+    })
+    .strict(),
+]);
+
+/** What a reviewer sees after claiming: the review state, and nothing else. */
+export const startKycReviewResponseSchema = z
+  .object({
+    kycId: uuidSchema,
+    vendorStatus: vendorStatusSchema,
+    reviewedBy: uuidSchema,
+    startedAt: isoDateTimeSchema,
+  })
+  .strict();
+
+/** What a reviewer sees after deciding: the recorded outcome. */
+export const decideVendorKycResponseSchema = z
+  .object({
+    kycId: uuidSchema,
+    vendorStatus: vendorStatusSchema,
+    decidedBy: uuidSchema,
+    decidedAt: isoDateTimeSchema,
+    rejectionReason: kycRejectionReasonSchema.nullable(),
+    rejectionNote: z.string().nullable(),
+  })
+  .strict();
+
 export type AdminKycQueueStatus = z.infer<typeof adminKycQueueStatusSchema>;
+export type KycRejectionReasonDto = z.infer<typeof kycRejectionReasonSchema>;
+export type StartKycReviewRequest = z.infer<typeof startKycReviewRequestSchema>;
+export type StartKycReviewResponse = z.infer<typeof startKycReviewResponseSchema>;
+export type DecideVendorKycRequest = z.infer<typeof decideVendorKycRequestSchema>;
+export type DecideVendorKycResponse = z.infer<typeof decideVendorKycResponseSchema>;
 export type AdminKycQueueQuery = z.infer<typeof adminKycQueueQuerySchema>;
 export type AdminKycQueueItem = z.infer<typeof adminKycQueueItemSchema>;
 export type AdminKycQueueResponse = z.infer<typeof adminKycQueueResponseSchema>;
