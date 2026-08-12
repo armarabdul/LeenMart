@@ -39,6 +39,67 @@ const INSECURE_DEV_MFA_ENCRYPTION_KEY = 'deadbeef'.repeat(8);
  */
 const INSECURE_DEV_KYC_WRAPPING_KEY = 'feedface'.repeat(8);
 
+/**
+ * The development pepper for `HmacIdentifierFingerprinter`. A third distinct
+ * value, for the same reason the wrapping key is separate from the MFA key:
+ * this one keys the SEC-17 duplicate-detection fingerprints, and sharing it
+ * with either of the others would make one leak compromise two controls.
+ *
+ * Unlike a wrapping key, this pepper can never be rotated without discarding
+ * every stored fingerprint — a rotated pepper produces different digests for
+ * the same PAN, so nothing matches anything any more. That is a property of
+ * keyed fingerprints rather than a defect, and it is why production is refused
+ * below if this is left at the development value.
+ */
+const INSECURE_DEV_KYC_FINGERPRINT_PEPPER = 'c0ffee42'.repeat(8);
+
+/**
+ * The production guards specific to KYC, extracted from `superRefine` so the
+ * refinement stays under the function-length limit as the KYC surface grows.
+ * Every one of these is a development stand-in that must not reach real
+ * vendors' documents or identifiers.
+ */
+const assertProductionKycConfig = (
+  env: {
+    KYC_USE_DEV_DATA_KEY_CIPHER: boolean;
+    KYC_KMS_KEY_ID?: string | undefined;
+    KYC_S3_SECRET_ACCESS_KEY: string;
+    KYC_FINGERPRINT_PEPPER: string;
+  },
+  ctx: z.RefinementCtx,
+): void => {
+  if (env.KYC_USE_DEV_DATA_KEY_CIPHER) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['KYC_USE_DEV_DATA_KEY_CIPHER'],
+      message:
+        'KYC key wrapping must use the KMS-managed CMK in production (SDD 12.1/12.3), never the development cipher.',
+    });
+  }
+  if (!env.KYC_KMS_KEY_ID) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['KYC_KMS_KEY_ID'],
+      message: 'A KMS CMK must be configured in production to wrap KYC data keys (SDD 12.3).',
+    });
+  }
+  if (env.KYC_S3_SECRET_ACCESS_KEY === 'leenmart-dev-secret') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['KYC_S3_SECRET_ACCESS_KEY'],
+      message: 'Real object-storage credentials must be set in production.',
+    });
+  }
+  if (env.KYC_FINGERPRINT_PEPPER === INSECURE_DEV_KYC_FINGERPRINT_PEPPER) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['KYC_FINGERPRINT_PEPPER'],
+      message:
+        'A real KYC_FINGERPRINT_PEPPER must be set in production: a known pepper makes every PAN fingerprint enumerable offline (SEC-17).',
+    });
+  }
+};
+
 const envSchema = z
   .object({
     // --- runtime ---
@@ -138,6 +199,17 @@ const envSchema = z
       .string()
       .regex(/^[0-9a-f]{64}$/i, 'must be a 64-character hexadecimal string (32 bytes)')
       .default(INSECURE_DEV_KYC_WRAPPING_KEY),
+
+    // --- KYC duplicate detection (SEC-17) ---
+    /**
+     * HMAC-SHA256 key for identifier fingerprints. Deliberately not the KMS
+     * CMK: a fingerprint must be computable on every request without a network
+     * call, which is the opposite of what a CMK is for.
+     */
+    KYC_FINGERPRINT_PEPPER: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/i, 'must be a 64-character hexadecimal string (32 bytes)')
+      .default(INSECURE_DEV_KYC_FINGERPRINT_PEPPER),
   })
   .superRefine((env, ctx) => {
     // Guard rails that only apply once real users are involved.
@@ -170,28 +242,7 @@ const envSchema = z
           message: 'A real MFA_ENCRYPTION_KEY must be set in production.',
         });
       }
-      if (env.KYC_USE_DEV_DATA_KEY_CIPHER) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['KYC_USE_DEV_DATA_KEY_CIPHER'],
-          message:
-            'KYC key wrapping must use the KMS-managed CMK in production (SDD 12.1/12.3), never the development cipher.',
-        });
-      }
-      if (!env.KYC_KMS_KEY_ID) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['KYC_KMS_KEY_ID'],
-          message: 'A KMS CMK must be configured in production to wrap KYC data keys (SDD 12.3).',
-        });
-      }
-      if (env.KYC_S3_SECRET_ACCESS_KEY === 'leenmart-dev-secret') {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['KYC_S3_SECRET_ACCESS_KEY'],
-          message: 'Real object-storage credentials must be set in production.',
-        });
-      }
+      assertProductionKycConfig(env, ctx);
     }
   });
 

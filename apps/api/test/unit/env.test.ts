@@ -20,6 +20,7 @@ const productionEnv = {
   KYC_USE_DEV_DATA_KEY_CIPHER: 'false',
   KYC_KMS_KEY_ID: 'arn:aws:kms:ap-south-1:000000000000:key/real',
   KYC_S3_SECRET_ACCESS_KEY: 'a-real-object-storage-secret',
+  KYC_FINGERPRINT_PEPPER: '9'.repeat(64),
 };
 
 describe('environment configuration', () => {
@@ -178,6 +179,35 @@ describe('environment configuration', () => {
 
       expect(env.KYC_USE_DEV_DATA_KEY_CIPHER).toBe(false);
       expect(env.KYC_KMS_KEY_ID).toBe('arn:aws:kms:ap-south-1:000000000000:key/real');
+    });
+  });
+
+  describe('KYC duplicate detection (SEC-17)', () => {
+    it('defaults the fingerprint pepper outside production', () => {
+      expect(loadEnv({ ...validEnv }).KYC_FINGERPRINT_PEPPER).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    it('refuses the development pepper in production', () => {
+      // A known pepper makes every stored PAN fingerprint enumerable offline,
+      // which is the entire reason the fingerprint is keyed at all.
+      const { KYC_FINGERPRINT_PEPPER: _omitted, ...withDefaultPepper } = productionEnv;
+
+      expect(() => loadEnv(withDefaultPepper)).toThrow(/KYC_FINGERPRINT_PEPPER/);
+    });
+
+    it('requires 32 bytes of hex', () => {
+      expect(() => loadEnv({ ...validEnv, KYC_FINGERPRINT_PEPPER: 'too-short' })).toThrow(
+        /KYC_FINGERPRINT_PEPPER/,
+      );
+    });
+
+    it('is a different secret from the MFA key and the KYC wrapping key', () => {
+      // Sharing any of them would make one leak defeat two unrelated controls.
+      const env = loadEnv({ ...validEnv });
+
+      expect(env.KYC_FINGERPRINT_PEPPER).not.toBe(env.MFA_ENCRYPTION_KEY);
+      expect(env.KYC_FINGERPRINT_PEPPER).not.toBe(env.KYC_DEV_WRAPPING_KEY);
+      expect(env.KYC_FINGERPRINT_PEPPER).not.toBe(env.JWT_ACCESS_SECRET);
     });
   });
 

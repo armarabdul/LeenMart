@@ -106,6 +106,10 @@ model User {
   mfaSecret     MfaSecret?
   mfaChallenges MfaChallenge[]
   addresses     Address[]
+  // Two named relations because a KYC submission records the reviewer who
+  // claimed it and the administrator who decided it as separate people.
+  kycReviewed   VendorKycSubmission[] @relation("KycReviewer")
+  kycDecided    VendorKycSubmission[] @relation("KycDecider")
 
   @@map("users")
 }
@@ -256,7 +260,8 @@ model VendorProfile {
   createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kycSubmissions VendorKycSubmission[]
 
   @@map("vendors")
 }
@@ -346,4 +351,137 @@ model AuditLog {
   @@index([entityType, entityId, createdAt], map: "idx_audit_entity")
   @@index([createdAt], map: "idx_audit_created_at")
   @@map("audit_logs")
+}
+
+/// The three documents V1 requires at KYC (SDD 15.1's document set, narrowed
+/// by decision D1). Aadhaar, FSSAI and shop/establishment proof are absent by
+/// decision, not oversight — each waits on its own gate.
+enum KycDocumentType {
+  PAN
+  BANK_ACCOUNT_PROOF
+  GSTIN
+}
+
+/// Mirrors `KycDocument`'s two states. A reserved object key is not yet a
+/// document: the row exists so the upload has somewhere to land, and only
+/// becomes reviewable once the client has finished writing the object.
+enum KycDocumentUploadStatus {
+  AWAITING_UPLOAD
+  UPLOADED
+}
+
+/// The closed rejection vocabulary (decision D7). The SDD defines none — its
+/// only rejection codes are §15.2's product-moderation ones, a different
+/// machine entirely.
+enum KycRejectionReason {
+  DOCUMENT_UNCLEAR
+  DOCUMENT_INVALID
+  DETAILS_MISMATCH
+  BANK_DETAILS_MISMATCH
+  DUPLICATE_IDENTITY
+  OTHER
+}
+
+/// One KYC submission by one vendor (`VendorKyc`), with its review folded in.
+///
+/// **The review is columns on this row, not a table.** A submission has at
+/// most one review and a review cannot outlive its submission, so a separate
+/// table would buy a join and an extra way for the two to disagree, and buy
+/// nothing else. `KycReview` is a value inside the aggregate, not an entity
+/// with its own identity.
+///
+/// **No status column.** The lifecycle SDD 15.1 draws lives on `vendors`
+/// (`VendorStatus`), and this row deliberately does not restate it — the
+/// domain made the same choice for the same reason. What the review columns
+/// record is who did what and when, which the status cannot express.
+///
+/// `reviewed_by` and `decided_by` are separate on purpose: SDD 15.1 records
+/// the identity of the human who *decided*, and the project's approved model
+/// does not require that to be whoever claimed the queue item.
+///
+/// **What is not here is as deliberate as what is.** No plaintext PAN and no
+/// plaintext bank account number: both exist only inside the client-encrypted
+/// documents in object storage. This row keeps a one-way fingerprint for
+/// SEC-17 duplicate detection and the last four characters SDD 12.3 displays
+/// by default — which *is* the masked form, so it discloses nothing the UI
+/// does not already show. GSTIN is stored whole because BR-13 requires it
+/// whole (GSTR-8, tax invoices); see the domain entity for what that costs.
+model VendorKycSubmission {
+  id               String              @id @db.Uuid
+  vendorId         String              @map("vendor_id") @db.Uuid
+  /// HMAC-SHA256 hex. Indexed, never unique — see the migration for why.
+  panFingerprint   String              @map("pan_fingerprint") @db.VarChar(64)
+  panLast4         String              @map("pan_last4") @db.VarChar(4)
+  gstin            String              @db.VarChar(15)
+  bankFingerprint  String              @map("bank_fingerprint") @db.VarChar(64)
+  bankAccountLast4 String              @map("bank_account_last4") @db.VarChar(4)
+  ifsc             String              @db.VarChar(11)
+  reviewedBy       String?             @map("reviewed_by") @db.Uuid
+  startedAt        DateTime?           @map("started_at") @db.Timestamptz(6)
+  decidedBy        String?             @map("decided_by") @db.Uuid
+  decidedAt        DateTime?           @map("decided_at") @db.Timestamptz(6)
+  rejectionReason  KycRejectionReason? @map("rejection_reason")
+  rejectionNote    String?             @map("rejection_note")
+  submittedAt      DateTime            @map("submitted_at") @db.Timestamptz(6)
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  vendor    VendorProfile @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  // `Restrict`, not `Cascade` or `SetNull`: SDD 15.1 requires the deciding
+  // human's identity to be recorded, and a record that can lose the name is
+  // not a record of it.
+  reviewer  User?         @relation("KycReviewer", fields: [reviewedBy], references: [id], onDelete: Restrict)
+  decider   User?         @relation("KycDecider", fields: [decidedBy], references: [id], onDelete: Restrict)
+  documents KycDocument[]
+
+  /// The composite-foreign-key target that stops a document drifting to
+  /// another vendor's submission. Redundant as a uniqueness claim — `id` is
+  /// already the primary key — and present only so `(kyc_id, vendor_id)` has
+  /// something to reference.
+  @@unique([id, vendorId], map: "uq_vendor_kyc_id_vendor")
+  /// The vendor's attempt history, newest first — the only ordering anything
+  /// asks for.
+  @@index([vendorId, submittedAt(sort: Desc)], map: "idx_vendor_kyc_vendor_history")
+  @@index([panFingerprint], map: "idx_vendor_kyc_pan_fingerprint")
+  @@index([bankFingerprint], map: "idx_vendor_kyc_bank_fingerprint")
+  @@map("vendor_kyc_submissions")
+}
+
+/// Metadata for one client-encrypted KYC document (`KycDocument`).
+///
+/// **Metadata only — never bytes.** SDD 12.2 keeps files out of the API tier
+/// entirely; the object lives in the private KYC bucket and this row holds the
+/// reference to it.
+///
+/// `wrapped_data_key` is the data key wrapped by the KMS CMK (SDD 12.3:
+/// "stored beside the object reference"). `BYTEA`, because it is opaque binary
+/// that nothing queries or orders by — hex or base64 in a text column would be
+/// a third of a page larger per row and invite someone to treat it as a
+/// string. The *plaintext* data key is never here, and the domain entity
+/// redacts the wrapped one from its serialised form.
+///
+/// `vendor_id` is denormalised and constrained, not merely copied: the
+/// composite foreign key below makes it impossible for a document to name a
+/// vendor its parent submission does not.
+model KycDocument {
+  id             String                  @id @db.Uuid
+  kycId          String                  @map("kyc_id") @db.Uuid
+  vendorId       String                  @map("vendor_id") @db.Uuid
+  type           KycDocumentType
+  objectKey      String                  @map("object_key") @db.VarChar(1024)
+  wrappedDataKey Bytes                   @map("wrapped_data_key")
+  contentType    String                  @map("content_type") @db.VarChar(255)
+  sizeBytes      Int                     @map("size_bytes")
+  status         KycDocumentUploadStatus @default(AWAITING_UPLOAD)
+  uploadedAt     DateTime?               @map("uploaded_at") @db.Timestamptz(6)
+  createdAt      DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  submission VendorKycSubmission @relation(fields: [kycId, vendorId], references: [id, vendorId], onDelete: Cascade)
+
+  /// The domain refuses a submission carrying one type twice; this is the
+  /// database saying the same thing, so a concurrent write cannot slip a
+  /// second one past a check that already passed.
+  @@unique([kycId, type], map: "uq_kyc_documents_one_per_type")
+  @@index([vendorId], map: "idx_kyc_documents_vendor")
+  @@map("kyc_documents")
 }

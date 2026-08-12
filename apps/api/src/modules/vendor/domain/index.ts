@@ -27,3 +27,4 @@ export * from './errors/kyc-errors.js';
 
 // repository interfaces
 export * from './repositories/vendor.repository.js';
+export * from './repositories/vendor-kyc.repository.js';
