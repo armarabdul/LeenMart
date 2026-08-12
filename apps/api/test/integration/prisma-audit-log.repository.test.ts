@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@prisma/client';
-import { UuidV7Generator, toUuid } from '@leen-mart/domain-kit';
+import { UuidV7Generator, toUuid, type TransactionScope } from '@leen-mart/domain-kit';
 import { PrismaAuditLogRepository } from '../../src/modules/audit/infrastructure/persistence/prisma-audit-log.repository.js';
 import {
   AuditLogEntry,
@@ -247,6 +247,126 @@ describe('PrismaAuditLogRepository', () => {
     it('returns an empty list for an actor with no entries', async () => {
       const stranger = toUserId(idGenerator.generate());
       expect(await repository.findByActor(stranger, 10)).toEqual([]);
+    });
+  });
+
+  describe('withTransaction (KYC-6 preparatory)', () => {
+    /**
+     * Whether the scoped `append` actually runs on the caller's connection,
+     * not merely that it succeeds. A `withTransaction` that silently opened a
+     * second connection would still pass a test that only checked the row
+     * exists afterward — the same trap `tenant-prisma.ts` documents for the
+     * tenant boundary — so every assertion here goes through a real Prisma
+     * interactive transaction and inspects what the transaction actually did.
+     */
+    it('writes through the caller-supplied scope, visible once committed', async () => {
+      const id = toAuditLogEntryId(idGenerator.generate());
+
+      await prisma.$transaction(async (tx) => {
+        const scoped = repository.withTransaction(tx as unknown as TransactionScope);
+        const entry = AuditLogEntry.record({
+          id,
+          actor,
+          action: 'SCOPED_COMMIT_TARGET',
+          entityType,
+          entityId,
+          before: null,
+          after: null,
+          reason: null,
+          context,
+          now: new Date('2026-04-01T00:00:00.000Z'),
+        });
+        await scoped.append(entry);
+      });
+
+      const row = await prisma.auditLog.findFirst({ where: { id } });
+      expect(row?.action).toBe('SCOPED_COMMIT_TARGET');
+    });
+
+    it('rolls back with the caller transaction — the write never lands', async () => {
+      const id = toAuditLogEntryId(idGenerator.generate());
+
+      await expect(
+        prisma.$transaction(async (tx) => {
+          const scoped = repository.withTransaction(tx as unknown as TransactionScope);
+          const entry = AuditLogEntry.record({
+            id,
+            actor,
+            action: 'SCOPED_ROLLBACK_TARGET',
+            entityType,
+            entityId,
+            before: null,
+            after: null,
+            reason: null,
+            context,
+            now: new Date('2026-04-01T00:00:00.000Z'),
+          });
+          await scoped.append(entry);
+          // Forces the whole transaction to roll back, the way a business
+          // operation's own later failure would.
+          throw new Error('forced rollback after the audit write');
+        }),
+      ).rejects.toThrow('forced rollback after the audit write');
+
+      // Read on a plain connection, outside the rolled-back transaction: the
+      // row must be entirely absent, not merely unreachable from `tx`.
+      const row = await prisma.auditLog.findFirst({ where: { id } });
+      expect(row).toBeNull();
+    });
+
+    it('commits alongside another write in the same transaction, atomically', async () => {
+      // The exact shape KYC-6 needs: the audit write is one statement among
+      // several inside one transaction, and it must be indistinguishable from
+      // any other participant — nothing here is special-cased for audit.
+      const kycEntryId = toAuditLogEntryId(idGenerator.generate());
+      const secondEntryId = toAuditLogEntryId(idGenerator.generate());
+
+      await prisma.$transaction(async (tx) => {
+        const scoped = repository.withTransaction(tx as unknown as TransactionScope);
+        await scoped.append(
+          AuditLogEntry.record({
+            id: kycEntryId,
+            actor,
+            action: 'SCOPED_MULTI_WRITE_FIRST',
+            entityType,
+            entityId,
+            before: null,
+            after: null,
+            reason: null,
+            context,
+            now: new Date('2026-04-01T00:00:00.000Z'),
+          }),
+        );
+        await scoped.append(
+          AuditLogEntry.record({
+            id: secondEntryId,
+            actor,
+            action: 'SCOPED_MULTI_WRITE_SECOND',
+            entityType,
+            entityId,
+            before: null,
+            after: null,
+            reason: null,
+            context,
+            now: new Date('2026-04-01T00:00:00.000Z'),
+          }),
+        );
+      });
+
+      const rows = await prisma.auditLog.findMany({
+        where: { id: { in: [kycEntryId, secondEntryId] } },
+      });
+      expect(rows).toHaveLength(2);
+    });
+
+    it('leaves the unscoped repository writing independently, exactly as before', async () => {
+      // The unscoped path must be completely unaffected by this chunk: no
+      // caller transaction exists here, so `append` opens (and commits) its
+      // own implicit single-statement write, same as every test above it.
+      const entry = await append({ action: 'UNSCOPED_UNCHANGED_TARGET' });
+
+      const row = await prisma.auditLog.findFirst({ where: { id: entry.id } });
+      expect(row?.action).toBe('UNSCOPED_UNCHANGED_TARGET');
     });
   });
 

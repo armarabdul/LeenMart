@@ -1,4 +1,4 @@
-import type { Uuid } from '@leen-mart/domain-kit';
+import type { TransactionScope, Uuid } from '@leen-mart/domain-kit';
 import type { UserId } from '../../../identity/index.js';
 import type { AuditLogEntry } from '../entities/audit-log-entry.entity.js';
 
@@ -18,6 +18,27 @@ import type { AuditLogEntry } from '../entities/audit-log-entry.entity.js';
  * happened to this thing.
  */
 export interface AuditLogRepository {
+  /**
+   * Re-binds this repository to a transaction the caller already opened. See
+   * `VendorRepository.withTransaction` and `VendorKycRepository.withTransaction`,
+   * which this mirrors exactly.
+   *
+   * Exists because a business operation and the audit record of it must
+   * commit or roll back together (SDD 18.4: the log is "legally significant",
+   * so an entry that outlives a rolled-back action — or a committed action
+   * with no entry — is exactly the failure this closes). A caller that opened
+   * a transaction for its own writes calls this once to fold the audit write
+   * into the same one.
+   *
+   * `append` needs no `inCallerTransaction` guard the way
+   * `PrismaVendorKycRepository.create` does: it was already a single
+   * statement on whatever client the constructor received, so there is no
+   * self-opened transaction to avoid nesting. The scoped instance simply
+   * issues that same single statement on the caller's connection instead of
+   * its own.
+   */
+  withTransaction(scope: TransactionScope): AuditLogRepository;
+
   append(entry: AuditLogEntry): Promise<void>;
 
   /**

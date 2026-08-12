@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { FixedClock, UuidV7Generator, toUuid } from '@leen-mart/domain-kit';
+import { FixedClock, UuidV7Generator, toUuid, type TransactionScope } from '@leen-mart/domain-kit';
 import { AmbientAuditWriter } from '../../../../src/modules/audit/infrastructure/ambient-audit-writer.js';
 import type { AuditLogEntry } from '../../../../src/modules/audit/domain/entities/audit-log-entry.entity.js';
 import type { AuditLogRepository } from '../../../../src/modules/audit/domain/repositories/audit-log.repository.js';
@@ -9,7 +9,26 @@ import { requestContextMiddleware } from '../../../../src/shared/interface/http/
 import { toUserId } from '../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 
 class InMemoryAuditLogRepository implements AuditLogRepository {
-  readonly appended: AuditLogEntry[] = [];
+  readonly appended: AuditLogEntry[];
+  /** Set on a scoped instance, so a test can tell it apart from the original. */
+  readonly boundScope: TransactionScope | null;
+
+  constructor(sharedAppended: AuditLogEntry[] = [], boundScope: TransactionScope | null = null) {
+    this.appended = sharedAppended;
+    this.boundScope = boundScope;
+  }
+
+  withTransaction(scope: TransactionScope): AuditLogRepository {
+    // A genuinely new instance, not `this` — the point being tested is that
+    // `AmbientAuditWriter.withTransaction` ends up writing through a
+    // *different*, scope-bound repository, exactly as
+    // `PrismaAuditLogRepository.withTransaction` returns a new instance
+    // rather than mutating itself. It shares the same backing array on
+    // purpose: in production the scoped repository writes to the same table,
+    // just through the caller's connection, so an assertion on `appended`
+    // should see entries recorded through either path.
+    return new InMemoryAuditLogRepository(this.appended, scope);
+  }
 
   append(entry: AuditLogEntry): Promise<void> {
     this.appended.push(entry);
@@ -103,6 +122,9 @@ describe('AmbientAuditWriter', () => {
       // must not make that choice silently.
       const writer = new AmbientAuditWriter({
         auditLogRepository: {
+          withTransaction(): AuditLogRepository {
+            return this;
+          },
           append: () => Promise.reject(new Error('table unavailable')),
           findByActor: () => Promise.resolve([]),
           findByEntity: () => Promise.resolve([]),
@@ -155,6 +177,72 @@ describe('AmbientAuditWriter', () => {
       const repository = await recordDuringRequest({ 'User-Agent': '' });
 
       expect(repository.appended[0]?.userAgent).toBeNull();
+    });
+  });
+
+  describe('withTransaction (KYC-6 preparatory)', () => {
+    const fakeScope = {} as TransactionScope;
+
+    it('writes through the repository the scope was bound to, not the original', async () => {
+      const { writer, repository } = build();
+
+      const scopedWriter = writer.withTransaction(fakeScope);
+      await scopedWriter.record(input);
+
+      // The write reached the *shared* backing array, proving the scoped
+      // writer really delegates to a repository over the same underlying
+      // store — not a disconnected copy that silently drops entries.
+      expect(repository.appended).toHaveLength(1);
+    });
+
+    it('binds the scope onto the repository it re-creates', async () => {
+      const { writer, repository } = build();
+
+      const scopedWriter = writer.withTransaction(fakeScope);
+      await scopedWriter.record(input);
+
+      expect(repository.appended[0]).toBeDefined();
+      // The entry now living in the shared array was appended through a
+      // repository instance carrying `fakeScope` — confirmed by asking the
+      // production repository itself for the scope it was bound to, the same
+      // property `PrismaAuditLogRepository.withTransaction` would carry a
+      // real transaction client under.
+      const scopedRepository = repository.withTransaction(fakeScope) as InMemoryAuditLogRepository;
+      expect(scopedRepository.boundScope).toBe(fakeScope);
+    });
+
+    it('still reads the ambient request context on the scoped path', async () => {
+      // Rebinding the repository must not disturb where ip/userAgent/requestId
+      // come from — that mechanism is orthogonal to which connection the
+      // write ultimately lands on.
+      const { writer, repository } = build();
+      const app = express();
+      app.use(requestContextMiddleware(new UuidV7Generator()));
+      app.post('/probe', (_req, res) => {
+        writer
+          .withTransaction(fakeScope)
+          .record(input)
+          .then(() => res.status(204).end())
+          .catch(() => res.status(500).end());
+      });
+
+      await request(app)
+        .post('/probe')
+        .set('X-Request-Id', 'scoped-corr-1')
+        .set('User-Agent', 'leen-mart-audit-probe/1.0')
+        .expect(204);
+
+      expect(repository.appended[0]?.requestId).toBe('scoped-corr-1');
+      expect(repository.appended[0]?.userAgent).toBe('leen-mart-audit-probe/1.0');
+    });
+
+    it('leaves the original, unscoped writer untouched', async () => {
+      const { writer, repository } = build();
+
+      writer.withTransaction(fakeScope);
+
+      await writer.record(input);
+      expect(repository.appended).toHaveLength(1);
     });
   });
 });

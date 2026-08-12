@@ -367,6 +367,13 @@ export const nullLogger = new NullLogger();
 export class RecordingAuditWriter implements AuditWriter {
   readonly entries: AuditWriterInput[] = [];
 
+  // No caller in this module needs a scoped instance to behave any
+  // differently — there is no in-memory "transaction" to bind to, so this
+  // returns the same recorder rather than fabricating one.
+  withTransaction(): AuditWriter {
+    return this;
+  }
+
   record(input: AuditWriterInput): Promise<void> {
     this.entries.push(input);
     return Promise.resolve();
@@ -375,6 +382,10 @@ export class RecordingAuditWriter implements AuditWriter {
 
 /** An audit writer whose persistence always fails, for the fail-closed assertions. */
 export class FailingAuditWriter implements AuditWriter {
+  withTransaction(): AuditWriter {
+    return this;
+  }
+
   record(): Promise<void> {
     return Promise.reject(new Error('audit log unavailable'));
   }

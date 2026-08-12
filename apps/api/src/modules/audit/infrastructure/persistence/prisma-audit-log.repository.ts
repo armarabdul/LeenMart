@@ -1,5 +1,5 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
-import { toUuid, type Uuid } from '@leen-mart/domain-kit';
+import { toUuid, type TransactionScope, type Uuid } from '@leen-mart/domain-kit';
 import { toUserId, type UserId } from '../../../identity/index.js';
 import {
   AuditLogEntry,
@@ -74,6 +74,20 @@ const toDomain = (row: AuditLogRow): AuditLogEntry =>
  */
 export class PrismaAuditLogRepository implements AuditLogRepository {
   constructor(private readonly prisma: PrismaClient) {}
+
+  /**
+   * Unwraps the opaque scope back into the Prisma transaction client it
+   * actually is, exactly as `PrismaVendorRepository.withTransaction` does —
+   * the simpler of the two existing patterns, not
+   * `PrismaVendorKycRepository`'s: nothing here self-opens a transaction, so
+   * there is no second constructor parameter to guard against nesting. The
+   * cast is confined to this layer: the port cannot name `PrismaClient`
+   * (SDD 2.3), and a `TransactionScope` can only come from
+   * `TransactionRunner.run`, so nothing else can fabricate one.
+   */
+  withTransaction(scope: TransactionScope): AuditLogRepository {
+    return new PrismaAuditLogRepository(scope as unknown as PrismaClient);
+  }
 
   async append(entry: AuditLogEntry): Promise<void> {
     await this.prisma.auditLog.create({

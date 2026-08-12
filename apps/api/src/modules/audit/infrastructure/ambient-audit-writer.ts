@@ -1,4 +1,4 @@
-import type { Clock, IdGenerator } from '@leen-mart/domain-kit';
+import type { Clock, IdGenerator, TransactionScope } from '@leen-mart/domain-kit';
 import { getRequestContext } from '../../../shared/interface/http/middleware/request-context.js';
 import {
   AuditLogEntry,
@@ -42,6 +42,20 @@ const ambientContext = (): AuditLogRequestContext => {
  */
 export class AmbientAuditWriter implements AuditWriter {
   constructor(private readonly deps: AmbientAuditWriterDeps) {}
+
+  /**
+   * Re-binds the underlying repository to the caller's transaction and
+   * returns a new writer over it. The ambient-context reading is unaffected —
+   * `ip`/`userAgent`/`requestId` still come from `AsyncLocalStorage`, which a
+   * database transaction has no bearing on — only where `append` ultimately
+   * writes changes.
+   */
+  withTransaction(scope: TransactionScope): AuditWriter {
+    return new AmbientAuditWriter({
+      ...this.deps,
+      auditLogRepository: this.deps.auditLogRepository.withTransaction(scope),
+    });
+  }
 
   async record(input: AuditWriterInput): Promise<void> {
     const { auditLogRepository, idGenerator, clock } = this.deps;

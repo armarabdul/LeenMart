@@ -1,4 +1,4 @@
-import type { Uuid } from '@leen-mart/domain-kit';
+import type { TransactionScope, Uuid } from '@leen-mart/domain-kit';
 import type { UserId } from '../../../identity/index.js';
 import type { AuditLogSnapshot } from '../../domain/entities/audit-log-entry.entity.js';
 
@@ -45,5 +45,18 @@ export interface AuditWriterInput {
  * as fatal.
  */
 export interface AuditWriter {
+  /**
+   * Re-binds this writer to a transaction the caller already opened, so
+   * `record` joins it instead of writing independently.
+   *
+   * Mirrors `AuditLogRepository.withTransaction` one layer up: a use case
+   * depends on `AuditWriter`, not the repository directly, precisely so it
+   * never has to import the ambient `RequestContext` itself — so the
+   * transaction-participation capability has to be republished here too, or
+   * a caller that needs both the ambient transport facts *and* atomicity
+   * would have no way to get both at once.
+   */
+  withTransaction(scope: TransactionScope): AuditWriter;
+
   record(input: AuditWriterInput): Promise<void>;
 }
