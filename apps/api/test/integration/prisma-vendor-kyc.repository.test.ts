@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@prisma/client';
 import { UuidV7Generator } from '@leen-mart/domain-kit';
 import { PrismaVendorKycRepository } from '../../src/modules/vendor/infrastructure/persistence/prisma-vendor-kyc.repository.js';
+import { runWithTenant } from '../../src/shared/infrastructure/persistence/tenant-context.js';
 import { HmacIdentifierFingerprinter } from '../../src/modules/vendor/infrastructure/security/hmac-identifier-fingerprinter.js';
 import { KycDocument } from '../../src/modules/vendor/domain/entities/kyc-document.entity.js';
 import {
@@ -73,6 +74,18 @@ describe('PrismaVendorKycRepository', () => {
       }).markUploaded(NOW),
     );
 
+  /**
+   * `create` opens a sanctioned tenant transaction (KYC-2B-2), which refuses to
+   * run without a vendor context — so a caller has to supply one. That is the
+   * boundary working, not a test workaround: a submission is always written on
+   * behalf of the vendor it belongs to.
+   */
+  const create = (kyc: VendorKyc): Promise<void> =>
+    runWithTenant(
+      { userId: kyc.vendorId === vendorId ? userId : otherUserId, vendorId: kyc.vendorId },
+      () => repository.create(kyc),
+    );
+
   const newSubmission = (owner = vendorId, ident = identifiers): VendorKyc => {
     const kycId = toKycId(ids.generate());
     return VendorKyc.submit({
@@ -133,7 +146,7 @@ describe('PrismaVendorKycRepository', () => {
       await clearSubmissions();
       const kyc = newSubmission();
 
-      await repository.create(kyc);
+      await create(kyc);
       const found = await repository.findById(kyc.id);
 
       expect(found).not.toBeNull();
@@ -147,7 +160,7 @@ describe('PrismaVendorKycRepository', () => {
       await clearSubmissions();
       const kyc = newSubmission();
 
-      await repository.create(kyc);
+      await create(kyc);
       const found = await repository.findById(kyc.id);
 
       expect(found?.documents).toHaveLength(3);
@@ -164,7 +177,7 @@ describe('PrismaVendorKycRepository', () => {
       await clearSubmissions();
       const kyc = newSubmission();
 
-      await repository.create(kyc);
+      await create(kyc);
 
       expect((await repository.findById(kyc.id))?.review).toBeNull();
     });
@@ -172,7 +185,7 @@ describe('PrismaVendorKycRepository', () => {
     it('round-trips a claimed but undecided review with null decision fields', async () => {
       await clearSubmissions();
       const kyc = newSubmission();
-      await repository.create(kyc);
+      await create(kyc);
 
       await repository.saveReview(kyc.startReview(reviewerId, LATER));
       const found = await repository.findById(kyc.id);
@@ -189,7 +202,7 @@ describe('PrismaVendorKycRepository', () => {
       // nothing if persistence collapsed it back into one column.
       await clearSubmissions();
       const kyc = newSubmission();
-      await repository.create(kyc);
+      await create(kyc);
 
       await repository.saveReview(kyc.startReview(reviewerId, NOW).approve(deciderId, LATER));
       const found = await repository.findById(kyc.id);
@@ -203,7 +216,7 @@ describe('PrismaVendorKycRepository', () => {
     it('round-trips a rejection with its reason and note', async () => {
       await clearSubmissions();
       const kyc = newSubmission();
-      await repository.create(kyc);
+      await create(kyc);
 
       await repository.saveReview(
         kyc
@@ -220,7 +233,7 @@ describe('PrismaVendorKycRepository', () => {
     it('preserves the fingerprints exactly, and stores no plaintext identifier', async () => {
       await clearSubmissions();
       const kyc = newSubmission();
-      await repository.create(kyc);
+      await create(kyc);
 
       const row = await prisma.vendorKycSubmission.findUniqueOrThrow({ where: { id: kyc.id } });
 
@@ -242,7 +255,7 @@ describe('PrismaVendorKycRepository', () => {
       // than a claim that quietly stops being true.
       await clearSubmissions();
       const kyc = newSubmission();
-      await repository.create(kyc);
+      await create(kyc);
 
       const row = await prisma.vendorKycSubmission.findUniqueOrThrow({ where: { id: kyc.id } });
 
@@ -256,16 +269,16 @@ describe('PrismaVendorKycRepository', () => {
     it('accepts the first undecided submission', async () => {
       await clearSubmissions();
 
-      await expect(repository.create(newSubmission())).resolves.toBeUndefined();
+      await expect(create(newSubmission())).resolves.toBeUndefined();
     });
 
     it('refuses a second undecided submission at the database', async () => {
       // The application cannot enforce this: two callers can both read "no
       // undecided attempt" and both proceed. Only the index can decide.
       await clearSubmissions();
-      await repository.create(newSubmission());
+      await create(newSubmission());
 
-      await expect(repository.create(newSubmission())).rejects.toThrow(
+      await expect(create(newSubmission())).rejects.toThrow(
         /uq_vendor_kyc_one_undecided|Unique constraint/i,
       );
     });
@@ -273,10 +286,7 @@ describe('PrismaVendorKycRepository', () => {
     it('refuses the second of two concurrent submissions', async () => {
       await clearSubmissions();
 
-      const results = await Promise.allSettled([
-        repository.create(newSubmission()),
-        repository.create(newSubmission()),
-      ]);
+      const results = await Promise.allSettled([create(newSubmission()), create(newSubmission())]);
 
       expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
       expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
@@ -285,14 +295,14 @@ describe('PrismaVendorKycRepository', () => {
     it('allows a new attempt once the previous one is rejected', async () => {
       await clearSubmissions();
       const first = newSubmission();
-      await repository.create(first);
+      await create(first);
       await repository.saveReview(
         first
           .startReview(reviewerId, NOW)
           .reject(deciderId, KycRejectionReason.DOCUMENT_UNCLEAR, null, LATER),
       );
 
-      await expect(repository.create(newSubmission())).resolves.toBeUndefined();
+      await expect(create(newSubmission())).resolves.toBeUndefined();
     });
 
     it('allows many decided attempts to coexist with one undecided attempt', async () => {
@@ -300,7 +310,7 @@ describe('PrismaVendorKycRepository', () => {
 
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const rejected = newSubmission();
-        await repository.create(rejected);
+        await create(rejected);
         await repository.saveReview(
           rejected
             .startReview(reviewerId, NOW)
@@ -308,7 +318,7 @@ describe('PrismaVendorKycRepository', () => {
         );
       }
       const current = newSubmission();
-      await repository.create(current);
+      await create(current);
 
       const all = await repository.listByVendorId(vendorId);
       expect(all).toHaveLength(4);
@@ -319,7 +329,7 @@ describe('PrismaVendorKycRepository', () => {
     it('keeps rejected history queryable with its decision intact', async () => {
       await clearSubmissions();
       const rejected = newSubmission();
-      await repository.create(rejected);
+      await create(rejected);
       await repository.saveReview(
         rejected
           .startReview(reviewerId, NOW)
@@ -336,7 +346,7 @@ describe('PrismaVendorKycRepository', () => {
     it('reports no current attempt when every attempt is decided', async () => {
       await clearSubmissions();
       const decided = newSubmission();
-      await repository.create(decided);
+      await create(decided);
       await repository.saveReview(decided.startReview(reviewerId, NOW).approve(deciderId, LATER));
 
       expect(await repository.findCurrentByVendorId(vendorId)).toBeNull();
@@ -344,9 +354,9 @@ describe('PrismaVendorKycRepository', () => {
 
     it('scopes the invariant per vendor, not globally', async () => {
       await clearSubmissions();
-      await repository.create(newSubmission());
+      await create(newSubmission());
 
-      await expect(repository.create(newSubmission(otherVendorId))).resolves.toBeUndefined();
+      await expect(create(newSubmission(otherVendorId))).resolves.toBeUndefined();
     });
   });
 
@@ -355,7 +365,7 @@ describe('PrismaVendorKycRepository', () => {
       // The composite foreign key is what makes the denormalised column safe.
       await clearSubmissions();
       const kyc = newSubmission();
-      await repository.create(kyc);
+      await create(kyc);
 
       await expect(
         prisma.kycDocument.create({
@@ -378,7 +388,7 @@ describe('PrismaVendorKycRepository', () => {
     it('refuses a second document of the same type on one submission', async () => {
       await clearSubmissions();
       const kyc = newSubmission();
-      await repository.create(kyc);
+      await create(kyc);
 
       await expect(
         prisma.kycDocument.create({
@@ -401,7 +411,7 @@ describe('PrismaVendorKycRepository', () => {
     it('removes documents with their submission', async () => {
       await clearSubmissions();
       const kyc = newSubmission();
-      await repository.create(kyc);
+      await create(kyc);
 
       await prisma.vendorKycSubmission.delete({ where: { id: kyc.id } });
 
@@ -413,7 +423,7 @@ describe('PrismaVendorKycRepository', () => {
     it('refuses a decision with no decider named', async () => {
       await clearSubmissions();
       const kyc = newSubmission();
-      await repository.create(kyc);
+      await create(kyc);
 
       await expect(
         prisma.vendorKycSubmission.update({
@@ -426,7 +436,7 @@ describe('PrismaVendorKycRepository', () => {
     it('refuses a decision on a submission nobody claimed', async () => {
       await clearSubmissions();
       const kyc = newSubmission();
-      await repository.create(kyc);
+      await create(kyc);
 
       await expect(
         prisma.vendorKycSubmission.update({
@@ -439,7 +449,7 @@ describe('PrismaVendorKycRepository', () => {
     it('refuses an OTHER rejection with no explanation', async () => {
       await clearSubmissions();
       const kyc = newSubmission();
-      await repository.create(kyc);
+      await create(kyc);
 
       await expect(
         prisma.vendorKycSubmission.update({
@@ -458,7 +468,7 @@ describe('PrismaVendorKycRepository', () => {
     it('refuses a document sized outside the KYC-0 upload limits', async () => {
       await clearSubmissions();
       const kyc = newSubmission();
-      await repository.create(kyc);
+      await create(kyc);
 
       await expect(
         prisma.kycDocument.updateMany({ where: { kycId: kyc.id }, data: { sizeBytes: 0 } }),
@@ -470,10 +480,10 @@ describe('PrismaVendorKycRepository', () => {
     it('finds another vendor sharing a PAN fingerprint', async () => {
       await clearSubmissions();
       const mine = newSubmission();
-      await repository.create(mine);
+      await create(mine);
       // Same PAN, different bank — the ban-evasion shape SEC-17 describes.
       const theirs = newSubmission(otherVendorId, identifiersFor('ABCDE1234F', '999988887777'));
-      await repository.create(theirs);
+      await create(theirs);
 
       const matches = await repository.findByIdentifierFingerprints({
         vendorId,
@@ -491,13 +501,13 @@ describe('PrismaVendorKycRepository', () => {
       // evasion.
       await clearSubmissions();
       const first = newSubmission();
-      await repository.create(first);
+      await create(first);
       await repository.saveReview(
         first
           .startReview(reviewerId, NOW)
           .reject(deciderId, KycRejectionReason.DOCUMENT_UNCLEAR, null, LATER),
       );
-      await repository.create(newSubmission());
+      await create(newSubmission());
 
       const matches = await repository.findByIdentifierFingerprints({
         vendorId,
@@ -510,10 +520,8 @@ describe('PrismaVendorKycRepository', () => {
 
     it('finds a match on the bank fingerprint alone', async () => {
       await clearSubmissions();
-      await repository.create(newSubmission());
-      await repository.create(
-        newSubmission(otherVendorId, identifiersFor('ZZZZZ9999Z', '123456789012')),
-      );
+      await create(newSubmission());
+      await create(newSubmission(otherVendorId, identifiersFor('ZZZZZ9999Z', '123456789012')));
 
       const matches = await repository.findByIdentifierFingerprints({
         vendorId,
@@ -526,10 +534,8 @@ describe('PrismaVendorKycRepository', () => {
 
     it('returns nothing when no other vendor shares either identifier', async () => {
       await clearSubmissions();
-      await repository.create(newSubmission());
-      await repository.create(
-        newSubmission(otherVendorId, identifiersFor('ZZZZZ9999Z', '999988887777')),
-      );
+      await create(newSubmission());
+      await create(newSubmission(otherVendorId, identifiersFor('ZZZZZ9999Z', '999988887777')));
 
       const matches = await repository.findByIdentifierFingerprints({
         vendorId,
@@ -545,14 +551,14 @@ describe('PrismaVendorKycRepository', () => {
       // carries the same PAN as attempt one, by definition.
       await clearSubmissions();
       const first = newSubmission();
-      await repository.create(first);
+      await create(first);
       await repository.saveReview(
         first
           .startReview(reviewerId, NOW)
           .reject(deciderId, KycRejectionReason.DOCUMENT_UNCLEAR, null, LATER),
       );
 
-      await expect(repository.create(newSubmission())).resolves.toBeUndefined();
+      await expect(create(newSubmission())).resolves.toBeUndefined();
     });
   });
 });

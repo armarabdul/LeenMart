@@ -14,6 +14,7 @@ import {
   PinoLoggerAdapter,
 } from './shared/infrastructure/observability/logger.js';
 import { createPrismaClient } from './shared/infrastructure/persistence/prisma.js';
+import { withTenantBoundary } from './shared/infrastructure/persistence/tenant-prisma.js';
 import { createRedisClient } from './shared/infrastructure/cache/redis.js';
 
 /**
@@ -58,7 +59,10 @@ export const createContainer = (): Container => {
   const env = loadEnv();
   const rootLogger = createRootLogger(env);
   const logger = new PinoLoggerAdapter(rootLogger);
-  const prisma = createPrismaClient(env, rootLogger, 'app');
+  // The tenant boundary wraps the vendor-facing client only. `adminPrisma`
+  // stays unwrapped and on its own credential (KYC-2B-1): elevated access is a
+  // different role, never the same client pretending.
+  const prisma = withTenantBoundary(createPrismaClient(env, rootLogger, 'app'));
   const adminPrisma = createPrismaClient(env, rootLogger, 'admin');
   const redis = createRedisClient(env, rootLogger);
   const clock = new SystemClock();

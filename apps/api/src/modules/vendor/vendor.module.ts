@@ -51,6 +51,14 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
   });
 
   const controller = createVendorController({ registerVendorUseCase });
-  const router = createVendorRouter(controller, accessTokenService, sessionDenylist);
+  const router = createVendorRouter(
+    controller,
+    accessTokenService,
+    sessionDenylist,
+    async (userId) => {
+      const profile = await vendorRepository.findByUserId(userId);
+      return profile?.id ?? null;
+    },
+  );
   return { router };
 };

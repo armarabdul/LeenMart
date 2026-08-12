@@ -1,3 +1,4 @@
+import { runInTenantTransaction } from '../../../../shared/infrastructure/persistence/tenant-prisma.js';
 import type { PrismaClient } from '@prisma/client';
 import { toUserId, toVendorId, type VendorId } from '../../../identity/index.js';
 import { KycDocument } from '../../domain/entities/kyc-document.entity.js';
@@ -149,9 +150,15 @@ export class PrismaVendorKycRepository implements VendorKycRepository {
    * One transaction, because a submission without its documents is not a
    * submission — the aggregate refuses to exist in that shape, and the
    * database should not hold it either.
+   *
+   * `runInTenantTransaction`, not a bare `$transaction`: both models here are
+   * tenant-scoped, and only the sanctioned helper sets `app.vendor_id` on the
+   * pinned connection these statements actually run on. A bare `$transaction`
+   * would leave the tenant boundary reaching for a different connection, and
+   * the failure would be silent (see `tenant-prisma.ts`).
    */
   async create(kyc: VendorKyc): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
+    await runInTenantTransaction(this.prisma, async (tx) => {
       await tx.vendorKycSubmission.create({
         data: {
           id: kyc.id,
