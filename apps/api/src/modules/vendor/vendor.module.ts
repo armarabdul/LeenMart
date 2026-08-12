@@ -10,6 +10,9 @@ import { DevDataKeyCipher } from './infrastructure/crypto/dev-data-key-cipher.js
 import { KmsDataKeyCipher } from './infrastructure/crypto/kms-data-key-cipher.js';
 import { S3ObjectStore } from './infrastructure/storage/s3-object-store.js';
 import { CreateKycUploadIntentUseCase } from './application/use-cases/create-kyc-upload-intent.use-case.js';
+import { SubmitVendorKycUseCase } from './application/use-cases/submit-vendor-kyc.use-case.js';
+import { PrismaVendorKycRepository } from './infrastructure/persistence/prisma-vendor-kyc.repository.js';
+import { HmacIdentifierFingerprinter } from './infrastructure/security/hmac-identifier-fingerprinter.js';
 import { PrismaVendorRepository } from './infrastructure/persistence/prisma-vendor.repository.js';
 import { PrismaUserRepository } from '../identity/infrastructure/persistence/prisma-user.repository.js';
 import { PrismaRefreshTokenRepository } from '../identity/infrastructure/persistence/prisma-refresh-token.repository.js';
@@ -89,6 +92,46 @@ const createDataKeyCipher = (env: Env): DataKeyCipher => {
 };
 
 /**
+ * The two KYC use cases and the adapters only they need. Split out of
+ * `createVendorModule` for the same reason `mountBusinessModules` was split
+ * out of `createApp`: to keep the composition root under its function-length
+ * budget as the surface grows.
+ */
+const buildKycUseCases = (params: {
+  prisma: PrismaClient;
+  env: Env;
+  vendorRepository: PrismaVendorRepository;
+  objectStore: S3ObjectStore;
+  dataKeyCipher: DataKeyCipher;
+  transactionRunner: PrismaTransactionRunner;
+  idGenerator: IdGenerator;
+  clock: Clock;
+  logger: Logger;
+}): {
+  createKycUploadIntentUseCase: CreateKycUploadIntentUseCase;
+  submitVendorKycUseCase: SubmitVendorKycUseCase;
+} => ({
+  createKycUploadIntentUseCase: new CreateKycUploadIntentUseCase({
+    vendorRepository: params.vendorRepository,
+    objectStore: params.objectStore,
+    dataKeyCipher: params.dataKeyCipher,
+    idGenerator: params.idGenerator,
+    clock: params.clock,
+    logger: params.logger,
+  }),
+  submitVendorKycUseCase: new SubmitVendorKycUseCase({
+    vendorRepository: params.vendorRepository,
+    vendorKycRepository: new PrismaVendorKycRepository(params.prisma),
+    objectStore: params.objectStore,
+    fingerprinter: new HmacIdentifierFingerprinter(params.env.KYC_FINGERPRINT_PEPPER),
+    transactionRunner: params.transactionRunner,
+    idGenerator: params.idGenerator,
+    clock: params.clock,
+    logger: params.logger,
+  }),
+});
+
+/**
  * This module's own composition root (SDD 2.3), mirroring
  * `createIdentityModule`: `app.ts` knows nothing about Prisma or the vendor
  * lifecycle — it hands over the shared container's ports and gets a router.
@@ -110,22 +153,27 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
   const objectStore = new S3ObjectStore(createKycS3Client(env), { bucket: env.KYC_S3_BUCKET });
   const dataKeyCipher = createDataKeyCipher(env);
 
+  const transactionRunner = new PrismaTransactionRunner(prisma);
+
   const registerVendorUseCase = new RegisterVendorUseCase({
     vendorRepository,
     userRepository: new PrismaUserRepository(prisma),
     sessionRepository: new PrismaRefreshTokenRepository(prisma),
     sessionDenylist,
-    transactionRunner: new PrismaTransactionRunner(prisma),
+    transactionRunner,
     accessTokenTtlSeconds,
     idGenerator,
     clock,
     logger: moduleLogger,
   });
 
-  const createKycUploadIntentUseCase = new CreateKycUploadIntentUseCase({
+  const { createKycUploadIntentUseCase, submitVendorKycUseCase } = buildKycUseCases({
+    prisma,
+    env,
     vendorRepository,
     objectStore,
     dataKeyCipher,
+    transactionRunner,
     idGenerator,
     clock,
     logger: moduleLogger,
@@ -134,6 +182,7 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
   const controller = createVendorController({
     registerVendorUseCase,
     createKycUploadIntentUseCase,
+    submitVendorKycUseCase,
   });
   const router = createVendorRouter(
     controller,

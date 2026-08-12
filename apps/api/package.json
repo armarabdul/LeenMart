@@ -13,7 +13,7 @@
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "test": "vitest run --project unit",
-    "test:integration": "vitest run --project integration",
+    "test:integration": "vitest run --project integration --no-file-parallelism",
     "test:watch": "vitest --project unit",
     "bootstrap:admin": "tsx src/cli/bootstrap-admin.ts",
     "db:generate": "prisma generate",

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   createKycUploadIntentRequestSchema,
   registerVendorRequestSchema,
+  submitVendorKycRequestSchema,
 } from '@leen-mart/contracts';
 import { asyncHandler } from '../../../../shared/interface/http/middleware/async-handler.js';
 import { authenticate } from '../../../../shared/interface/http/middleware/authenticate.js';
@@ -63,6 +64,19 @@ export const createVendorRouter = (
     requirePermission('SUBMIT_OR_EDIT_KYC'),
     validate({ body: createKycUploadIntentRequestSchema }),
     asyncHandler(controller.createKycUploadIntent),
+  );
+
+  // Phase 2: the submission itself (SDD 15.1's `SUBMIT_KYC`). Same ordering
+  // and the same permission as phase 1 — the two halves of one act, and a
+  // caller allowed to mint upload capability is exactly the caller allowed to
+  // submit what they uploaded.
+  router.post(
+    '/me/kyc',
+    authenticate(accessTokenService, sessionDenylist),
+    tenantContext(resolveVendorTenant),
+    requirePermission('SUBMIT_OR_EDIT_KYC'),
+    validate({ body: submitVendorKycRequestSchema }),
+    asyncHandler(controller.submitKyc),
   );
 
   return router;
