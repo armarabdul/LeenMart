@@ -29,6 +29,7 @@ describe('PrismaKycDocumentAccessQuery', () => {
   const kycBId = ids.generate();
   const documentAId = ids.generate();
   const documentBId = ids.generate();
+  const documentCId = ids.generate();
   const seededUserIds = [ownerAId, ownerBId];
   const seededVendorIds = [vendorAId, vendorBId];
 
@@ -131,6 +132,19 @@ describe('PrismaKycDocumentAccessQuery', () => {
           uploadedAt: now,
           createdAt: now,
         },
+        {
+          id: documentCId,
+          kycId: kycAId,
+          vendorId: vendorAId,
+          type: 'GSTIN',
+          objectKey: `vendor/${vendorAId}/${kycAId}/GSTIN.enc`,
+          wrappedDataKey: Buffer.from('wrapped-key-c'),
+          contentType: 'application/pdf',
+          sizeBytes: 2048,
+          status: 'AWAITING_UPLOAD',
+          uploadedAt: null,
+          createdAt: now,
+        },
       ],
     });
   });
@@ -157,6 +171,14 @@ describe('PrismaKycDocumentAccessQuery', () => {
     expect(record?.type).toBe('PAN');
     expect(record?.objectKey).toBe(`vendor/${vendorAId}/${kycAId}/PAN.enc`);
     expect(record?.wrappedDataKey.toString()).toBe('wrapped-key-a');
+    expect(record?.status).toBe('UPLOADED');
+  });
+
+  it('reports AWAITING_UPLOAD for a document with no completed object', async () => {
+    const record = await query().findForAccess(toKycId(kycAId), toKycDocumentId(documentCId));
+
+    expect(record).not.toBeNull();
+    expect(record?.status).toBe('AWAITING_UPLOAD');
   });
 
   it('returns null when the documentId belongs to a different kycId', async () => {

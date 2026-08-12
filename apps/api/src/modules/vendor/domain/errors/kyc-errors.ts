@@ -87,6 +87,21 @@ export class KycSubmissionNotFoundError extends NotFoundError {
 }
 
 /**
+ * No document exists with the requested id under the requested submission.
+ *
+ * Mirrors `KycSubmissionNotFoundError` exactly, including why it draws no
+ * distinction between "never existed", "belongs to a different submission"
+ * and "wrong kycId": the same reasoning applies here, only one level deeper —
+ * a document id that names another KYC's evidence must read as absent, not
+ * as a hint that a valid id was supplied for the wrong parent.
+ */
+export class KycDocumentNotFoundError extends NotFoundError {
+  constructor(options: AppErrorOptions = {}) {
+    super('No KYC document was found.', { ...options, code: 'KYC_DOCUMENT_NOT_FOUND' });
+  }
+}
+
+/**
  * Another reviewer claimed this submission first.
  *
  * A `ConflictError` rather than a `DomainRuleError`: the caller did nothing

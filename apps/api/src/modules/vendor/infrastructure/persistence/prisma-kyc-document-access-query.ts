@@ -26,6 +26,8 @@ const ACCESS_SELECT = {
   type: true,
   objectKey: true,
   wrappedDataKey: true,
+  status: true,
+  contentType: true,
 } as const;
 
 /**
@@ -62,6 +64,8 @@ export class PrismaKycDocumentAccessQuery implements KycDocumentAccessQueryPort 
       type: row.type,
       objectKey: row.objectKey,
       wrappedDataKey: Buffer.from(row.wrappedDataKey),
+      status: row.status === 'UPLOADED' ? 'UPLOADED' : 'AWAITING_UPLOAD',
+      contentType: row.contentType,
     };
   }
 }

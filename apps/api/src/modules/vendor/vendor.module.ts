@@ -8,6 +8,11 @@ import { AmbientAuditWriter, type AuditWriter } from '../audit/index.js';
 import { PrismaAuditLogRepository } from '../audit/infrastructure/persistence/prisma-audit-log.repository.js';
 import type { AccessTokenService, SessionDenylist, UserId, VendorId } from '../identity/index.js';
 import type { DataKeyCipher } from './application/ports/data-key-cipher.port.js';
+import type { ObjectStore } from './application/ports/object-store.port.js';
+import type { DocumentCipher } from './application/ports/document-cipher.port.js';
+import { AccessKycDocumentUseCase } from './application/use-cases/access-kyc-document.use-case.js';
+import { AesGcmDocumentCipher } from './infrastructure/crypto/aes-gcm-document-cipher.js';
+import { PrismaKycDocumentAccessQuery } from './infrastructure/persistence/prisma-kyc-document-access-query.js';
 import { DevDataKeyCipher } from './infrastructure/crypto/dev-data-key-cipher.js';
 import { KmsDataKeyCipher } from './infrastructure/crypto/kms-data-key-cipher.js';
 import { S3ObjectStore } from './infrastructure/storage/s3-object-store.js';
@@ -213,6 +218,25 @@ const buildAdminKycDecisionUseCases = (params: {
   decideVendorKycUseCase: new DecideVendorKycUseCase(params),
 });
 
+/** The document-access use case (KYC-7), split out for the same reason as the groups above. */
+const buildAdminKycDocumentAccessUseCase = (params: {
+  adminPrisma: PrismaClient;
+  objectStore: ObjectStore;
+  dataKeyCipher: DataKeyCipher;
+  documentCipher: DocumentCipher;
+  auditWriter: AuditWriter;
+  logger: Logger;
+}): { accessKycDocumentUseCase: AccessKycDocumentUseCase } => ({
+  accessKycDocumentUseCase: new AccessKycDocumentUseCase({
+    documentAccessQuery: new PrismaKycDocumentAccessQuery(params.adminPrisma),
+    objectStore: params.objectStore,
+    dataKeyCipher: params.dataKeyCipher,
+    documentCipher: params.documentCipher,
+    auditWriter: params.auditWriter,
+    logger: params.logger,
+  }),
+});
+
 /**
  * SDD 5.1 lets any module call `audit` directly through its published
  * interface. Mirrors `identity.module.ts`'s `buildAuditWriter` exactly — one
@@ -240,6 +264,8 @@ const buildAuditWriter = (deps: {
 const buildVendorFacingUseCases = (params: {
   prisma: PrismaClient;
   env: Env;
+  objectStore: S3ObjectStore;
+  dataKeyCipher: DataKeyCipher;
   sessionDenylist: SessionDenylist;
   accessTokenTtlSeconds: number;
   idGenerator: IdGenerator;
@@ -251,10 +277,18 @@ const buildVendorFacingUseCases = (params: {
   createKycUploadIntentUseCase: CreateKycUploadIntentUseCase;
   submitVendorKycUseCase: SubmitVendorKycUseCase;
 } => {
-  const { prisma, env, sessionDenylist, accessTokenTtlSeconds, idGenerator, clock, logger } =
-    params;
+  const {
+    prisma,
+    env,
+    objectStore,
+    dataKeyCipher,
+    sessionDenylist,
+    accessTokenTtlSeconds,
+    idGenerator,
+    clock,
+    logger,
+  } = params;
   const vendorRepository = new PrismaVendorRepository(prisma);
-  const objectStore = new S3ObjectStore(createKycS3Client(env), { bucket: env.KYC_S3_BUCKET });
   const transactionRunner = new PrismaTransactionRunner(prisma);
   const auditWriter = buildAuditWriter({ prisma, idGenerator, clock });
 
@@ -273,7 +307,7 @@ const buildVendorFacingUseCases = (params: {
     env,
     vendorRepository,
     objectStore,
-    dataKeyCipher: createDataKeyCipher(env),
+    dataKeyCipher,
     transactionRunner,
     auditWriter,
     idGenerator,
@@ -291,6 +325,9 @@ const buildVendorFacingUseCases = (params: {
 
 const buildAdminKycRouter = (params: {
   adminPrisma: PrismaClient;
+  objectStore: ObjectStore;
+  dataKeyCipher: DataKeyCipher;
+  documentCipher: DocumentCipher;
   accessTokenService: AccessTokenService;
   sessionDenylist: SessionDenylist;
   idGenerator: IdGenerator;
@@ -326,6 +363,14 @@ const buildAdminKycRouter = (params: {
         clock: params.clock,
         logger: params.logger,
       }),
+      ...buildAdminKycDocumentAccessUseCase({
+        adminPrisma: params.adminPrisma,
+        objectStore: params.objectStore,
+        dataKeyCipher: params.dataKeyCipher,
+        documentCipher: params.documentCipher,
+        auditWriter,
+        logger: params.logger,
+      }),
     }),
     params.accessTokenService,
     params.sessionDenylist,
@@ -350,6 +395,14 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
     logger,
   } = deps;
   const moduleLogger = logger.child({ module: 'vendor' });
+  // One instance each, shared by the vendor-facing and admin paths: neither
+  // object storage nor the data-key cipher carries a tenant credential the
+  // way Postgres does, so there is exactly one of each to build.
+  const objectStore = new S3ObjectStore(createKycS3Client(env), { bucket: env.KYC_S3_BUCKET });
+  const dataKeyCipher = createDataKeyCipher(env);
+  // Stateless — no KMS/network dependency, unlike `dataKeyCipher` — so one
+  // instance needs no construction parameters at all.
+  const documentCipher = new AesGcmDocumentCipher();
 
   const {
     vendorRepository,
@@ -359,6 +412,8 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
   } = buildVendorFacingUseCases({
     prisma,
     env,
+    objectStore,
+    dataKeyCipher,
     sessionDenylist,
     accessTokenTtlSeconds,
     idGenerator,
@@ -382,6 +437,9 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
 
   const adminKycRouter = buildAdminKycRouter({
     adminPrisma,
+    objectStore,
+    dataKeyCipher,
+    documentCipher,
     accessTokenService,
     sessionDenylist,
     idGenerator,

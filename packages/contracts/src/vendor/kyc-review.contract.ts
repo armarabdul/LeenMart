@@ -191,6 +191,31 @@ export const decideVendorKycResponseSchema = z
   })
   .strict();
 
+/**
+ * What an administrator receives after being granted access to one uploaded
+ * document (KYC-7, SDD 12.1/12.3): a presigned GET to the object, and nothing
+ * else. `.strict()` does the same work it does on
+ * `adminKycSubmissionDetailSchema` — `wrappedDataKey`, any plaintext data
+ * key, `objectKey`, and any fingerprint are absent by construction, not by
+ * filtering.
+ *
+ * `url` points at ciphertext: SDD 12.3 envelope-encrypts every KYC document
+ * client-side before upload, and this endpoint mints a presigned GET through
+ * the existing `ObjectStore` capability without unwrapping anything. It
+ * carries the same 60-second ceiling `kycUploadIntentSchema`'s upload URLs
+ * carry a 5-minute one — fixed by the implementation, not by this schema or
+ * by a caller.
+ */
+export const adminKycDocumentAccessResponseSchema = z
+  .object({
+    kycId: uuidSchema,
+    documentId: uuidSchema,
+    type: kycDocumentTypeSchema,
+    url: z.string().url(),
+    expiresAt: isoDateTimeSchema,
+  })
+  .strict();
+
 export type AdminKycQueueStatus = z.infer<typeof adminKycQueueStatusSchema>;
 export type KycRejectionReasonDto = z.infer<typeof kycRejectionReasonSchema>;
 export type StartKycReviewRequest = z.infer<typeof startKycReviewRequestSchema>;
@@ -202,3 +227,4 @@ export type AdminKycQueueItem = z.infer<typeof adminKycQueueItemSchema>;
 export type AdminKycQueueResponse = z.infer<typeof adminKycQueueResponseSchema>;
 export type AdminKycDocument = z.infer<typeof adminKycDocumentSchema>;
 export type AdminKycSubmissionDetail = z.infer<typeof adminKycSubmissionDetailSchema>;
+export type AdminKycDocumentAccessResponse = z.infer<typeof adminKycDocumentAccessResponseSchema>;

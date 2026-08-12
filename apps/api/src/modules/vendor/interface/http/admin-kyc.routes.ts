@@ -18,6 +18,10 @@ import type { AdminKycController } from './admin-kyc.controller.js';
 
 const kycIdParamsSchema = z.object({ kycId: z.string().uuid() }).strict();
 
+const kycDocumentParamsSchema = z
+  .object({ kycId: z.string().uuid(), documentId: z.string().uuid() })
+  .strict();
+
 /**
  * Refuses a grant the matrix marks `READ_ONLY`.
  *
@@ -103,6 +107,19 @@ export const createAdminKycRouter = (
     requireFullAccess,
     validate({ params: kycIdParamsSchema, body: decideVendorKycRequestSchema }),
     asyncHandler(controller.decide),
+  );
+
+  // KYC-7 (SDD 12.1/12.3): document access is FULL-admin only, the same line
+  // `requireFullAccess` already draws for claim and decision — a READ_ONLY
+  // grant may see that a document exists (the queue/detail routes above) but
+  // not reach its evidence.
+  router.get(
+    '/submissions/:kycId/documents/:documentId',
+    authenticate(accessTokenService, sessionDenylist),
+    requirePermission('APPROVE_OR_REJECT_VENDOR_KYC'),
+    requireFullAccess,
+    validate({ params: kycDocumentParamsSchema }),
+    asyncHandler(controller.accessDocument),
   );
 
   return router;

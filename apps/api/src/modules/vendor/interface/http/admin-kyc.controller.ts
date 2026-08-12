@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import type {
+  AdminKycDocumentAccessResponse,
   AdminKycQueueItem,
   AdminKycQueueQuery,
   AdminKycSubmissionDetail,
@@ -9,12 +10,17 @@ import type {
 } from '@leen-mart/contracts';
 import { getRequestId } from '../../../../shared/interface/http/middleware/request-context.js';
 import { validatedData } from '../../../../shared/interface/http/middleware/validate.js';
+import { toKycDocumentId } from '../../domain/value-objects/kyc-document-id.value-object.js';
 import { toKycId } from '../../domain/value-objects/kyc-id.value-object.js';
 import type { VendorKyc } from '../../domain/entities/vendor-kyc.entity.js';
 import type {
   KycReviewQueueItem,
   KycReviewSubmissionDetail,
 } from '../../application/ports/kyc-review-query.port.js';
+import type {
+  AccessKycDocumentResult,
+  AccessKycDocumentUseCase,
+} from '../../application/use-cases/access-kyc-document.use-case.js';
 import type { GetKycReviewSubmissionUseCase } from '../../application/use-cases/get-kyc-review-submission.use-case.js';
 import type { ListKycReviewQueueUseCase } from '../../application/use-cases/list-kyc-review-queue.use-case.js';
 import type { StartKycReviewUseCase } from '../../application/use-cases/start-kyc-review.use-case.js';
@@ -25,6 +31,7 @@ export interface AdminKycController {
   readonly getSubmission: (req: Request, res: Response) => Promise<void>;
   readonly startReview: (req: Request, res: Response) => Promise<void>;
   readonly decide: (req: Request, res: Response) => Promise<void>;
+  readonly accessDocument: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface AdminKycControllerDeps {
@@ -32,6 +39,7 @@ export interface AdminKycControllerDeps {
   readonly getKycReviewSubmissionUseCase: GetKycReviewSubmissionUseCase;
   readonly startKycReviewUseCase: StartKycReviewUseCase;
   readonly decideVendorKycUseCase: DecideVendorKycUseCase;
+  readonly accessKycDocumentUseCase: AccessKycDocumentUseCase;
 }
 
 /**
@@ -115,6 +123,17 @@ const toDecisionResponse = (
   };
 };
 
+/** Mapped field by field, for the same reason `toQueueItem`/`toDetail` are. */
+const toDocumentAccessResponse = (
+  result: AccessKycDocumentResult,
+): AdminKycDocumentAccessResponse => ({
+  kycId: result.kycId,
+  documentId: result.documentId,
+  type: result.type as AdminKycDocumentAccessResponse['type'],
+  url: result.url,
+  expiresAt: result.expiresAt.toISOString(),
+});
+
 /** Narrows the wire union to the use case's command; the two shapes are deliberately separate. */
 const toDecisionCommand = (
   body: DecideVendorKycRequest,
@@ -122,6 +141,28 @@ const toDecisionCommand = (
   body.decision === 'APPROVE'
     ? { decision: 'APPROVE' }
     : { decision: 'REJECT', reason: body.reason, note: body.note };
+
+/** Split out of `createAdminKycController` purely to stay under this file's max-lines-per-function budget. */
+const createAccessDocumentHandler =
+  (accessKycDocumentUseCase: AccessKycDocumentUseCase): AdminKycController['accessDocument'] =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'GET /admin/kyc/submissions/:kycId/documents/:documentId reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+    const { params } = validatedData<unknown, unknown, { kycId: string; documentId: string }>(req);
+
+    const result = await accessKycDocumentUseCase.execute({
+      principal: req.principal,
+      kycId: toKycId(params.kycId),
+      documentId: toKycDocumentId(params.documentId),
+    });
+
+    res
+      .status(200)
+      .json({ data: toDocumentAccessResponse(result), meta: { requestId: getRequestId() } });
+  };
 
 /**
  * Thin HTTP adapter for the admin review queue. Parses nothing itself, decides
@@ -198,4 +239,6 @@ export const createAdminKycController = (deps: AdminKycControllerDeps): AdminKyc
 
     res.status(200).json({ data: toDetail(submission), meta: { requestId: getRequestId() } });
   },
+
+  accessDocument: createAccessDocumentHandler(deps.accessKycDocumentUseCase),
 });

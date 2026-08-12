@@ -1,10 +1,12 @@
 import type { VendorId } from '../../../identity/index.js';
 import type { KycDocumentId } from '../../domain/value-objects/kyc-document-id.value-object.js';
+import type { KycDocumentStatusName } from '../../domain/entities/kyc-document.entity.js';
 import type { KycId } from '../../domain/value-objects/kyc-id.value-object.js';
 
 /**
- * The one row a document-access use case needs to unwrap a document's data
- * key and address its ciphertext — nothing else.
+ * The one row a document-access use case needs to address a document, check
+ * whether it is actually there to serve, and (in a future chunk) unwrap its
+ * data key — nothing else.
  *
  * A separate port from `KycReviewQueryPort` on purpose: that one's shape is
  * the read-only queue/detail contract's own, and `KycReviewDocument` is
@@ -22,6 +24,10 @@ export interface KycDocumentAccessRecord {
   readonly type: string;
   readonly objectKey: string;
   readonly wrappedDataKey: Buffer;
+  /** `AWAITING_UPLOAD` names a row with no completed object at `objectKey` yet. */
+  readonly status: KycDocumentStatusName;
+  /** The original upload's declared type — carried onto the temporary delivery object so it downloads correctly. */
+  readonly contentType: string;
 }
 
 /**
