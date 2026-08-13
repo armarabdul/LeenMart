@@ -4,7 +4,7 @@ import { toVendorId } from '../../../identity/index.js';
 import { ProductVariant } from '../../domain/entities/product-variant.entity.js';
 import { ProductVariantSkuConflictError } from '../../domain/errors/catalogue-errors.js';
 import type { ProductVariantRepository } from '../../domain/repositories/product-variant.repository.js';
-import { toProductId } from '../../domain/value-objects/product-id.value-object.js';
+import { toProductId, type ProductId } from '../../domain/value-objects/product-id.value-object.js';
 import {
   toProductVariantId,
   type ProductVariantId,
@@ -99,5 +99,65 @@ export class PrismaProductVariantRepository implements ProductVariantRepository 
   async findById(id: ProductVariantId): Promise<ProductVariant | null> {
     const row = await this.prisma.productVariant.findFirst({ where: { id, deletedAt: null } });
     return row ? toDomain(row) : null;
+  }
+
+  async findByProductAndId(
+    productId: ProductId,
+    id: ProductVariantId,
+  ): Promise<ProductVariant | null> {
+    const row = await this.prisma.productVariant.findFirst({
+      where: { id, productId, deletedAt: null },
+    });
+    return row ? toDomain(row) : null;
+  }
+
+  async listByProductId(productId: ProductId): Promise<readonly ProductVariant[]> {
+    const rows = await this.prisma.productVariant.findMany({
+      where: { productId, deletedAt: null },
+      // UUID v7 is time-ordered, so this is creation order without a second
+      // column — oldest first, which puts the product's original variant at
+      // the top.
+      orderBy: { id: 'asc' },
+    });
+    return rows.map(toDomain);
+  }
+
+  async update(variant: ProductVariant): Promise<boolean> {
+    try {
+      const result = await this.prisma.productVariant.updateMany({
+        where: { id: variant.id, productId: variant.productId, deletedAt: null },
+        data: {
+          name: variant.name,
+          priceAmount: variant.price.amountMinor,
+          priceCurrency: variant.price.currency,
+          unitOfMeasure: variant.unitOfMeasure,
+          quantityStep: variant.quantityStep,
+          updatedAt: variant.updatedAt,
+        },
+      });
+      return result.count === 1;
+    } catch (error) {
+      return translateUniqueViolation(error);
+    }
+  }
+
+  async countLiveForProduct(productId: ProductId): Promise<number> {
+    return this.prisma.productVariant.count({ where: { productId, deletedAt: null } });
+  }
+
+  async softDelete(variant: ProductVariant): Promise<boolean> {
+    const result = await this.prisma.productVariant.updateMany({
+      where: { id: variant.id, productId: variant.productId, deletedAt: null },
+      data: { deletedAt: variant.deletedAt, updatedAt: variant.updatedAt },
+    });
+    return result.count === 1;
+  }
+
+  async softDeleteAllForProduct(productId: ProductId, now: Date): Promise<number> {
+    const result = await this.prisma.productVariant.updateMany({
+      where: { productId, deletedAt: null },
+      data: { deletedAt: now, updatedAt: now },
+    });
+    return result.count;
   }
 }

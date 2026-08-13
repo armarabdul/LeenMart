@@ -49,6 +49,57 @@ const assertNotBlank = (field: string, value: string): void => {
 };
 
 /**
+ * The fields a vendor may edit after creation (S2-3b).
+ *
+ * `id`, `vendorId`, `status` and the timestamps are absent by construction:
+ * ownership and lifecycle are not editable, and `status` moves only through
+ * the moderation flow that does not exist yet.
+ */
+export interface ProductDetailChanges {
+  readonly categoryId?: CategoryId | undefined;
+  readonly name?: string | undefined;
+  readonly brand?: string | null | undefined;
+  readonly description?: string | null | undefined;
+  readonly hsnCode?: string | null | undefined;
+  readonly countryOfOrigin?: string | null | undefined;
+  readonly netQuantity?: string | null | undefined;
+  readonly attributeValues?: ProductAttributeValues | undefined;
+}
+
+/** Trims, then runs the same shape checks `create` does, so both paths agree. */
+const normalisedDetails = (props: {
+  name: string;
+  brand: string | null;
+  hsnCode: string | null;
+  countryOfOrigin: string | null;
+  netQuantity: string | null;
+}): {
+  name: string;
+  brand: string | null;
+  hsnCode: string | null;
+  countryOfOrigin: string | null;
+  netQuantity: string | null;
+} => {
+  const name = props.name.trim();
+  assertNotBlank('name', name);
+  assertWithinLength('name', name, NAME_MAX_LENGTH);
+
+  const brand = props.brand?.trim() ?? null;
+  assertWithinLength('brand', brand, BRAND_MAX_LENGTH);
+
+  const hsnCode = props.hsnCode?.trim() ?? null;
+  assertWithinLength('hsnCode', hsnCode, HSN_CODE_MAX_LENGTH);
+
+  const countryOfOrigin = props.countryOfOrigin?.trim() ?? null;
+  assertWithinLength('countryOfOrigin', countryOfOrigin, COUNTRY_OF_ORIGIN_MAX_LENGTH);
+
+  const netQuantity = props.netQuantity?.trim() ?? null;
+  assertWithinLength('netQuantity', netQuantity, NET_QUANTITY_MAX_LENGTH);
+
+  return { name, brand, hsnCode, countryOfOrigin, netQuantity };
+};
+
+/**
  * The marketing entity (SDD 5 module 4, SDD 6.3). Vendor-owned and
  * tenant-scoped — unlike `Category`, which is platform-owned.
  *
@@ -86,32 +137,12 @@ export class Product {
     attributeValues: ProductAttributeValues;
     now: Date;
   }): Product {
-    const name = props.name.trim();
-    assertNotBlank('name', name);
-    assertWithinLength('name', name, NAME_MAX_LENGTH);
-
-    const brand = props.brand?.trim() ?? null;
-    assertWithinLength('brand', brand, BRAND_MAX_LENGTH);
-
-    const hsnCode = props.hsnCode?.trim() ?? null;
-    assertWithinLength('hsnCode', hsnCode, HSN_CODE_MAX_LENGTH);
-
-    const countryOfOrigin = props.countryOfOrigin?.trim() ?? null;
-    assertWithinLength('countryOfOrigin', countryOfOrigin, COUNTRY_OF_ORIGIN_MAX_LENGTH);
-
-    const netQuantity = props.netQuantity?.trim() ?? null;
-    assertWithinLength('netQuantity', netQuantity, NET_QUANTITY_MAX_LENGTH);
-
     return new Product({
       id: props.id,
       vendorId: props.vendorId,
       categoryId: props.categoryId,
-      name,
-      brand,
+      ...normalisedDetails(props),
       description: props.description,
-      hsnCode,
-      countryOfOrigin,
-      netQuantity,
       attributeValues: props.attributeValues,
       status: 'DRAFT',
       createdAt: props.now,
@@ -182,5 +213,54 @@ export class Product {
 
   get isDeleted(): boolean {
     return this.props.deletedAt !== null;
+  }
+
+  /**
+   * A partial edit (S2-3b). Only the supplied fields change; every one of
+   * them goes through the same trimming and shape checks `create` applies, so
+   * an edit cannot land a value creation would have refused.
+   *
+   * `status` is not among them and has no mutator anywhere on this class —
+   * the moderation flow that moves it does not exist yet, and a setter added
+   * "for later" is a setter something will call early.
+   */
+  updateDetails(changes: ProductDetailChanges, now: Date): Product {
+    this.assertLive('updateDetails');
+
+    return new Product({
+      ...this.props,
+      categoryId: changes.categoryId ?? this.props.categoryId,
+      ...normalisedDetails({
+        name: changes.name ?? this.props.name,
+        brand: changes.brand === undefined ? this.props.brand : changes.brand,
+        hsnCode: changes.hsnCode === undefined ? this.props.hsnCode : changes.hsnCode,
+        countryOfOrigin:
+          changes.countryOfOrigin === undefined
+            ? this.props.countryOfOrigin
+            : changes.countryOfOrigin,
+        netQuantity:
+          changes.netQuantity === undefined ? this.props.netQuantity : changes.netQuantity,
+      }),
+      description: changes.description === undefined ? this.props.description : changes.description,
+      attributeValues: changes.attributeValues ?? this.props.attributeValues,
+      updatedAt: now,
+    });
+  }
+
+  /**
+   * Soft delete (SDD 6.1). Whether the product's variants go with it is not
+   * decided here — that is a question about other rows, which
+   * `DeleteProductUseCase` settles inside one transaction, the same division
+   * `Category`/`CategoryAttribute` already established.
+   */
+  softDelete(now: Date): Product {
+    this.assertLive('deletedAt');
+    return new Product({ ...this.props, deletedAt: now, updatedAt: now });
+  }
+
+  private assertLive(field: string): void {
+    if (this.isDeleted) {
+      throw new InvalidProductOperationError(field, 'This product has been deleted.');
+    }
   }
 }

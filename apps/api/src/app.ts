@@ -78,11 +78,20 @@ const mountBusinessModules = (
 
   // The taxonomy admin surface (SDD 9.4). No tenant context: categories are
   // platform-owned and carry no vendor column for one to scope.
-  const catalogueModule = createCatalogueModule(params);
+  const catalogueModule = createCatalogueModule({
+    ...params,
+    // D-1: the resolver, and nothing else, crosses from `vendor` to
+    // `catalogue`. Handed over here in the composition root so neither module
+    // imports the other (SDD 5.1).
+    resolveVendorTenant: vendorModule.resolveVendorTenant,
+  });
   app.use('/api/v1/admin/categories', catalogueModule.adminCategoryRouter);
   // The public catalogue surface (SDD 9.4/9.5, S2-2c): unauthenticated, no
   // tenant context, cache-friendly reads of the same platform-owned taxonomy.
   app.use('/api/v1/catalogue', catalogueModule.publicCategoryRouter);
+  // The vendor-facing catalogue surface (SDD 9.4, S2-3b): authenticated and
+  // tenant-scoped, unlike the two routers above.
+  app.use('/api/v1/vendor/products', catalogueModule.vendorProductRouter);
 
   // Further business modules mount here as they are built.
 };

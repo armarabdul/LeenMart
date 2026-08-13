@@ -33,6 +33,16 @@ export const CATALOGUE_AUDIT_ACTIONS = {
    * the payload rather than getting a second entry of their own).
    */
   PRODUCT_CREATED: 'catalogue.product.created',
+  /** A vendor edited one of their own products. */
+  PRODUCT_UPDATED: 'catalogue.product.updated',
+  /** A vendor soft-deleted a product, taking its variants with it. */
+  PRODUCT_DELETED: 'catalogue.product.deleted',
+  /** A variant was added to an existing product. */
+  PRODUCT_VARIANT_ADDED: 'catalogue.product.variant_added',
+  /** A variant's name, price, unit of measure or quantity step changed. */
+  PRODUCT_VARIANT_UPDATED: 'catalogue.product.variant_updated',
+  /** A variant was soft-deleted on its own. */
+  PRODUCT_VARIANT_REMOVED: 'catalogue.product.variant_removed',
 } as const;
 
 export type CatalogueAuditAction =

@@ -35,6 +35,19 @@ const assertWithinLength = (field: string, value: string, max: number): void => 
 };
 
 /**
+ * The fields a vendor may edit after creation (S2-3b).
+ *
+ * `sku`, `productId` and `vendorId` are absent by construction — see
+ * `updateDetails` for why.
+ */
+export interface ProductVariantDetailChanges {
+  readonly name?: string | undefined;
+  readonly price?: Money | undefined;
+  readonly unitOfMeasure?: string | undefined;
+  readonly quantityStep?: number | undefined;
+}
+
+/**
  * The sellable unit (SDD 6.3 "Product ↔ Variant", ASM-15, FR-10/11). Vendor-
  * owned and tenant-scoped, always reached through its parent `Product`.
  *
@@ -147,5 +160,68 @@ export class ProductVariant {
 
   get isDeleted(): boolean {
     return this.props.deletedAt !== null;
+  }
+
+  /**
+   * A partial edit (S2-3b). Only the supplied fields change, and each goes
+   * through the same checks `create` applies.
+   *
+   * **`sku` is absent, and there is no mutator for it anywhere on this
+   * class.** S2-3a made it a branded, index-arbitrated business identifier
+   * and gave it no way to change; S2-3b preserves that rather than inventing
+   * mutation behaviour the earlier chunk deliberately left out. `productId`
+   * and `vendorId` are likewise fixed — a variant does not move between
+   * products or vendors.
+   */
+  updateDetails(changes: ProductVariantDetailChanges, now: Date): ProductVariant {
+    this.assertLive('updateDetails');
+
+    const name = (changes.name ?? this.props.name).trim();
+    assertNotBlank('name', name);
+    assertWithinLength('name', name, NAME_MAX_LENGTH);
+
+    const unitOfMeasure = (changes.unitOfMeasure ?? this.props.unitOfMeasure).trim();
+    assertNotBlank('unitOfMeasure', unitOfMeasure);
+    assertWithinLength('unitOfMeasure', unitOfMeasure, UNIT_OF_MEASURE_MAX_LENGTH);
+
+    const price = changes.price ?? this.props.price;
+    if (price.isNegative()) {
+      throw new InvalidProductOperationError('price', 'Must not be negative.');
+    }
+
+    const quantityStep = changes.quantityStep ?? this.props.quantityStep;
+    if (!Number.isInteger(quantityStep) || quantityStep <= 0) {
+      throw new InvalidProductOperationError('quantityStep', 'Must be a positive integer.');
+    }
+
+    return new ProductVariant({
+      ...this.props,
+      name,
+      price,
+      unitOfMeasure,
+      quantityStep,
+      updatedAt: now,
+    });
+  }
+
+  /**
+   * Soft delete (SDD 6.1).
+   *
+   * Whether this is the product's *last* live variant is deliberately not
+   * asked here: an aggregate holding only its own state cannot see its
+   * siblings, and a check performed here would still lose to a variant
+   * deleted a millisecond later. `ProductVariantRepository.softDeleteIfNotLast`
+   * settles it against the database, the same division
+   * `Category.softDelete`/`softDeleteIfEmpty` already established.
+   */
+  softDelete(now: Date): ProductVariant {
+    this.assertLive('deletedAt');
+    return new ProductVariant({ ...this.props, deletedAt: now, updatedAt: now });
+  }
+
+  private assertLive(field: string): void {
+    if (this.isDeleted) {
+      throw new InvalidProductOperationError(field, 'This variant has been deleted.');
+    }
   }
 }

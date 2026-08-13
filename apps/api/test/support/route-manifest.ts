@@ -1,7 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import type { Express } from 'express';
 import type { PrismaClient } from '@prisma/client';
-import type { Actor } from './actors.js';
+import { signUpVendorOwner, type Actor } from './actors.js';
 
 /**
  * What kind of route this is, for the purpose of SDD 6.6 layer 2.
@@ -52,6 +53,16 @@ export interface ExcludedRoute extends BaseRoute {
 
 export interface TenantOwnedRoute extends BaseRoute {
   readonly classification: 'TENANT_OWNED';
+  /**
+   * Mints one principal who can own this route's resource.
+   *
+   * Defaults to a plain customer. Vendor-owned resources (S2-3b) override it
+   * with `signUpVendorOwner`, because a customer token carries neither the
+   * `CREATE_OR_EDIT_PRODUCT` grant nor a vendor for `tenantContext` to
+   * resolve — the isolation proof has to be run by principals who could
+   * genuinely reach the route.
+   */
+  readonly actor?: (ctx: RouteTestContext, label: string) => Promise<Actor>;
   /** Creates a resource owned by `owner` and returns its id. */
   readonly seed: (ctx: RouteTestContext, owner: Actor) => Promise<string>;
   /** Builds the request in which `actor` names `resourceId` — the attack itself. */
@@ -90,6 +101,103 @@ const seedAddress = async (ctx: RouteTestContext, owner: Actor): Promise<string>
 /** The whole stored row — so an unchanged-check catches a soft delete, a field edit or a default flip alike. */
 const snapshotAddress = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
   ctx.db.address.findUnique({ where: { id: resourceId } });
+
+// --- vendor products (S2-3b) -------------------------------------------------
+
+const VENDOR_EMAIL_PREFIX = 'cross-tenant-matrix-';
+
+/**
+ * The matrix's principals for product routes: real vendors, not customers.
+ *
+ * **Memoised per label**, so the whole matrix runs on one attacker and one
+ * victim. `LOGIN_PER_IP` caps logins at 20/min and each vendor costs one, so
+ * minting a fresh pair for every proof would rate-limit the suite into
+ * failure — the same reason the admin suites cache a token per role.
+ *
+ * It costs the proof nothing: what has to be fresh is the *resource* under
+ * attack, which `seedProduct`/`seedVariant` still create per test. "Vendor A
+ * cannot reach vendor B's product" is exactly as strong when A and B are the
+ * same two vendors throughout.
+ */
+const vendorActors = new Map<string, Actor>();
+const vendorActor = async (ctx: RouteTestContext, label: string): Promise<Actor> => {
+  const cached = vendorActors.get(label);
+  if (cached) return cached;
+  // Awaited before caching, so a failed mint is retried rather than turned
+  // into a permanently cached rejection.
+  const minted = await signUpVendorOwner(ctx.app, VENDOR_EMAIL_PREFIX, label);
+  vendorActors.set(label, minted);
+  return minted;
+};
+
+let productSeq = 0;
+
+/** A category to hang the seeded products off. Platform-owned, so one is enough for the whole suite. */
+const seedCategoryRow = async (ctx: RouteTestContext): Promise<string> => {
+  const slug = `matrix-products-${Date.now()}-${(productSeq += 1)}`;
+  const row = await ctx.db.category.create({
+    data: { id: randomUUID(), path: [], depth: 1, name: slug, slug },
+  });
+  return row.id;
+};
+
+/** Creates one product (and its mandatory first variant) owned by `owner`. */
+const seedProduct = async (ctx: RouteTestContext, owner: Actor): Promise<string> => {
+  const categoryId = await seedCategoryRow(ctx);
+  const response = await authed(request(ctx.app).post('/api/v1/vendor/products'), owner)
+    .send({
+      categoryId,
+      name: `Matrix Product ${(productSeq += 1)}`,
+      variant: {
+        sku: `MATRIX-${Date.now()}-${productSeq}`,
+        name: 'Default',
+        price: { amount: '19900', currency: 'INR' },
+        unitOfMeasure: 'per piece',
+        quantityStep: 1,
+      },
+    })
+    .expect(201);
+  return (response.body as { data: { product: { id: string } } }).data.product.id;
+};
+
+/**
+ * Seeds a product and returns `productId/variantId`.
+ *
+ * A variant is addressed by **both** ids, but the matrix's contract carries
+ * exactly one opaque string per resource. Encoding the pair keeps that
+ * contract intact and — more importantly — keeps the isolation proof honest:
+ * addressing the variant with its own id in the product slot would 404 for
+ * the wrong reason (no such product), and the test would pass without ever
+ * exercising the boundary it claims to.
+ */
+const seedVariant = async (ctx: RouteTestContext, owner: Actor): Promise<string> => {
+  const productId = await seedProduct(ctx, owner);
+  const row = await ctx.db.productVariant.findFirstOrThrow({ where: { productId } });
+  return `${productId}/${row.id}`;
+};
+
+/**
+ * Splits a seeded `productId/variantId` back into a URL suffix.
+ *
+ * The matrix also feeds this a bare random uuid for its "never existed" case;
+ * using it for both segments then is correct — the request is well-formed,
+ * reaches the handler, and 404s because nothing matches.
+ */
+const variantPath = (resourceId: string): string => {
+  const [productId, variantId] = resourceId.includes('/')
+    ? resourceId.split('/')
+    : [resourceId, resourceId];
+  return `${productId}/variants/${variantId}`;
+};
+
+/** The variant half of a seeded pair, for the unchanged-check. */
+const variantIdOf = (resourceId: string): string => resourceId.split('/').at(-1) ?? resourceId;
+
+const snapshotProduct = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
+  ctx.db.product.findUnique({ where: { id: resourceId } });
+
+const snapshotVariant = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
+  ctx.db.productVariant.findUnique({ where: { id: variantIdOf(resourceId) } });
 
 /**
  * Every route the application actually mounts, classified.
@@ -369,6 +477,117 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     path: '/categories/:slug',
     classification: 'PUBLIC',
     why: 'Unauthenticated public category detail by slug; platform-owned, no tenant to cross.',
+  },
+
+  // --- vendor products: /api/v1/vendor/products (S2-3b) ---
+  //
+  // The catalogue module's first tenant-scoped routes, and the first
+  // TENANT_OWNED entries in this manifest that are owned by a *vendor* rather
+  // than a user. Each supplies `vendorActor`, because a customer token carries
+  // neither the CREATE_OR_EDIT_PRODUCT grant nor a vendor for `tenantContext`
+  // to resolve.
+  {
+    method: 'POST',
+    prefix: '/api/v1/vendor/products',
+    path: '/',
+    classification: 'SELF_SCOPED',
+    why: 'Creates under the caller’s own tenant; the vendor comes from the tenant context, never the body.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendor/products',
+    path: '/',
+    classification: 'SELF_SCOPED',
+    why: 'Lists only the caller’s own products — the tenant-scoped client cannot return anyone else’s.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendor/products',
+    path: '/:productId',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied product id and reads it.',
+    actor: vendorActor,
+    seed: seedProduct,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).get(`/api/v1/vendor/products/${resourceId}`), actor),
+  },
+  {
+    method: 'PATCH',
+    prefix: '/api/v1/vendor/products',
+    path: '/:productId',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied product id and writes to it.',
+    actor: vendorActor,
+    seed: seedProduct,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).patch(`/api/v1/vendor/products/${resourceId}`), actor).send({
+        name: 'Hijacked',
+      }),
+    snapshot: snapshotProduct,
+  },
+  {
+    method: 'DELETE',
+    prefix: '/api/v1/vendor/products',
+    path: '/:productId',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied product id and soft-deletes it.',
+    actor: vendorActor,
+    seed: seedProduct,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).delete(`/api/v1/vendor/products/${resourceId}`), actor),
+    snapshot: snapshotProduct,
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/vendor/products',
+    path: '/:productId/variants',
+    classification: 'SELF_SCOPED',
+    why: 'Adds under a product the tenant-scoped lookup already proved is the caller’s own.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendor/products',
+    path: '/:productId/variants',
+    classification: 'SELF_SCOPED',
+    why: 'Lists variants of a product the tenant-scoped lookup already proved is the caller’s own.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendor/products',
+    path: '/:productId/variants/:variantId',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied variant id and reads it.',
+    actor: vendorActor,
+    seed: seedVariant,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).get(`/api/v1/vendor/products/${variantPath(resourceId)}`), actor),
+  },
+  {
+    method: 'PATCH',
+    prefix: '/api/v1/vendor/products',
+    path: '/:productId/variants/:variantId',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied variant id and writes to it.',
+    actor: vendorActor,
+    seed: seedVariant,
+    attempt: (ctx, actor, resourceId) =>
+      authed(
+        request(ctx.app).patch(`/api/v1/vendor/products/${variantPath(resourceId)}`),
+        actor,
+      ).send({ name: 'Hijacked' }),
+    snapshot: snapshotVariant,
+  },
+  {
+    method: 'DELETE',
+    prefix: '/api/v1/vendor/products',
+    path: '/:productId/variants/:variantId',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied variant id and soft-deletes it.',
+    actor: vendorActor,
+    seed: seedVariant,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).delete(`/api/v1/vendor/products/${variantPath(resourceId)}`), actor),
+    snapshot: snapshotVariant,
   },
 
   // --- customer self-service: /api/v1/me ---

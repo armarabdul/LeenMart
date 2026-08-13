@@ -4,6 +4,7 @@ import type { PrismaClient } from '@prisma/client';
 import type { Router } from 'express';
 import type { Clock, IdGenerator, Logger } from '@leen-mart/domain-kit';
 import type { Env } from '../../shared/config/env.js';
+import type { VendorTenantResolver } from '../../shared/interface/http/middleware/tenant-context.js';
 import { AmbientAuditWriter, type AuditWriter } from '../audit/index.js';
 import { PrismaAuditLogRepository } from '../audit/infrastructure/persistence/prisma-audit-log.repository.js';
 import type { AccessTokenService, SessionDenylist, UserId, VendorId } from '../identity/index.js';
@@ -78,6 +79,17 @@ export interface VendorModule {
   readonly router: Router;
   /** Mounted separately at `/api/v1/admin/kyc` — a distinct surface (SDD 9.4). */
   readonly adminKycRouter: Router;
+  /**
+   * Resolves a user to the vendor they own, for `tenantContext`.
+   *
+   * Published because `catalogue` needs a vendor tenant for its own
+   * vendor-facing routes, and SDD 5.1 forbids it from depending on this
+   * module's repositories or entities to get one (S2-3 D-1). A resolver is
+   * the narrowest thing that answers the question — one id in, one id out,
+   * no vendor table, no `VendorProfile`, no lifecycle. The composition root
+   * hands it over; the two modules never meet.
+   */
+  readonly resolveVendorTenant: VendorTenantResolver;
 }
 
 /**
@@ -446,5 +458,5 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
     logger: moduleLogger,
   });
 
-  return { router, adminKycRouter };
+  return { router, adminKycRouter, resolveVendorTenant };
 };

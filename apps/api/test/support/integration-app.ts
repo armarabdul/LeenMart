@@ -58,6 +58,18 @@ export const disposeIntegrationHarness = async (
   });
   const ids = users.map((user) => user.id);
 
+  // Child-first, because every foreign key here is RESTRICT: a vendor cannot
+  // be removed while a product points at it, and a product cannot be removed
+  // while a variant does.
+  const vendors = await db.vendorProfile.findMany({
+    where: { userId: { in: ids } },
+    select: { id: true },
+  });
+  const vendorIds = vendors.map((vendor) => vendor.id);
+
+  await db.productVariant.deleteMany({ where: { vendorId: { in: vendorIds } } });
+  await db.product.deleteMany({ where: { vendorId: { in: vendorIds } } });
+  await db.vendorProfile.deleteMany({ where: { id: { in: vendorIds } } });
   await db.address.deleteMany({ where: { userId: { in: ids } } });
   await db.user.deleteMany({ where: { id: { in: ids } } });
   await db.$disconnect();

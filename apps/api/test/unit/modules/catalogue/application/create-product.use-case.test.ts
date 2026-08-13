@@ -51,6 +51,10 @@ const productRepo = (overrides: Partial<ProductRepository> = {}): ProductReposit
     withTransaction: () => repository,
     create: vi.fn(),
     findById: vi.fn().mockResolvedValue(null),
+    update: vi.fn().mockResolvedValue(true),
+    listPage: vi.fn().mockResolvedValue({ items: [], nextCursor: null, hasMore: false }),
+    softDelete: vi.fn().mockResolvedValue(true),
+    lockForVariantChange: vi.fn().mockResolvedValue(true),
     ...overrides,
   };
   return repository;
@@ -63,6 +67,12 @@ const variantRepo = (
     withTransaction: () => repository,
     create: vi.fn(),
     findById: vi.fn().mockResolvedValue(null),
+    findByProductAndId: vi.fn().mockResolvedValue(null),
+    listByProductId: vi.fn().mockResolvedValue([]),
+    update: vi.fn().mockResolvedValue(true),
+    countLiveForProduct: vi.fn().mockResolvedValue(1),
+    softDelete: vi.fn().mockResolvedValue(true),
+    softDeleteAllForProduct: vi.fn().mockResolvedValue(0),
     ...overrides,
   };
   return repository;

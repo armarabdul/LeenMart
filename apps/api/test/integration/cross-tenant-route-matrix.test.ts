@@ -162,8 +162,10 @@ describe('cross-tenant route matrix (SDD 6.6 layer 2)', () => {
   )('$label', ({ route }) => {
     /** Two unrelated accounts, each holding a resource the other must never reach. */
     const twoOwners = async (): Promise<{ attacker: Actor; victim: Actor; victimId: string }> => {
-      const attacker = await signUpCustomer(app, EMAIL_PREFIX, 'attacker');
-      const victim = await signUpCustomer(app, EMAIL_PREFIX, 'victim');
+      const mint =
+        route.actor ?? ((_ctx, label): Promise<Actor> => signUpCustomer(app, EMAIL_PREFIX, label));
+      const attacker = await mint(ctx, 'attacker');
+      const victim = await mint(ctx, 'victim');
       return { attacker, victim, victimId: await route.seed(ctx, victim) };
     };
 

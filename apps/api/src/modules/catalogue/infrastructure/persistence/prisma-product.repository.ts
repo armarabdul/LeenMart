@@ -2,7 +2,10 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import type { TransactionScope } from '@leen-mart/domain-kit';
 import { toVendorId } from '../../../identity/index.js';
 import { Product, type ProductAttributeValues } from '../../domain/entities/product.entity.js';
-import type { ProductRepository } from '../../domain/repositories/product.repository.js';
+import type {
+  ProductPage,
+  ProductRepository,
+} from '../../domain/repositories/product.repository.js';
 import { toCategoryId } from '../../domain/value-objects/category-id.value-object.js';
 import { toProductId, type ProductId } from '../../domain/value-objects/product-id.value-object.js';
 
@@ -89,5 +92,73 @@ export class PrismaProductRepository implements ProductRepository {
   async findById(id: ProductId): Promise<Product | null> {
     const row = await this.prisma.product.findFirst({ where: { id, deletedAt: null } });
     return row ? toDomain(row) : null;
+  }
+
+  async update(product: Product): Promise<boolean> {
+    const result = await this.prisma.product.updateMany({
+      where: { id: product.id, deletedAt: null },
+      data: {
+        categoryId: product.categoryId,
+        name: product.name,
+        brand: product.brand,
+        description: product.description,
+        hsnCode: product.hsnCode,
+        countryOfOrigin: product.countryOfOrigin,
+        netQuantity: product.netQuantity,
+        attributeValues: product.attributeValues as Prisma.InputJsonValue,
+        updatedAt: product.updatedAt,
+      },
+    });
+    return result.count === 1;
+  }
+
+  async listPage(input: { limit: number; cursor?: string | undefined }): Promise<ProductPage> {
+    // One row beyond the page, so `hasMore` is an observation rather than a
+    // second count query — the same shape `PrismaCategoryRepository.listPage`
+    // uses.
+    const take = input.limit + 1;
+    const rows = await this.prisma.product.findMany({
+      where: { deletedAt: null },
+      // UUID v7 is time-ordered, so `id` alone is a total order and the keyset
+      // cursor below can neither skip nor repeat a row.
+      orderBy: { id: 'asc' },
+      take,
+      ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+    });
+
+    const hasMore = rows.length > input.limit;
+    const page = hasMore ? rows.slice(0, input.limit) : rows;
+
+    return {
+      items: page.map(toDomain),
+      nextCursor: hasMore ? (page[page.length - 1]?.id ?? null) : null,
+      hasMore,
+    };
+  }
+
+  async softDelete(product: Product): Promise<boolean> {
+    const result = await this.prisma.product.updateMany({
+      where: { id: product.id, deletedAt: null },
+      data: { deletedAt: product.deletedAt, updatedAt: product.updatedAt },
+    });
+    return result.count === 1;
+  }
+
+  /**
+   * An `UPDATE` of the product's own `updated_at` — which is what takes the
+   * exclusive row lock PostgreSQL holds until the caller's transaction ends.
+   *
+   * A plain `SELECT ... FOR UPDATE` would be the textbook form, but Prisma's
+   * query API cannot express it and reaching for raw SQL here would step
+   * outside the tenant extension for a rule the extension is what enforces.
+   * An `UPDATE` takes the same lock through the sanctioned path, and touching
+   * `updated_at` is honest besides: the product's variant set is changing.
+   */
+  async lockForVariantChange(id: ProductId, now: Date): Promise<boolean> {
+    const result = await this.prisma.product.updateMany({
+      where: { id, deletedAt: null },
+      data: { updatedAt: now },
+    });
+    return result.count === 1;
   }
 }

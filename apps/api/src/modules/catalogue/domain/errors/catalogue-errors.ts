@@ -182,3 +182,59 @@ export class InvalidProductOperationError extends DomainRuleError {
     });
   }
 }
+
+/**
+ * No product exists with the requested id, as far as this caller is
+ * concerned.
+ *
+ * Covers "never existed", "soft-deleted" and **"belongs to another vendor"**
+ * identically, and that third case is the one that matters: a vendor learning
+ * that *a* product exists at an id, just not theirs, is exactly the
+ * cross-tenant existence leak SDD 6.6 exists to prevent. The repository
+ * returns `null` for all three because RLS and the tenant context make them
+ * indistinguishable there too — this error simply does not undo that.
+ */
+export class ProductNotFoundError extends NotFoundError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This product does not exist.', { ...options, code: 'PRODUCT_NOT_FOUND' });
+  }
+}
+
+/**
+ * No variant exists with the requested id under the requested product.
+ *
+ * Mirrors `ProductNotFoundError`, and adds one more case that must read the
+ * same way: a variant id that is real but belongs to a *different product* of
+ * the same vendor. The same reasoning `KycDocumentNotFoundError` records one
+ * level deeper.
+ */
+export class ProductVariantNotFoundError extends NotFoundError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This product variant does not exist.', {
+      ...options,
+      code: 'PRODUCT_VARIANT_NOT_FOUND',
+    });
+  }
+}
+
+/**
+ * Refused: this is the product's last live variant.
+ *
+ * SDD 6.3 makes the variant the sellable unit and states that every product
+ * has at least one. `CreateProductUseCase` is what makes that true at the
+ * start (S2-3 D-7); this is what keeps it true — a product stripped of its
+ * last variant is a listing nobody can buy, which is worse than a deleted one
+ * because it still appears to exist.
+ *
+ * Arbitrated against the database under a lock on the parent product row,
+ * never by a read-then-delete check: two concurrent deletes would otherwise
+ * both observe two live variants and both proceed.
+ */
+export class ProductLastVariantError extends ConflictError {
+  constructor(options: AppErrorOptions = {}) {
+    super('A product must keep at least one variant.', {
+      ...options,
+      code: 'PRODUCT_LAST_VARIANT',
+    });
+  }
+}
