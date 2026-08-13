@@ -393,4 +393,88 @@ describe('PrismaCategoryRepository', () => {
       expect(page.items.map((item) => item.id)).not.toContain(category.id);
     });
   });
+
+  describe('findAllActive (S2-2c)', () => {
+    it('excludes inactive and soft-deleted categories', async () => {
+      const active = await persist();
+      const inactive = make();
+      await repository.create(inactive.setActive(false, NOW));
+      const deleted = await persist();
+      await repository.softDeleteIfEmpty(deleted.softDelete(NOW));
+
+      const found = (await repository.findAllActive()).map((category) => category.id);
+
+      expect(found).toContain(active.id);
+      expect(found).not.toContain(inactive.id);
+      expect(found).not.toContain(deleted.id);
+    });
+
+    it('orders by lower(name) ascending, id as tiebreak', async () => {
+      // The distinguishing word comes first and the uniqueness suffix after,
+      // deliberately: string comparison is lexicographic left-to-right, so the
+      // word alone decides the order and the suffix never gets a vote.
+      const upperFirst = Category.create({
+        id: toCategoryId(ids.generate()),
+        parent: null,
+        name: `Banana-${unique()}`,
+        slug: toCategorySlug(unique()),
+        riskLevel: CategoryRiskLevel.LOW,
+        requirements: NO_REQUIREMENTS,
+        now: NOW,
+      });
+      const lowerSecond = Category.create({
+        id: toCategoryId(ids.generate()),
+        parent: null,
+        name: `apple-${unique()}`,
+        slug: toCategorySlug(unique()),
+        riskLevel: CategoryRiskLevel.LOW,
+        requirements: NO_REQUIREMENTS,
+        now: NOW,
+      });
+      await repository.create(upperFirst);
+      await repository.create(lowerSecond);
+
+      const found = await repository.findAllActive();
+      const names = found
+        .filter((category) => category.id === upperFirst.id || category.id === lowerSecond.id)
+        .map((category) => category.name);
+
+      // "apple" sorts before "Banana" case-insensitively even though it
+      // starts with a lowercase letter — proves the comparison is on
+      // `lower(name)`, not on `name`'s own case.
+      expect(names).toEqual([lowerSecond.name, upperFirst.name]);
+    });
+  });
+
+  describe('findChildren (S2-2c)', () => {
+    it('returns only immediate live children, not the whole subtree', async () => {
+      const root = await persist();
+      const child = await persist(root);
+      const grandchild = await persist(child);
+      const deletedChild = await persist(root);
+      await repository.softDeleteIfEmpty(deletedChild.softDelete(NOW));
+
+      const found = (await repository.findChildren(root.id)).map((category) => category.id);
+
+      expect(found).toContain(child.id);
+      expect(found).not.toContain(grandchild.id);
+      expect(found).not.toContain(deletedChild.id);
+    });
+
+    it('includes inactive children — the caller decides whether to show them', async () => {
+      const root = await persist();
+      const inactiveChild = make(root);
+      await repository.create(inactiveChild.setActive(false, NOW));
+
+      const found = (await repository.findChildren(root.id)).map((category) => category.id);
+
+      expect(found).toContain(inactiveChild.id);
+    });
+
+    it('returns an empty array for a childless category', async () => {
+      const leaf = await persist();
+
+      await expect(repository.findChildren(leaf.id)).resolves.toEqual([]);
+    });
+  });
 });

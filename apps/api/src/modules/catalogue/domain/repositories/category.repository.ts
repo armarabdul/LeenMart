@@ -49,4 +49,25 @@ export interface CategoryRepository {
    * had already passed its own test. `false` means a child exists.
    */
   softDeleteIfEmpty(category: Category): Promise<boolean>;
+
+  /**
+   * Every live, publicly visible node (S2-2c) — the public tree's raw
+   * material. Ordered `lower(name)` ascending, `id` as tiebreak: `Category`
+   * has no position column (unlike `CategoryAttribute`), and sibling names
+   * are already unique per level (`idx_categories_child_name_unique`/
+   * `idx_categories_root_name_unique`), so `name` is the natural, collision-free
+   * sort key and `id` only ever breaks a tie between categories under
+   * different parents.
+   */
+  findAllActive(): Promise<readonly Category[]>;
+
+  /**
+   * `id`'s live, immediate children — one level, not the whole subtree
+   * `findDescendants` returns. Filters `deletedAt` only, the same as
+   * `findBySlug`: whether an `isActive` child should be shown is a caller
+   * decision (S2-2c's public detail excludes inactive children; a future
+   * admin caller might not want to). Same `lower(name)`/`id` order as
+   * `findAllActive`.
+   */
+  findChildren(id: CategoryId): Promise<readonly Category[]>;
 }

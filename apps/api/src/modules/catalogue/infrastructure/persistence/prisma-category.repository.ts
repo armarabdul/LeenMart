@@ -59,6 +59,23 @@ const toDomain = (row: CategoryRow): Category =>
     deletedAt: row.deletedAt,
   });
 
+/**
+ * `lower(name)` ascending, `id` as tiebreak (S2-2c) — sorted in application
+ * code because PostgreSQL's default collation is not guaranteed
+ * case-insensitive and Prisma's `orderBy` has no `mode: 'insensitive'` for
+ * sorting (only for `where` filters). The result set this sorts is the whole
+ * active taxonomy or one category's children — a small, closed, admin-curated
+ * set bounded by `MAX_CATEGORY_DEPTH`, not a paginated table — so an in-memory
+ * sort is proportionate rather than a scalability risk.
+ */
+const sortByNameThenId = <T extends { readonly name: string; readonly id: string }>(
+  rows: readonly T[],
+): readonly T[] =>
+  [...rows].sort((a, b) => {
+    const byName = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+    return byName !== 0 ? byName : a.id.localeCompare(b.id);
+  });
+
 /** The mutable half of a row — everything `create` and `update` both write. */
 const toColumns = (
   category: Category,
@@ -229,6 +246,20 @@ export class PrismaCategoryRepository implements CategoryRepository {
       nextCursor: hasMore ? (page[page.length - 1]?.id ?? null) : null,
       hasMore,
     };
+  }
+
+  async findAllActive(): Promise<readonly Category[]> {
+    const rows = await this.prisma.category.findMany({
+      where: { isActive: true, deletedAt: null },
+    });
+    return sortByNameThenId(rows).map(toDomain);
+  }
+
+  async findChildren(id: CategoryId): Promise<readonly Category[]> {
+    const rows = await this.prisma.category.findMany({
+      where: { parentId: id, deletedAt: null },
+    });
+    return sortByNameThenId(rows).map(toDomain);
   }
 
   async softDeleteIfEmpty(category: Category): Promise<boolean> {

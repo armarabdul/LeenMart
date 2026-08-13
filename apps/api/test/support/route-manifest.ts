@@ -350,6 +350,27 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     why: 'Soft-deletes a platform-owned attribute definition; FULL-access admins only.',
   },
 
+  // --- public catalogue: /api/v1/catalogue (S2-2c) ---
+  // Unauthenticated and tenant-free, same as `/healthz`/`/readyz` above and for
+  // the same underlying reason `/api/v1/admin/categories` above is ADMIN
+  // rather than TENANT_OWNED: categories are platform-owned, carry no tenant
+  // column, and the S2-2a migration's own comment already requires this
+  // surface to read them with no tenant context at all.
+  {
+    method: 'GET',
+    prefix: '/api/v1/catalogue',
+    path: '/categories',
+    classification: 'PUBLIC',
+    why: 'Unauthenticated public category tree; platform-owned, no tenant to cross.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/catalogue',
+    path: '/categories/:slug',
+    classification: 'PUBLIC',
+    why: 'Unauthenticated public category detail by slug; platform-owned, no tenant to cross.',
+  },
+
   // --- customer self-service: /api/v1/me ---
   {
     method: 'POST',

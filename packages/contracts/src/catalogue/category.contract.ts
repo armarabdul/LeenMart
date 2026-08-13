@@ -112,6 +112,42 @@ export const adminCategoryListQuerySchema = cursorPaginationSchema.strict();
 
 export const adminCategoryListResponseSchema = z.array(adminCategorySchema);
 
+/**
+ * One node of the public category surface (S2-2c) — an unauthenticated read,
+ * so deliberately smaller than `adminCategorySchema`: no `path`/`depth`
+ * (position in the tree already encodes ancestry), no `riskLevel`/
+ * `requirements` (internal compliance screening, meaningless to a shopper),
+ * no `isActive` (everything returned here already is), no timestamps (admin
+ * housekeeping). Every field that remains is a name already established by
+ * `adminCategorySchema`, not a new one invented for this surface.
+ *
+ * Recursive: the tree endpoint nests every descendant; the detail endpoint
+ * reuses the same shape but populates only one level of `children` (S2-2c
+ * decision 2) and leaves every grandchild's own `children` empty.
+ */
+export interface PublicCategoryNode {
+  readonly id: string;
+  readonly parentId: string | null;
+  readonly name: string;
+  readonly slug: string;
+  readonly children: readonly PublicCategoryNode[];
+}
+
+export const publicCategoryNodeSchema: z.ZodType<PublicCategoryNode> = z.lazy(() =>
+  z
+    .object({
+      id: uuidSchema,
+      parentId: uuidSchema.nullable(),
+      name: z.string(),
+      slug: categorySlugSchema,
+      children: z.array(publicCategoryNodeSchema),
+    })
+    .strict(),
+);
+
+/** The tree endpoint's `data`: every root, nested. */
+export const publicCategoryTreeResponseSchema = z.array(publicCategoryNodeSchema);
+
 export type CategoryRiskLevelDto = z.infer<typeof categoryRiskLevelSchema>;
 export type CategoryRequirementsDto = z.infer<typeof categoryRequirementsSchema>;
 export type CreateCategoryRequest = z.infer<typeof createCategoryRequestSchema>;
@@ -120,3 +156,4 @@ export type ReparentCategoryRequest = z.infer<typeof reparentCategoryRequestSche
 export type AdminCategory = z.infer<typeof adminCategorySchema>;
 export type AdminCategoryListQuery = z.infer<typeof adminCategoryListQuerySchema>;
 export type AdminCategoryListResponse = z.infer<typeof adminCategoryListResponseSchema>;
+export type PublicCategoryTreeResponse = z.infer<typeof publicCategoryTreeResponseSchema>;

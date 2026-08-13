@@ -76,6 +76,8 @@ const repo = (overrides: Partial<CategoryRepository> = {}): CategoryRepository =
     findDescendants: vi.fn().mockResolvedValue([]),
     listPage: vi.fn().mockResolvedValue({ items: [], nextCursor: null, hasMore: false }),
     softDeleteIfEmpty: vi.fn().mockResolvedValue(true),
+    findAllActive: vi.fn().mockResolvedValue([]),
+    findChildren: vi.fn().mockResolvedValue([]),
     ...overrides,
   };
   return repository;

@@ -80,9 +80,11 @@ const mountBusinessModules = (
   // platform-owned and carry no vendor column for one to scope.
   const catalogueModule = createCatalogueModule(params);
   app.use('/api/v1/admin/categories', catalogueModule.adminCategoryRouter);
+  // The public catalogue surface (SDD 9.4/9.5, S2-2c): unauthenticated, no
+  // tenant context, cache-friendly reads of the same platform-owned taxonomy.
+  app.use('/api/v1/catalogue', catalogueModule.publicCategoryRouter);
 
-  // Further business modules mount here as they are built, e.g.
-  //   app.use('/api/v1/catalogue', createCatalogueRouter(container));
+  // Further business modules mount here as they are built.
 };
 
 /**
