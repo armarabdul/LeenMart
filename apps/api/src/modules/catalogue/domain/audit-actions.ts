@@ -27,6 +27,12 @@ export const CATALOGUE_AUDIT_ACTIONS = {
   CATEGORY_ATTRIBUTE_UPDATED: 'catalogue.category.attribute_updated',
   /** An attribute definition was soft-deleted on its own. */
   CATEGORY_ATTRIBUTE_REMOVED: 'catalogue.category.attribute_removed',
+  /**
+   * A vendor created a product, together with its first variant (S2-3 D-7 —
+   * one atomic act, so one audit entry; the variant's own fields travel in
+   * the payload rather than getting a second entry of their own).
+   */
+  PRODUCT_CREATED: 'catalogue.product.created',
 } as const;
 
 export type CatalogueAuditAction =
@@ -39,9 +45,14 @@ export type CatalogueAuditAction =
  * entity whose configuration changed, and recording attributes against it
  * keeps a category's whole configuration history reachable from one id. The
  * attribute's own id and key travel in the payload.
+ *
+ * `PRODUCT_CREATED` is recorded against the product, for the same reason —
+ * one entity, one reachable history, with the first variant's fields in the
+ * payload rather than a second entity type.
  */
 export const CATALOGUE_AUDIT_ENTITY_TYPES = {
   CATEGORY: 'Category',
+  PRODUCT: 'Product',
 } as const;
 
 export type CatalogueAuditEntityType =

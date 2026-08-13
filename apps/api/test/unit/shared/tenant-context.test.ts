@@ -147,9 +147,11 @@ describe('tenant context', () => {
   });
 
   describe('model registry', () => {
-    it('covers exactly the models KYC-2B-3 will protect', () => {
+    it('covers exactly the models KYC-2B-3 and S2-3a protect', () => {
       expect([...TENANT_SCOPED_MODELS].sort()).toEqual([
         'KycDocument',
+        'Product',
+        'ProductVariant',
         'VendorKycSubmission',
         'VendorProfile',
       ]);

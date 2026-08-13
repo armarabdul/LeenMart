@@ -14,6 +14,10 @@ import type { UserId, VendorId } from '../../../modules/identity/index.js';
  * `sub_orders`, `payments` and `ledger_entries` join this set when those
  * tables exist (SDD 6.6 names them alongside `kyc_documents`).
  *
+ * `Product`/`ProductVariant` join here from S2-3a: unlike `Category`, they
+ * are vendor-owned rows, not platform-owned ones, and carry a `vendor_id`
+ * (denormalised onto the variant too) for exactly this reason.
+ *
  * Prisma model names, not table names — this is matched against the `model`
  * field the query extension receives.
  */
@@ -21,6 +25,8 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'VendorProfile',
   'VendorKycSubmission',
   'KycDocument',
+  'Product',
+  'ProductVariant',
 ]);
 
 /**

@@ -26,7 +26,13 @@ const TENANT_DELEGATES = [...TENANT_SCOPED_MODELS].map(
   (model) => model.charAt(0).toLowerCase() + model.slice(1),
 );
 
-const TENANT_TABLES = ['vendors', 'vendor_kyc_submissions', 'kyc_documents'];
+const TENANT_TABLES = [
+  'vendors',
+  'vendor_kyc_submissions',
+  'kyc_documents',
+  'products',
+  'product_variants',
+];
 
 interface SourceFile {
   readonly path: string;

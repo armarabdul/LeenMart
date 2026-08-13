@@ -262,6 +262,7 @@ model VendorProfile {
 
   user           User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   kycSubmissions VendorKycSubmission[]
+  products       Product[]
 
   @@map("vendors")
 }
@@ -549,6 +550,7 @@ model Category {
   parent     Category?           @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
   children   Category[]          @relation("CategoryTree")
   attributes CategoryAttribute[]
+  products   Product[]
 
   @@index([parentId], map: "idx_categories_parent")
   @@index([path], type: Gin, map: "idx_categories_path")
@@ -606,4 +608,107 @@ model CategoryAttribute {
 
   @@index([categoryId], map: "idx_category_attributes_category")
   @@map("category_attributes")
+}
+
+/// The moderation lifecycle (SDD 15.2). Only `DRAFT` is reachable in S2-3a —
+/// no code transitions a product anywhere else yet. The remaining states
+/// (`PENDING_REVIEW`, `APPROVED`, `PUBLISHED`, `REJECTED`, `UNPUBLISHED`,
+/// `DELISTED`) are declared only when the moderation chunk writes the
+/// transitions that reach them; an enum member nothing can produce would be a
+/// guess about a feature that does not exist yet — the same reasoning S2-2b's
+/// audit-actions withheld attribute actions for until the code writing them
+/// existed.
+enum ProductStatus {
+  DRAFT
+}
+
+/// The marketing entity (SDD 5 module 4, SDD 6.3 "Product ↔ Variant").
+/// Vendor-owned and tenant-scoped — unlike `Category`, which is
+/// platform-owned. `ProductVariant` is the sellable unit; every product has
+/// at least one, enforced by `CreateProductUseCase` creating both in one
+/// transaction (S2-3 D-7), never by a constraint a single-row `INSERT` could
+/// satisfy on its own.
+///
+/// `hsn_code`/`country_of_origin`/`net_quantity` are stored with basic
+/// length limits only (S2-3 D-2). Whether they are actually *required* for
+/// this product's category is a question for the product submission /
+/// moderation flow (SDD 15.2's pre-screening), which does not exist yet —
+/// enforcing it here would invent a rule ahead of the flow that owns it.
+///
+/// `attribute_values` is genuinely open-shaped per SDD 6.1's JSONB
+/// principle: keys are `category_attributes.key` under this product's
+/// category, values are whatever that attribute's `data_type` allows. Not
+/// validated against the definitions in S2-3a, for the same reason the
+/// statutory fields above are not — that validation belongs to submission.
+model Product {
+  id              String        @id @db.Uuid
+  vendorId        String        @map("vendor_id") @db.Uuid
+  categoryId      String        @map("category_id") @db.Uuid
+  name            String        @db.VarChar(200)
+  brand           String?       @db.VarChar(120)
+  description     String?
+  hsnCode         String?       @map("hsn_code") @db.VarChar(8)
+  countryOfOrigin String?       @map("country_of_origin") @db.VarChar(2)
+  netQuantity     String?       @map("net_quantity") @db.VarChar(40)
+  attributeValues Json          @default("{}") @map("attribute_values")
+  status          ProductStatus @default(DRAFT)
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  vendor   VendorProfile    @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  /// `Restrict`, matching `CategoryAttribute.category`: a category with live
+  /// products must not vanish out from under them.
+  category Category         @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  variants ProductVariant[]
+
+  /// The composite-foreign-key target `ProductVariant` pins its own
+  /// denormalised `vendor_id` against — the exact technique
+  /// `vendor_kyc_submissions`/`kyc_documents` already use, so the database
+  /// itself refuses a variant whose vendor does not match its product's.
+  @@unique([id, vendorId], map: "uq_products_id_vendor")
+  @@index([vendorId, status], map: "idx_products_vendor_status")
+  @@index([categoryId, status], map: "idx_products_category_status")
+  @@map("products")
+}
+
+/// The sellable unit (SDD 6.3, ASM-15, FR-10/11) — SKU, price, unit of
+/// measure and quantity step live here; stock does not (SDD 6.3's own
+/// decision: a separate `inventory` row per variant, a later chunk).
+///
+/// `vendor_id` is denormalised from `Product.vendorId`, not merely copied:
+/// the composite foreign key below makes it impossible for a variant to name
+/// a vendor its parent product does not — identical reasoning to
+/// `KycDocument.vendorId`'s relationship to `VendorKycSubmission`. The
+/// column exists so RLS and the `(vendor_id, sku)` uniqueness SDD 6.4
+/// specifies are both a plain column comparison, never a subquery to
+/// `products`.
+model ProductVariant {
+  id            String @id @db.Uuid
+  productId     String @map("product_id") @db.Uuid
+  vendorId      String @map("vendor_id") @db.Uuid
+  sku           String @db.VarChar(64)
+  name          String @db.VarChar(120)
+  /// Integer minor units (SDD 6.1) — paise, never a float or NUMERIC.
+  priceAmount   BigInt @map("price_amount")
+  priceCurrency String @default("INR") @map("price_currency") @db.VarChar(3)
+  /// No closed vocabulary (S2-3 D-3) — the SDD gives examples ("per kg",
+  /// "250 g steps") but never an enumerable set, so this is free text rather
+  /// than a guessed enum.
+  unitOfMeasure String @map("unit_of_measure") @db.VarChar(40)
+  quantityStep  Int    @map("quantity_step")
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  /// The composite FK: both halves must match the same `Product` row.
+  product Product @relation(fields: [productId, vendorId], references: [id, vendorId], onDelete: Restrict)
+
+  /// SDD 6.4's own indexing table: a vendor's own SKU must be unique to
+  /// them, never globally — two different vendors may both use `SKU-001`.
+  @@unique([vendorId, sku], map: "uq_product_variants_vendor_sku")
+  @@index([productId], map: "idx_product_variants_product")
+  @@map("product_variants")
 }

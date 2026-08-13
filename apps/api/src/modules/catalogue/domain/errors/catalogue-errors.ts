@@ -145,3 +145,40 @@ export class InvalidCategoryAttributeOperationError extends DomainRuleError {
     );
   }
 }
+
+/**
+ * Another live variant of this vendor's already holds this SKU.
+ *
+ * Arbitrated by `uq_product_variants_vendor_sku`, not by a read-then-write
+ * check — the same "database decides who wins" pattern every other catalogue
+ * conflict error uses, because a pre-check still loses to a concurrent
+ * create.
+ *
+ * Scoped per vendor (S2-3 D-5): two different vendors may both use `SKU-001`,
+ * and both are legitimate.
+ */
+export class ProductVariantSkuConflictError extends ConflictError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This vendor already has a variant with that SKU.', {
+      ...options,
+      code: 'PRODUCT_VARIANT_SKU_CONFLICT',
+    });
+  }
+}
+
+/**
+ * An operation a product or variant's own shape forbids — a blank name, a
+ * statutory field or SKU or unit of measure longer than its column, a
+ * non-positive price or quantity step.
+ *
+ * Mirrors `InvalidCategoryOperationError` exactly, including the uniform
+ * message (SEC-15): what names the broken rule is `details[0]`.
+ */
+export class InvalidProductOperationError extends DomainRuleError {
+  constructor(operation: string, issue: string, options: AppErrorOptions = {}) {
+    super('INVALID_PRODUCT_OPERATION', 'This action is not permitted for this product.', {
+      ...options,
+      details: [{ field: operation, issue }],
+    });
+  }
+}

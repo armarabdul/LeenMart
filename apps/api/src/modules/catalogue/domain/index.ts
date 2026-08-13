@@ -8,6 +8,8 @@ export * from './audit-actions.js';
 // entities
 export * from './entities/category.entity.js';
 export * from './entities/category-attribute.entity.js';
+export * from './entities/product.entity.js';
+export * from './entities/product-variant.entity.js';
 
 // value objects
 export * from './value-objects/category-id.value-object.js';
@@ -15,6 +17,9 @@ export * from './value-objects/category-attribute-id.value-object.js';
 export * from './value-objects/category-attribute-type.value-object.js';
 export * from './value-objects/category-risk-level.value-object.js';
 export * from './value-objects/category-slug.value-object.js';
+export * from './value-objects/product-id.value-object.js';
+export * from './value-objects/product-variant-id.value-object.js';
+export * from './value-objects/sku.value-object.js';
 
 // errors
 export * from './errors/catalogue-errors.js';
@@ -22,3 +27,5 @@ export * from './errors/catalogue-errors.js';
 // repository interfaces
 export * from './repositories/category.repository.js';
 export * from './repositories/category-attribute.repository.js';
+export * from './repositories/product.repository.js';
+export * from './repositories/product-variant.repository.js';
