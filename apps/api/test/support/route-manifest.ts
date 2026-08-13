@@ -311,6 +311,45 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     why: 'Soft-deletes a platform-owned category; FULL-access admins only.',
   },
 
+  // Per-category attribute definitions (S2-2b). Mounted on the same router as
+  // the categories above and ADMIN for the same reason: an attribute belongs to
+  // a platform-owned category and carries no vendor column either.
+  {
+    method: 'GET',
+    prefix: '/api/v1/admin/categories',
+    path: '/:categoryId/attributes',
+    classification: 'ADMIN',
+    why: 'Lists one platform-owned category’s attribute definitions.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/admin/categories',
+    path: '/:categoryId/attributes/:attributeId',
+    classification: 'ADMIN',
+    why: 'Reads one platform-owned attribute definition; scoped by both ids.',
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/admin/categories',
+    path: '/:categoryId/attributes',
+    classification: 'ADMIN',
+    why: 'Defines a new attribute on a platform-owned category; FULL-access admins only.',
+  },
+  {
+    method: 'PATCH',
+    prefix: '/api/v1/admin/categories',
+    path: '/:categoryId/attributes/:attributeId',
+    classification: 'ADMIN',
+    why: 'Edits a platform-owned attribute definition; FULL-access admins only.',
+  },
+  {
+    method: 'DELETE',
+    prefix: '/api/v1/admin/categories',
+    path: '/:categoryId/attributes/:attributeId',
+    classification: 'ADMIN',
+    why: 'Soft-deletes a platform-owned attribute definition; FULL-access admins only.',
+  },
+
   // --- customer self-service: /api/v1/me ---
   {
     method: 'POST',

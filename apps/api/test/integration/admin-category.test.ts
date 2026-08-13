@@ -54,6 +54,25 @@ interface CategoryListBody {
   readonly data: CategoryBody['data'][];
   readonly meta: { pagination: { nextCursor: string | null; hasMore: boolean } };
 }
+interface AttributeBody {
+  readonly data: {
+    readonly id: string;
+    readonly categoryId: string;
+    readonly key: string;
+    readonly label: string;
+    readonly dataType: string;
+    readonly isRequired: boolean;
+    readonly unit: string | null;
+    readonly options: string[];
+    readonly position: number;
+    readonly createdAt: string;
+    readonly updatedAt: string;
+  };
+}
+interface AttributeListBody {
+  readonly data: AttributeBody['data'][];
+  readonly meta: { requestId: string };
+}
 
 /**
  * The admin taxonomy surface (S2-2a), end to end.
@@ -159,6 +178,20 @@ describe('admin category endpoints', () => {
     return (response.body as CategoryBody).data;
   };
 
+  // Synchronous on purpose: supertest's `Test` is thenable, so an `async`
+  // builder would fire the request the moment it was awaited, before
+  // `.expect()` could ever be attached. Shared at this scope (not just by
+  // `describe('update')`/`describe('delete')`) because the attribute tests
+  // below also need to deactivate and delete categories.
+  const patch = (token: string, id: string, body: Record<string, unknown>): request.Test =>
+    request(app)
+      .patch(`/api/v1/admin/categories/${id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send(body);
+
+  const remove = (token: string, id: string): request.Test =>
+    request(app).delete(`/api/v1/admin/categories/${id}`).set('Authorization', `Bearer ${token}`);
+
   beforeAll(() => {
     process.env.ENV_FILE = '.env.test';
     container = createContainer();
@@ -167,6 +200,15 @@ describe('admin category endpoints', () => {
   });
 
   afterAll(async () => {
+    // Attribute rows first: `category_attributes.category_id` is a plain FK
+    // (no `ON DELETE CASCADE` — the app cascades by soft-deleting both in one
+    // transaction, which a hard test-cleanup DELETE bypasses entirely), so a
+    // leftover attribute row on any seeded category blocks the category
+    // deletes below with a foreign-key violation.
+    await db.$executeRawUnsafe(
+      `DELETE FROM category_attributes WHERE category_id IN (SELECT id FROM categories WHERE slug LIKE $1)`,
+      `${SLUG_PREFIX}%`,
+    );
     await db.$executeRawUnsafe(
       `DELETE FROM categories WHERE slug LIKE $1 AND id NOT IN (SELECT unnest(path) FROM categories WHERE slug LIKE $1)`,
       `${SLUG_PREFIX}%`,
@@ -376,15 +418,6 @@ describe('admin category endpoints', () => {
   });
 
   describe('update', () => {
-    // Synchronous on purpose: supertest's `Test` is thenable, so an `async`
-    // builder would fire the request the moment it was awaited, before
-    // `.expect()` could ever be attached.
-    const patch = (token: string, id: string, body: Record<string, unknown>): request.Test =>
-      request(app)
-        .patch(`/api/v1/admin/categories/${id}`)
-        .set('Authorization', `Bearer ${token}`)
-        .send(body);
-
     it('renames without disturbing placement', async () => {
       const root = await seed();
       const child = await seed(root.id);
@@ -510,9 +543,6 @@ describe('admin category endpoints', () => {
   });
 
   describe('delete', () => {
-    const remove = (token: string, id: string): request.Test =>
-      request(app).delete(`/api/v1/admin/categories/${id}`).set('Authorization', `Bearer ${token}`);
-
     it('soft-deletes a childless category and hides it from reads', async () => {
       const created = await seed();
 
@@ -626,6 +656,474 @@ describe('admin category endpoints', () => {
 
       // SDD 18.4 logs admin *actions*; reading a taxonomy changes nothing.
       expect(await entriesFor(created.id)).toHaveLength(1);
+    });
+  });
+
+  describe('attributes (S2-2b)', () => {
+    const attributesPath = (categoryId: string): string =>
+      `/api/v1/admin/categories/${categoryId}/attributes`;
+
+    // Synchronous builders: supertest's `Test` is thenable, so an `async`
+    // builder would fire the request the moment it was awaited.
+    const addAttribute = (
+      token: string,
+      categoryId: string,
+      overrides: Record<string, unknown> = {},
+    ): request.Test =>
+      request(app)
+        .post(attributesPath(categoryId))
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          key: `key_${(counter += 1)}`,
+          label: 'Label',
+          dataType: 'STRING',
+          position: 0,
+          ...overrides,
+        });
+
+    const seedAttribute = async (
+      categoryId: string,
+      overrides: Record<string, unknown> = {},
+    ): Promise<AttributeBody['data']> => {
+      const token = await adminFor('SUPER_ADMIN');
+      const response = await addAttribute(token, categoryId, overrides).expect(201);
+      return (response.body as AttributeBody).data;
+    };
+
+    describe('create', () => {
+      it('defines a STRING attribute with no unit and no options', async () => {
+        const category = await seed();
+        const attribute = await seedAttribute(category.id);
+
+        expect(attribute.categoryId).toBe(category.id);
+        expect(attribute.dataType).toBe('STRING');
+        expect(attribute.unit).toBeNull();
+        expect(attribute.options).toEqual([]);
+      });
+
+      it('defines a NUMBER attribute with a unit', async () => {
+        const category = await seed();
+        const attribute = await seedAttribute(category.id, { dataType: 'NUMBER', unit: 'kg' });
+
+        expect(attribute.unit).toBe('kg');
+      });
+
+      it('defines an ENUM attribute with options', async () => {
+        const category = await seed();
+        const attribute = await seedAttribute(category.id, {
+          dataType: 'ENUM',
+          options: ['small', 'large'],
+        });
+
+        expect(attribute.options).toEqual(['small', 'large']);
+      });
+
+      it('allows configuring an inactive category', async () => {
+        const category = await seed();
+        await patch(await adminFor('SUPER_ADMIN'), category.id, { isActive: false }).expect(200);
+
+        await addAttribute(await adminFor('SUPER_ADMIN'), category.id).expect(201);
+      });
+
+      it('returns 404 for an unknown category', async () => {
+        const response = await addAttribute(await adminFor('SUPER_ADMIN'), ids.generate()).expect(
+          404,
+        );
+
+        expect((response.body as ErrorBody).error.code).toBe('CATEGORY_NOT_FOUND');
+      });
+
+      it('returns 404 for a soft-deleted category', async () => {
+        const category = await seed();
+        await remove(await adminFor('SUPER_ADMIN'), category.id).expect(200);
+
+        await addAttribute(await adminFor('SUPER_ADMIN'), category.id).expect(404);
+      });
+
+      it('returns 409 for a duplicate key in the same category', async () => {
+        const category = await seed();
+        const first = await seedAttribute(category.id);
+
+        const response = await addAttribute(await adminFor('SUPER_ADMIN'), category.id, {
+          key: first.key,
+        }).expect(409);
+
+        expect((response.body as ErrorBody).error.code).toBe('CATEGORY_ATTRIBUTE_KEY_CONFLICT');
+      });
+
+      it('allows the same key under a different category', async () => {
+        const a = await seed();
+        const b = await seed();
+        const first = await seedAttribute(a.id);
+
+        await addAttribute(await adminFor('SUPER_ADMIN'), b.id, { key: first.key }).expect(201);
+      });
+
+      it.each([
+        ['a unit on a STRING', { dataType: 'STRING', unit: 'kg' }],
+        ['a unit on a BOOLEAN', { dataType: 'BOOLEAN', unit: 'kg' }],
+        ['a unit on an ENUM', { dataType: 'ENUM', options: ['a'], unit: 'kg' }],
+        ['options on a STRING', { dataType: 'STRING', options: ['a'] }],
+        ['options on a NUMBER', { dataType: 'NUMBER', options: ['a'] }],
+        ['an ENUM with no options', { dataType: 'ENUM' }],
+        ['an ENUM with an empty options list', { dataType: 'ENUM', options: [] }],
+        ['an unknown data type', { dataType: 'DATE' }],
+        ['a malformed key', { key: 'Not A Key' }],
+        ['a negative position', { position: -1 }],
+        ['an unexpected field', { colour: 'blue' }],
+      ])('returns 400 for %s', async (_label, overrides) => {
+        // Every one of these is refused by the discriminated union at the
+        // boundary, before the domain or the database is reached.
+        const category = await seed();
+
+        await addAttribute(await adminFor('SUPER_ADMIN'), category.id, overrides).expect(400);
+      });
+    });
+
+    describe('read', () => {
+      it('lists a category’s attributes ordered by position then key', async () => {
+        const category = await seed();
+        await seedAttribute(category.id, { key: 'zebra', position: 1 });
+        await seedAttribute(category.id, { key: 'apple', position: 1 });
+        await seedAttribute(category.id, { key: 'first', position: 0 });
+
+        const response = await request(app)
+          .get(attributesPath(category.id))
+          .set('Authorization', `Bearer ${await adminFor('SUPER_ADMIN')}`)
+          .expect(200);
+
+        const body = response.body as AttributeListBody;
+        expect(body.data.map((a) => a.key)).toEqual(['first', 'apple', 'zebra']);
+        // Deliberately not paginated — the list is small and only useful whole.
+        expect(body.meta).not.toHaveProperty('pagination');
+      });
+
+      it('returns 404 listing an unknown category rather than an empty array', async () => {
+        await request(app)
+          .get(attributesPath(ids.generate()))
+          .set('Authorization', `Bearer ${await adminFor('SUPER_ADMIN')}`)
+          .expect(404);
+      });
+
+      it('reads one attribute by id', async () => {
+        const category = await seed();
+        const attribute = await seedAttribute(category.id);
+
+        const response = await request(app)
+          .get(`${attributesPath(category.id)}/${attribute.id}`)
+          .set('Authorization', `Bearer ${await adminFor('SUPER_ADMIN')}`)
+          .expect(200);
+
+        expect((response.body as AttributeBody).data.id).toBe(attribute.id);
+      });
+
+      it('returns 404 for an attribute belonging to another category', async () => {
+        const owner = await seed();
+        const other = await seed();
+        const attribute = await seedAttribute(owner.id);
+
+        const response = await request(app)
+          .get(`${attributesPath(other.id)}/${attribute.id}`)
+          .set('Authorization', `Bearer ${await adminFor('SUPER_ADMIN')}`)
+          .expect(404);
+
+        expect((response.body as ErrorBody).error.code).toBe('CATEGORY_ATTRIBUTE_NOT_FOUND');
+      });
+
+      it('never exposes deletedAt', async () => {
+        const category = await seed();
+        await seedAttribute(category.id);
+
+        const response = await request(app)
+          .get(attributesPath(category.id))
+          .set('Authorization', `Bearer ${await adminFor('SUPER_ADMIN')}`)
+          .expect(200);
+
+        expect(JSON.stringify(response.body)).not.toContain('deletedAt');
+      });
+    });
+
+    describe('update', () => {
+      const patchAttribute = (
+        token: string,
+        categoryId: string,
+        attributeId: string,
+        body: Record<string, unknown>,
+      ): request.Test =>
+        request(app)
+          .patch(`${attributesPath(categoryId)}/${attributeId}`)
+          .set('Authorization', `Bearer ${token}`)
+          .send(body);
+
+      it('relabels, requires and repositions', async () => {
+        const category = await seed();
+        const attribute = await seedAttribute(category.id);
+
+        const response = await patchAttribute(
+          await adminFor('SUPER_ADMIN'),
+          category.id,
+          attribute.id,
+          { label: 'Renamed', isRequired: true, position: 4 },
+        ).expect(200);
+
+        const { data } = response.body as AttributeBody;
+        expect(data.label).toBe('Renamed');
+        expect(data.isRequired).toBe(true);
+        expect(data.position).toBe(4);
+        expect(data.key).toBe(attribute.key);
+      });
+
+      it('edits an ENUM’s options and can clear a NUMBER’s unit', async () => {
+        const category = await seed();
+        const enumAttr = await seedAttribute(category.id, { dataType: 'ENUM', options: ['a'] });
+        const numberAttr = await seedAttribute(category.id, { dataType: 'NUMBER', unit: 'kg' });
+        const token = await adminFor('SUPER_ADMIN');
+
+        const edited = await patchAttribute(token, category.id, enumAttr.id, {
+          options: ['a', 'b'],
+        }).expect(200);
+        expect((edited.body as AttributeBody).data.options).toEqual(['a', 'b']);
+
+        const cleared = await patchAttribute(token, category.id, numberAttr.id, {
+          unit: null,
+        }).expect(200);
+        expect((cleared.body as AttributeBody).data.unit).toBeNull();
+      });
+
+      it.each([
+        ['key', { key: 'other_key' }],
+        ['dataType', { dataType: 'NUMBER' }],
+        ['categoryId', { categoryId: 'x' }],
+      ])('returns 400 when the body carries %s', async (_label, body) => {
+        const category = await seed();
+        const attribute = await seedAttribute(category.id);
+
+        await patchAttribute(await adminFor('SUPER_ADMIN'), category.id, attribute.id, body).expect(
+          400,
+        );
+      });
+
+      it('returns 422 for a unit on a stored non-NUMBER', async () => {
+        // The schema cannot catch this — `dataType` is immutable and so is not
+        // on the wire. The aggregate checks it against the stored type.
+        const category = await seed();
+        const attribute = await seedAttribute(category.id, { dataType: 'STRING' });
+
+        const response = await patchAttribute(
+          await adminFor('SUPER_ADMIN'),
+          category.id,
+          attribute.id,
+          { unit: 'kg' },
+        ).expect(422);
+
+        expect((response.body as ErrorBody).error.code).toBe(
+          'INVALID_CATEGORY_ATTRIBUTE_OPERATION',
+        );
+      });
+
+      it('returns 422 for options on a stored non-ENUM, and for emptying an ENUM', async () => {
+        const category = await seed();
+        const stringAttr = await seedAttribute(category.id, { dataType: 'STRING' });
+        const enumAttr = await seedAttribute(category.id, { dataType: 'ENUM', options: ['a'] });
+        const token = await adminFor('SUPER_ADMIN');
+
+        await patchAttribute(token, category.id, stringAttr.id, { options: ['a'] }).expect(422);
+        await patchAttribute(token, category.id, enumAttr.id, { options: [] }).expect(422);
+      });
+
+      it('returns 404 for an unknown attribute', async () => {
+        const category = await seed();
+
+        await patchAttribute(await adminFor('SUPER_ADMIN'), category.id, ids.generate(), {
+          label: 'x',
+        }).expect(404);
+      });
+    });
+
+    describe('delete', () => {
+      const removeAttribute = (
+        token: string,
+        categoryId: string,
+        attributeId: string,
+      ): request.Test =>
+        request(app)
+          .delete(`${attributesPath(categoryId)}/${attributeId}`)
+          .set('Authorization', `Bearer ${token}`);
+
+      it('soft-deletes and hides it from every read', async () => {
+        const category = await seed();
+        const attribute = await seedAttribute(category.id);
+        const token = await adminFor('SUPER_ADMIN');
+
+        await removeAttribute(token, category.id, attribute.id).expect(200);
+
+        await request(app)
+          .get(`${attributesPath(category.id)}/${attribute.id}`)
+          .set('Authorization', `Bearer ${token}`)
+          .expect(404);
+        const row = await db.categoryAttribute.findUniqueOrThrow({ where: { id: attribute.id } });
+        expect(row.deletedAt).not.toBeNull();
+      });
+
+      it('frees the key for reuse', async () => {
+        const category = await seed();
+        const attribute = await seedAttribute(category.id);
+        const token = await adminFor('SUPER_ADMIN');
+
+        await removeAttribute(token, category.id, attribute.id).expect(200);
+
+        await addAttribute(token, category.id, { key: attribute.key }).expect(201);
+      });
+
+      it('returns 404 for an attribute belonging to another category', async () => {
+        const owner = await seed();
+        const other = await seed();
+        const attribute = await seedAttribute(owner.id);
+
+        await removeAttribute(await adminFor('SUPER_ADMIN'), other.id, attribute.id).expect(404);
+
+        const row = await db.categoryAttribute.findUniqueOrThrow({ where: { id: attribute.id } });
+        expect(row.deletedAt).toBeNull();
+      });
+    });
+
+    describe('category deletion cascade', () => {
+      it('takes the category’s attributes with it, in the same transaction', async () => {
+        const category = await seed();
+        const attribute = await seedAttribute(category.id);
+
+        await remove(await adminFor('SUPER_ADMIN'), category.id).expect(200);
+
+        const row = await db.categoryAttribute.findUniqueOrThrow({ where: { id: attribute.id } });
+        expect(row.deletedAt).not.toBeNull();
+      });
+
+      it('leaves attributes untouched when the delete is refused for children', async () => {
+        const root = await seed();
+        const attribute = await seedAttribute(root.id);
+        await seed(root.id);
+
+        await remove(await adminFor('SUPER_ADMIN'), root.id).expect(409);
+
+        const row = await db.categoryAttribute.findUniqueOrThrow({ where: { id: attribute.id } });
+        expect(row.deletedAt).toBeNull();
+      });
+
+      it('records how many attribute definitions went with it', async () => {
+        const category = await seed();
+        await seedAttribute(category.id);
+        await seedAttribute(category.id);
+
+        await remove(await adminFor('SUPER_ADMIN'), category.id).expect(200);
+
+        const row = await db.auditLog.findFirstOrThrow({
+          where: { entityId: category.id, action: CATALOGUE_AUDIT_ACTIONS.CATEGORY_DELETED },
+        });
+        expect(row.before).toMatchObject({ attributesRemoved: 2 });
+      });
+    });
+
+    describe('authorization', () => {
+      it('refuses an unauthenticated caller', async () => {
+        const category = await seed();
+
+        await request(app).get(attributesPath(category.id)).expect(401);
+      });
+
+      it('lets CATALOGUE_MODERATOR read', async () => {
+        const category = await seed();
+
+        await request(app)
+          .get(attributesPath(category.id))
+          .set('Authorization', `Bearer ${await adminFor('CATALOGUE_MODERATOR')}`)
+          .expect(200);
+      });
+
+      it('refuses CATALOGUE_MODERATOR on every write — READ_ONLY is not FULL', async () => {
+        const category = await seed();
+        const attribute = await seedAttribute(category.id);
+        const token = await adminFor('CATALOGUE_MODERATOR');
+        const detail = `${attributesPath(category.id)}/${attribute.id}`;
+
+        await addAttribute(token, category.id).expect(403);
+        await request(app)
+          .patch(detail)
+          .set('Authorization', `Bearer ${token}`)
+          .send({ label: 'x' })
+          .expect(403);
+        await request(app).delete(detail).set('Authorization', `Bearer ${token}`).expect(403);
+      });
+
+      it.each(['SUPPORT_AGENT', 'RISK_ANALYST'] as RoleName[])('refuses %s', async (role) => {
+        const category = await seed();
+
+        await request(app)
+          .get(attributesPath(category.id))
+          .set('Authorization', `Bearer ${await adminFor(role)}`)
+          .expect(403);
+      });
+
+      it('refuses a customer', async () => {
+        const category = await seed();
+
+        await request(app)
+          .get(attributesPath(category.id))
+          .set('Authorization', `Bearer ${await asCustomer()}`)
+          .expect(403);
+      });
+
+      it('lets FINANCE_ADMIN write', async () => {
+        const category = await seed();
+
+        await addAttribute(await adminFor('FINANCE_ADMIN'), category.id).expect(201);
+      });
+    });
+
+    describe('audit', () => {
+      const attributeActions = async (categoryId: string): Promise<string[]> =>
+        (
+          await db.auditLog.findMany({
+            where: { entityId: categoryId, entityType: 'Category' },
+            select: { action: true },
+            orderBy: { createdAt: 'asc' },
+          })
+        ).map((row) => row.action);
+
+      it('records add, update and remove against the owning category', async () => {
+        const category = await seed();
+        const attribute = await seedAttribute(category.id);
+        const token = await adminFor('SUPER_ADMIN');
+
+        await request(app)
+          .patch(`${attributesPath(category.id)}/${attribute.id}`)
+          .set('Authorization', `Bearer ${token}`)
+          .send({ label: 'Renamed' })
+          .expect(200);
+        await request(app)
+          .delete(`${attributesPath(category.id)}/${attribute.id}`)
+          .set('Authorization', `Bearer ${token}`)
+          .expect(200);
+
+        expect(await attributeActions(category.id)).toEqual([
+          CATALOGUE_AUDIT_ACTIONS.CATEGORY_CREATED,
+          CATALOGUE_AUDIT_ACTIONS.CATEGORY_ATTRIBUTE_ADDED,
+          CATALOGUE_AUDIT_ACTIONS.CATEGORY_ATTRIBUTE_UPDATED,
+          CATALOGUE_AUDIT_ACTIONS.CATEGORY_ATTRIBUTE_REMOVED,
+        ]);
+      });
+
+      it('records nothing for a read or a refused write', async () => {
+        const category = await seed();
+        const before = await attributeActions(category.id);
+
+        await request(app)
+          .get(attributesPath(category.id))
+          .set('Authorization', `Bearer ${await adminFor('SUPER_ADMIN')}`)
+          .expect(200);
+        await addAttribute(await adminFor('CATALOGUE_MODERATOR'), category.id).expect(403);
+
+        expect(await attributeActions(category.id)).toEqual(before);
+      });
     });
   });
 });

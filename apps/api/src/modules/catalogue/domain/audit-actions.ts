@@ -4,15 +4,11 @@
  * `identity/domain/audit-actions.ts` and `vendor/domain/audit-actions.ts`
  * established.
  *
- * Only the five taxonomy actions this chunk actually writes are listed.
- * Category *reads* — the admin list and detail, and the whole public tree —
+ * Only the actions this module actually writes are listed. Category and
+ * attribute *reads* — the admin list and detail, and the whole public tree —
  * are not here and will not be: SDD 18.4 logs admin actions, and reading a
  * taxonomy changes nothing. That is the same line KYC-6 drew for the review
  * queue, for the same reason.
- *
- * Attribute actions (S2-2b) are absent until the code that writes them exists;
- * an unused constant here would be a guess about a feature that does not exist
- * yet.
  */
 export const CATALOGUE_AUDIT_ACTIONS = {
   /** A new category was added to the taxonomy. */
@@ -23,8 +19,14 @@ export const CATALOGUE_AUDIT_ACTIONS = {
   CATEGORY_SETTINGS_UPDATED: 'catalogue.category.settings_updated',
   /** A category — and with it, its whole subtree — moved to a new parent. */
   CATEGORY_REPARENTED: 'catalogue.category.reparented',
-  /** A category was soft-deleted. */
+  /** A category was soft-deleted, taking its own attribute definitions with it. */
   CATEGORY_DELETED: 'catalogue.category.deleted',
+  /** An attribute definition was added to a category. */
+  CATEGORY_ATTRIBUTE_ADDED: 'catalogue.category.attribute_added',
+  /** An attribute definition's label, requiredness, position, unit or options changed. */
+  CATEGORY_ATTRIBUTE_UPDATED: 'catalogue.category.attribute_updated',
+  /** An attribute definition was soft-deleted on its own. */
+  CATEGORY_ATTRIBUTE_REMOVED: 'catalogue.category.attribute_removed',
 } as const;
 
 export type CatalogueAuditAction =
@@ -33,8 +35,10 @@ export type CatalogueAuditAction =
 /**
  * Stable domain entity names, not table names — see
  * `IDENTITY_AUDIT_ENTITY_TYPES` for why. Every action above is recorded
- * against the category itself: that is the entity whose configuration or
- * position in the tree the action changed.
+ * against the category itself, attribute actions included: the category is the
+ * entity whose configuration changed, and recording attributes against it
+ * keeps a category's whole configuration history reachable from one id. The
+ * attribute's own id and key travel in the payload.
  */
 export const CATALOGUE_AUDIT_ENTITY_TYPES = {
   CATEGORY: 'Category',

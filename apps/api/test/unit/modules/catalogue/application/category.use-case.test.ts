@@ -14,6 +14,7 @@ import {
   CategoryNotFoundError,
 } from '../../../../../src/modules/catalogue/domain/errors/catalogue-errors.js';
 import { Category } from '../../../../../src/modules/catalogue/domain/entities/category.entity.js';
+import type { CategoryAttributeRepository } from '../../../../../src/modules/catalogue/domain/repositories/category-attribute.repository.js';
 import type { CategoryRepository } from '../../../../../src/modules/catalogue/domain/repositories/category.repository.js';
 import { toCategoryId } from '../../../../../src/modules/catalogue/domain/value-objects/category-id.value-object.js';
 import { CategoryRiskLevel } from '../../../../../src/modules/catalogue/domain/value-objects/category-risk-level.value-object.js';
@@ -329,11 +330,29 @@ describe('ReparentCategoryUseCase', () => {
   });
 });
 
+const attributeRepo = (
+  overrides: Partial<CategoryAttributeRepository> = {},
+): CategoryAttributeRepository => {
+  const repository: CategoryAttributeRepository = {
+    withTransaction: () => repository,
+    create: vi.fn(),
+    update: vi.fn().mockResolvedValue(true),
+    findById: vi.fn().mockResolvedValue(null),
+    listByCategoryId: vi.fn().mockResolvedValue([]),
+    softDelete: vi.fn().mockResolvedValue(true),
+    softDeleteAllForCategory: vi.fn().mockResolvedValue(0),
+    ...overrides,
+  };
+  return repository;
+};
+
 describe('DeleteCategoryUseCase', () => {
   const build = (
     repository: CategoryRepository,
     auditWriter: AuditWriter = new RecordingAuditWriter(),
-  ): DeleteCategoryUseCase => new DeleteCategoryUseCase(deps(repository, auditWriter));
+    categoryAttributeRepository: CategoryAttributeRepository = attributeRepo(),
+  ): DeleteCategoryUseCase =>
+    new DeleteCategoryUseCase({ ...deps(repository, auditWriter), categoryAttributeRepository });
 
   it('soft-deletes an empty category and records it', async () => {
     const current = category();
@@ -367,6 +386,49 @@ describe('DeleteCategoryUseCase', () => {
     await expect(
       build(repo()).execute({ principal, categoryId: toCategoryId(ids.generate()) }),
     ).rejects.toBeInstanceOf(CategoryNotFoundError);
+  });
+
+  it('takes the category’s own attribute definitions with it, stamped at the same moment', async () => {
+    const current = category();
+    const attributes = attributeRepo({ softDeleteAllForCategory: vi.fn().mockResolvedValue(3) });
+
+    await build(
+      repo({ findById: vi.fn().mockResolvedValue(current) }),
+      undefined,
+      attributes,
+    ).execute({ principal, categoryId: current.id });
+
+    expect(attributes.softDeleteAllForCategory).toHaveBeenCalledWith(current.id, NOW);
+  });
+
+  it('leaves every attribute untouched when the delete is refused', async () => {
+    const current = category();
+    const attributes = attributeRepo();
+    const repository = repo({
+      findById: vi.fn().mockResolvedValue(current),
+      softDeleteIfEmpty: vi.fn().mockResolvedValue(false),
+    });
+
+    await expect(
+      build(repository, undefined, attributes).execute({ principal, categoryId: current.id }),
+    ).rejects.toBeInstanceOf(CategoryNotEmptyError);
+
+    // The conditional category delete is the arbiter; nothing after it runs.
+    expect(attributes.softDeleteAllForCategory).not.toHaveBeenCalled();
+  });
+
+  it('records how many attribute definitions went with it', async () => {
+    const current = category();
+    const auditWriter = new RecordingAuditWriter();
+    const attributes = attributeRepo({ softDeleteAllForCategory: vi.fn().mockResolvedValue(2) });
+
+    await build(
+      repo({ findById: vi.fn().mockResolvedValue(current) }),
+      auditWriter,
+      attributes,
+    ).execute({ principal, categoryId: current.id });
+
+    expect(auditWriter.entries[0]?.before).toMatchObject({ attributesRemoved: 2 });
   });
 });
 

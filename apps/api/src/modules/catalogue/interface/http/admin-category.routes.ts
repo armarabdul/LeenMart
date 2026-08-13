@@ -1,9 +1,11 @@
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
 import { z } from 'zod';
 import {
   adminCategoryListQuerySchema,
+  createCategoryAttributeRequestSchema,
   createCategoryRequestSchema,
   reparentCategoryRequestSchema,
+  updateCategoryAttributeRequestSchema,
   updateCategoryRequestSchema,
 } from '@leen-mart/contracts';
 import { asyncHandler } from '../../../../shared/interface/http/middleware/async-handler.js';
@@ -14,9 +16,14 @@ import {
 } from '../../../../shared/interface/http/middleware/authorize.js';
 import { validate } from '../../../../shared/interface/http/middleware/validate.js';
 import type { AccessTokenService, SessionDenylist } from '../../../identity/index.js';
+import type { AdminCategoryAttributeController } from './admin-category-attribute.controller.js';
 import type { AdminCategoryController } from './admin-category.controller.js';
 
 const categoryIdParamsSchema = z.object({ categoryId: z.string().uuid() }).strict();
+
+const attributeParamsSchema = z
+  .object({ categoryId: z.string().uuid(), attributeId: z.string().uuid() })
+  .strict();
 
 /**
  * Mounted at `/api/v1/admin/categories` — the admin surface (SDD 9.4).
@@ -43,17 +50,12 @@ const categoryIdParamsSchema = z.object({ categoryId: z.string().uuid() }).stric
  * The commission half of that permission's name is **not** implemented:
  * `commission_rules` belongs to the pricing-tax module, which does not exist.
  */
-export const createAdminCategoryRouter = (
+/** The six category routes, split out purely to keep the composition function under this file's line budget. */
+const registerCategoryRoutes = (
+  router: Router,
   controller: AdminCategoryController,
-  accessTokenService: AccessTokenService,
-  sessionDenylist: SessionDenylist,
-): Router => {
-  const router = Router();
-  const authenticated = [
-    authenticate(accessTokenService, sessionDenylist),
-    requirePermission('MANAGE_CATEGORIES_OR_COMMISSION'),
-  ];
-
+  authenticated: readonly RequestHandler[],
+): void => {
   router.get(
     '/',
     ...authenticated,
@@ -102,6 +104,73 @@ export const createAdminCategoryRouter = (
     validate({ params: categoryIdParamsSchema }),
     asyncHandler(controller.remove),
   );
+};
+
+/**
+ * Per-category attribute definitions (S2-2b), split out for the same reason
+ * as the category routes above. Mounted on the same router rather than a
+ * separate one: they are a sub-resource of a category, share its permission
+ * and its guards exactly, and a second router would mean a second place to
+ * keep that chain in step.
+ */
+const registerAttributeRoutes = (
+  router: Router,
+  attributes: AdminCategoryAttributeController,
+  authenticated: readonly RequestHandler[],
+): void => {
+  router.get(
+    '/:categoryId/attributes',
+    ...authenticated,
+    validate({ params: categoryIdParamsSchema }),
+    asyncHandler(attributes.list),
+  );
+
+  router.get(
+    '/:categoryId/attributes/:attributeId',
+    ...authenticated,
+    validate({ params: attributeParamsSchema }),
+    asyncHandler(attributes.get),
+  );
+
+  router.post(
+    '/:categoryId/attributes',
+    ...authenticated,
+    requireFullAccess,
+    validate({ params: categoryIdParamsSchema, body: createCategoryAttributeRequestSchema }),
+    asyncHandler(attributes.add),
+  );
+
+  router.patch(
+    '/:categoryId/attributes/:attributeId',
+    ...authenticated,
+    requireFullAccess,
+    validate({ params: attributeParamsSchema, body: updateCategoryAttributeRequestSchema }),
+    asyncHandler(attributes.update),
+  );
+
+  router.delete(
+    '/:categoryId/attributes/:attributeId',
+    ...authenticated,
+    requireFullAccess,
+    validate({ params: attributeParamsSchema }),
+    asyncHandler(attributes.remove),
+  );
+};
+
+export const createAdminCategoryRouter = (
+  controller: AdminCategoryController,
+  attributes: AdminCategoryAttributeController,
+  accessTokenService: AccessTokenService,
+  sessionDenylist: SessionDenylist,
+): Router => {
+  const router = Router();
+  const authenticated = [
+    authenticate(accessTokenService, sessionDenylist),
+    requirePermission('MANAGE_CATEGORIES_OR_COMMISSION'),
+  ];
+
+  registerCategoryRoutes(router, controller, authenticated);
+  registerAttributeRoutes(router, attributes, authenticated);
 
   return router;
 };

@@ -546,10 +546,64 @@ model Category {
   /// `Restrict`, not `Cascade`: rows are soft-deleted, so this key should
   /// never fire — and if a hard delete is ever attempted, the database
   /// refuses rather than silently orphaning a subtree.
-  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
-  children Category[] @relation("CategoryTree")
+  parent     Category?           @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children   Category[]          @relation("CategoryTree")
+  attributes CategoryAttribute[]
 
   @@index([parentId], map: "idx_categories_parent")
   @@index([path], type: Gin, map: "idx_categories_path")
   @@map("categories")
+}
+
+/// The closed attribute vocabulary (S2-2b). Four types, deliberately: anything
+/// richer becomes a schema language, and a schema language stored in the
+/// database is a validation engine nobody can review.
+enum CategoryAttributeType {
+  STRING
+  NUMBER
+  BOOLEAN
+  ENUM
+}
+
+/// Per-category product attribute *definitions* (SDD 5 module 4, FR-14).
+///
+/// Definitions only. The **values** a product supplies against these live as
+/// JSONB on the product (SDD 6.1: "JSONB ... only for genuinely open-shaped
+/// data: per-category product attributes"), and arrive with the product model
+/// in a later chunk. Nothing here anticipates that shape.
+///
+/// `key` and `data_type` are immutable once written. A key that can change is
+/// not a stable identifier for the values that will reference it, and a type
+/// that can change under stored values is a data-corruption path with no
+/// migration story.
+///
+/// `unit` and `options` are type-conditional, and the two CHECK constraints in
+/// this model's migration enforce that as an equivalence rather than a pair of
+/// implications: ENUM must carry options, and no other type may carry any.
+model CategoryAttribute {
+  id         String                @id @db.Uuid
+  categoryId String                @map("category_id") @db.Uuid
+  key        String                @db.VarChar(60)
+  label      String                @db.VarChar(120)
+  dataType   CategoryAttributeType @map("data_type")
+  isRequired Boolean               @default(false) @map("is_required")
+  /// Permitted for NUMBER only.
+  unit       String?               @db.VarChar(20)
+  /// Non-empty for ENUM, empty for every other type.
+  options    String[]              @db.VarChar(80)
+  /// A caller-supplied ordering hint. Ties are allowed; reads order by
+  /// `(position, key)` so the result is deterministic regardless.
+  position   Int                   @db.SmallInt
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  /// `Restrict` for the same reason `Category.parent` uses it: rows are
+  /// soft-deleted, so this key should never fire — and if a hard delete is
+  /// ever attempted, the database refuses rather than orphaning the row.
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@index([categoryId], map: "idx_category_attributes_category")
+  @@map("category_attributes")
 }

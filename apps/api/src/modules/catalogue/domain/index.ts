@@ -7,9 +7,12 @@ export * from './audit-actions.js';
 
 // entities
 export * from './entities/category.entity.js';
+export * from './entities/category-attribute.entity.js';
 
 // value objects
 export * from './value-objects/category-id.value-object.js';
+export * from './value-objects/category-attribute-id.value-object.js';
+export * from './value-objects/category-attribute-type.value-object.js';
 export * from './value-objects/category-risk-level.value-object.js';
 export * from './value-objects/category-slug.value-object.js';
 
@@ -18,3 +21,4 @@ export * from './errors/catalogue-errors.js';
 
 // repository interfaces
 export * from './repositories/category.repository.js';
+export * from './repositories/category-attribute.repository.js';

@@ -10,6 +10,7 @@ import {
   CategoryNotEmptyError,
   CategoryNotFoundError,
 } from '../../domain/errors/catalogue-errors.js';
+import type { CategoryAttributeRepository } from '../../domain/repositories/category-attribute.repository.js';
 import type { CategoryRepository } from '../../domain/repositories/category.repository.js';
 import type { CategoryId } from '../../domain/value-objects/category-id.value-object.js';
 
@@ -24,6 +25,7 @@ export interface DeleteCategoryResult {
 
 export interface DeleteCategoryDeps {
   readonly categoryRepository: CategoryRepository;
+  readonly categoryAttributeRepository: CategoryAttributeRepository;
   readonly transactionRunner: TransactionRunner;
   readonly auditWriter: AuditWriter;
   readonly clock: Clock;
@@ -46,12 +48,29 @@ export interface DeleteCategoryDeps {
  * The deleted category releases its slug and its sibling name — both unique
  * indexes are partial on `deleted_at IS NULL` — so the taxonomy can reuse a
  * name it once had rather than reserving it forever.
+ *
+ * **Its own attribute definitions go with it, in the same transaction.** They
+ * belong to the category rather than merely referencing it, so leaving them
+ * behind would strand definitions no surface could ever reach again. Children
+ * are the opposite case and still refuse the delete: a subcategory is its own
+ * thing, not part of this one.
+ *
+ * Ordering is deliberate. The conditional category delete runs first and is the
+ * arbiter — a 409 for a non-empty category therefore leaves every attribute
+ * untouched, because nothing after it runs.
  */
 export class DeleteCategoryUseCase {
   constructor(private readonly deps: DeleteCategoryDeps) {}
 
   async execute(input: DeleteCategoryInput): Promise<DeleteCategoryResult> {
-    const { categoryRepository, transactionRunner, auditWriter, clock, logger } = this.deps;
+    const {
+      categoryRepository,
+      categoryAttributeRepository,
+      transactionRunner,
+      auditWriter,
+      clock,
+      logger,
+    } = this.deps;
 
     return transactionRunner.run(async (scope) => {
       const repository = categoryRepository.withTransaction(scope);
@@ -61,10 +80,18 @@ export class DeleteCategoryUseCase {
         throw new CategoryNotFoundError();
       }
 
-      const deleted = existing.softDelete(clock.now());
+      const now = clock.now();
+      const deleted = existing.softDelete(now);
       if (!(await repository.softDeleteIfEmpty(deleted))) {
         throw new CategoryNotEmptyError();
       }
+
+      // Only the winner of the emptiness check reaches here, so a refused
+      // delete never touches an attribute. Same timestamp as the category, so
+      // the two agree on when they went.
+      const attributesRemoved = await categoryAttributeRepository
+        .withTransaction(scope)
+        .softDeleteAllForCategory(deleted.id, now);
 
       await auditWriter.withTransaction(scope).record({
         actorId: input.principal.userId,
@@ -72,10 +99,15 @@ export class DeleteCategoryUseCase {
         action: CATALOGUE_AUDIT_ACTIONS.CATEGORY_DELETED,
         entityType: CATALOGUE_AUDIT_ENTITY_TYPES.CATEGORY,
         entityId: toUuid(deleted.id),
-        before: { name: existing.name, slug: existing.slug, parentId: existing.parentId },
+        before: {
+          name: existing.name,
+          slug: existing.slug,
+          parentId: existing.parentId,
+          attributesRemoved,
+        },
       });
 
-      logger.info({ categoryId: deleted.id }, 'Category deleted');
+      logger.info({ categoryId: deleted.id, attributesRemoved }, 'Category deleted');
 
       return { category: deleted };
     });

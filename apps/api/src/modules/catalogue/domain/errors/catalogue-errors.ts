@@ -91,3 +91,57 @@ export class InvalidCategoryOperationError extends DomainRuleError {
     });
   }
 }
+
+/**
+ * No attribute exists with the requested id under the requested category.
+ *
+ * Mirrors `CategoryNotFoundError`, including why it draws no distinction
+ * between "never existed", "was deleted" and "belongs to a different
+ * category" — the same reasoning as `KycDocumentNotFoundError`, one level
+ * deeper: an id that names another category's attribute must read as absent,
+ * not as a hint that a valid id was supplied against the wrong parent.
+ */
+export class CategoryAttributeNotFoundError extends NotFoundError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This category attribute does not exist.', {
+      ...options,
+      code: 'CATEGORY_ATTRIBUTE_NOT_FOUND',
+    });
+  }
+}
+
+/**
+ * The category already defines a live attribute with this key.
+ *
+ * Arbitrated by `idx_category_attributes_key_unique`, not by a read-then-write
+ * check — the same "database decides who wins" pattern the rest of this module
+ * uses, because a pre-check still loses to a concurrent create.
+ *
+ * Scoped per category: two categories may both define `weight`, and both are
+ * legitimate.
+ */
+export class CategoryAttributeKeyConflictError extends ConflictError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This category already defines an attribute with that key.', {
+      ...options,
+      code: 'CATEGORY_ATTRIBUTE_KEY_CONFLICT',
+    });
+  }
+}
+
+/**
+ * An operation an attribute's own shape forbids — options on a non-ENUM, a
+ * unit on a non-NUMBER, a negative position, editing a deleted definition.
+ *
+ * Mirrors `InvalidCategoryOperationError` exactly, including the uniform
+ * message (SEC-15): what names the broken rule is `details[0]`.
+ */
+export class InvalidCategoryAttributeOperationError extends DomainRuleError {
+  constructor(operation: string, issue: string, options: AppErrorOptions = {}) {
+    super(
+      'INVALID_CATEGORY_ATTRIBUTE_OPERATION',
+      'This action is not permitted for this category attribute.',
+      { ...options, details: [{ field: operation, issue }] },
+    );
+  }
+}
