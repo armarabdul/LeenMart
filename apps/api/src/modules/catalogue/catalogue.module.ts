@@ -41,9 +41,14 @@ import { UpdateProductVariantUseCase } from './application/use-cases/update-prod
 import { GetProductVariantUseCase } from './application/use-cases/get-product-variant.use-case.js';
 import { ListProductVariantsUseCase } from './application/use-cases/list-product-variants.use-case.js';
 import { RemoveProductVariantUseCase } from './application/use-cases/remove-product-variant.use-case.js';
+import { SubmitProductForReviewUseCase } from './application/use-cases/submit-product-for-review.use-case.js';
+import { ListProductReviewQueueUseCase } from './application/use-cases/list-product-review-queue.use-case.js';
+import { GetProductReviewUseCase } from './application/use-cases/get-product-review.use-case.js';
+import { DecideProductUseCase } from './application/use-cases/decide-product.use-case.js';
 import { PrismaProductRepository } from './infrastructure/persistence/prisma-product.repository.js';
 import { PrismaProductVariantRepository } from './infrastructure/persistence/prisma-product-variant.repository.js';
 import { PrismaInventoryRepository } from './infrastructure/persistence/prisma-inventory.repository.js';
+import { PrismaProductReviewQuery } from './infrastructure/persistence/prisma-product-review-query.js';
 import type { InventoryRepository } from './domain/repositories/inventory.repository.js';
 import { GetInventoryUseCase } from './application/use-cases/get-inventory.use-case.js';
 import { SetInventoryUseCase } from './application/use-cases/set-inventory.use-case.js';
@@ -54,6 +59,8 @@ import {
 import { createVendorProductController } from './interface/http/vendor-product.controller.js';
 import { createVendorProductVariantController } from './interface/http/vendor-product-variant.controller.js';
 import { createVendorProductRouter } from './interface/http/vendor-product.routes.js';
+import { createAdminProductController } from './interface/http/admin-product.controller.js';
+import { createAdminProductRouter } from './interface/http/admin-product.routes.js';
 
 export interface CatalogueModuleDeps {
   /**
@@ -93,6 +100,8 @@ export interface CatalogueModule {
   readonly publicCategoryRouter: Router;
   /** Mounted at `/api/v1/vendor/products` — tenant-scoped, unlike the two above (S2-3b). */
   readonly vendorProductRouter: Router;
+  /** Mounted at `/api/v1/admin/products` — cross-tenant on `adminPrisma`, no tenant context (S2-5). */
+  readonly adminProductRouter: Router;
 }
 
 /** Split out purely to keep `createCatalogueModule` under this file's line budget. */
@@ -193,6 +202,10 @@ const buildVendorProductRouter = (params: {
       getProductUseCase: new GetProductUseCase({ productRepository }),
       listProductsUseCase: new ListProductsUseCase({ productRepository }),
       deleteProductUseCase: new DeleteProductUseCase(shared),
+      submitProductForReviewUseCase: new SubmitProductForReviewUseCase({
+        ...shared,
+        categoryRepository,
+      }),
     }),
     variants: createVendorProductVariantController({
       addProductVariantUseCase: new AddProductVariantUseCase({ ...shared, idGenerator }),
@@ -278,19 +291,78 @@ const buildAdminCategoryRouter = (params: {
 };
 
 /**
- * The catalogue module (SDD 5, module 4): taxonomy and vendor products.
+ * The admin product moderation surface (S2-5), built on `adminPrisma` —
+ * mirrors `buildAdminKycRouter` in `vendor.module.ts` exactly: the queue and
+ * detail reads use a dedicated cross-tenant query port
+ * (`PrismaProductReviewQuery`), and the decision runs through the same
+ * `ProductRepository` port the vendor-facing surface uses, just bound to the
+ * elevated credential and the admin transaction runner instead.
  *
- * Media, inventory, moderation and search are later chunks; nothing here
- * anticipates them.
+ * `Product` is in `TENANT_SCOPED_MODELS`, but `adminPrisma` is never wrapped
+ * by `withTenantBoundary` — the extension only guards the ordinary `prisma`
+ * client — so `PrismaProductRepository` built on it needs no tenant context,
+ * the same reason `PrismaVendorKycRepository` is reused for both the
+ * vendor-facing and admin paths in `vendor.module.ts`.
+ */
+const buildAdminProductRouter = (params: {
+  adminPrisma: PrismaClient;
+  accessTokenService: AccessTokenService;
+  sessionDenylist: SessionDenylist;
+  idGenerator: IdGenerator;
+  clock: Clock;
+  logger: Logger;
+}): Router => {
+  const { adminPrisma, idGenerator, clock, logger } = params;
+  const productReviewQuery = new PrismaProductReviewQuery(adminPrisma);
+  const productRepository = new PrismaProductRepository(adminPrisma);
+  // The admin runner, not `PrismaTransactionRunner`: that one opens a tenant
+  // transaction and refuses without a tenant context, which this router
+  // deliberately never establishes.
+  const transactionRunner = new AdminTransactionRunner(adminPrisma);
+  // Built on `adminPrisma` too, so the audit write joins the same transaction
+  // as the decision it records.
+  const auditWriter = new AmbientAuditWriter({
+    auditLogRepository: new PrismaAuditLogRepository(adminPrisma),
+    idGenerator,
+    clock,
+  });
+
+  return createAdminProductRouter(
+    createAdminProductController({
+      listProductReviewQueueUseCase: new ListProductReviewQueueUseCase({
+        productReviewQuery,
+        logger,
+      }),
+      getProductReviewUseCase: new GetProductReviewUseCase({ productReviewQuery, logger }),
+      decideProductUseCase: new DecideProductUseCase({
+        productRepository,
+        transactionRunner,
+        auditWriter,
+        clock,
+        logger,
+      }),
+    }),
+    params.accessTokenService,
+    params.sessionDenylist,
+  );
+};
+
+/**
+ * The catalogue module (SDD 5, module 4): taxonomy, vendor products and the
+ * moderation core (S2-5). Media and search are still later chunks; nothing
+ * here anticipates them.
  *
- * Three routers, and the credential each runs on is the whole security story.
+ * Four routers, and the credential each runs on is the whole security story.
  * `adminCategoryRouter` uses `adminPrisma` for the admin-owned taxonomy.
  * `publicCategoryRouter` (S2-2c) uses the ordinary `prisma` for the
  * unauthenticated public tree — same tables, same `CategoryRepository` port
  * and adapter class, different client, never a second implementation.
- * `vendorProductRouter` (S2-3b) uses that same ordinary `prisma`, but for
+ * `vendorProductRouter` (S2-3b/S2-5) uses that same ordinary `prisma`, but for
  * models that *are* tenant-scoped, so the client refuses a query issued
  * without a tenant context and RLS refuses one aimed at another vendor.
+ * `adminProductRouter` (S2-5) uses `adminPrisma` again, this time for the
+ * cross-tenant moderation queue and decision, the same split
+ * `adminKycRouter`/vendor-facing `router` draw in `vendor.module.ts`.
  */
 export const createCatalogueModule = (deps: CatalogueModuleDeps): CatalogueModule => {
   const {
@@ -333,5 +405,13 @@ export const createCatalogueModule = (deps: CatalogueModuleDeps): CatalogueModul
       buildPublicCategoryController(publicCategoryRepository),
     ),
     vendorProductRouter,
+    adminProductRouter: buildAdminProductRouter({
+      adminPrisma,
+      accessTokenService,
+      sessionDenylist,
+      idGenerator,
+      clock,
+      logger: moduleLogger,
+    }),
   };
 };

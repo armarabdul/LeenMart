@@ -1,13 +1,18 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import type { TransactionScope } from '@leen-mart/domain-kit';
 import { toVendorId } from '../../../identity/index.js';
-import { Product, type ProductAttributeValues } from '../../domain/entities/product.entity.js';
+import {
+  Product,
+  type ProductAttributeValues,
+  type ProductStatusName,
+} from '../../domain/entities/product.entity.js';
 import type {
   ProductPage,
   ProductRepository,
 } from '../../domain/repositories/product.repository.js';
 import { toCategoryId } from '../../domain/value-objects/category-id.value-object.js';
 import { toProductId, type ProductId } from '../../domain/value-objects/product-id.value-object.js';
+import { ProductRejectionReason } from '../../domain/value-objects/product-rejection-reason.value-object.js';
 
 interface ProductRow {
   readonly id: string;
@@ -20,6 +25,9 @@ interface ProductRow {
   readonly countryOfOrigin: string | null;
   readonly netQuantity: string | null;
   readonly attributeValues: Prisma.JsonValue;
+  readonly status: string;
+  readonly rejectionReason: string | null;
+  readonly rejectionNote: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly deletedAt: Date | null;
@@ -37,7 +45,11 @@ const toDomain = (row: ProductRow): Product =>
     countryOfOrigin: row.countryOfOrigin,
     netQuantity: row.netQuantity,
     attributeValues: (row.attributeValues ?? {}) as ProductAttributeValues,
-    status: 'DRAFT',
+    status: row.status as ProductStatusName,
+    rejectionReason: row.rejectionReason
+      ? ProductRejectionReason.fromName(row.rejectionReason)
+      : null,
+    rejectionNote: row.rejectionNote,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     deletedAt: row.deletedAt,
@@ -158,6 +170,47 @@ export class PrismaProductRepository implements ProductRepository {
     const result = await this.prisma.product.updateMany({
       where: { id, deletedAt: null },
       data: { updatedAt: now },
+    });
+    return result.count === 1;
+  }
+
+  /**
+   * The conditional `WHERE status IN ('DRAFT', 'REJECTED')` is the whole
+   * arbitration — never a read-then-write. Two concurrent submissions may
+   * both have loaded an eligible row; only the first `UPDATE` to reach
+   * PostgreSQL affects it, and the second's `updateMany` reports zero rows.
+   */
+  async submitForReviewIfEligible(product: Product): Promise<boolean> {
+    const result = await this.prisma.product.updateMany({
+      where: {
+        id: product.id,
+        deletedAt: null,
+        status: { in: ['DRAFT', 'REJECTED'] },
+      },
+      data: {
+        status: product.status,
+        rejectionReason: product.rejectionReason?.name ?? null,
+        rejectionNote: product.rejectionNote,
+        updatedAt: product.updatedAt,
+      },
+    });
+    return result.count === 1;
+  }
+
+  /**
+   * The conditional `WHERE status = 'PENDING_REVIEW'` is the arbitration for
+   * concurrent approve/reject decisions, the same "database decides who wins"
+   * pattern `submitForReviewIfEligible` uses one transition earlier.
+   */
+  async decideIfPendingReview(product: Product): Promise<boolean> {
+    const result = await this.prisma.product.updateMany({
+      where: { id: product.id, deletedAt: null, status: 'PENDING_REVIEW' },
+      data: {
+        status: product.status,
+        rejectionReason: product.rejectionReason?.name ?? null,
+        rejectionNote: product.rejectionNote,
+        updatedAt: product.updatedAt,
+      },
     });
     return result.count === 1;
   }

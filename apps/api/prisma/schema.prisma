@@ -612,14 +612,55 @@ model CategoryAttribute {
 
 /// The moderation lifecycle (SDD 15.2). Only `DRAFT` is reachable in S2-3a —
 /// no code transitions a product anywhere else yet. The remaining states
-/// (`PENDING_REVIEW`, `APPROVED`, `PUBLISHED`, `REJECTED`, `UNPUBLISHED`,
-/// `DELISTED`) are declared only when the moderation chunk writes the
-/// transitions that reach them; an enum member nothing can produce would be a
-/// guess about a feature that does not exist yet — the same reasoning S2-2b's
-/// audit-actions withheld attribute actions for until the code writing them
-/// existed.
+/// S2-5 adds the moderation core (SDD 15.2): `PENDING_REVIEW`, `APPROVED`,
+/// `REJECTED`. `PUBLISHED`, `UNPUBLISHED` and `DELISTED` are still withheld —
+/// those belong to the publish step and the media-gated "product publication
+/// is blocked while any of its media is not READY" rule (SDD 12.2), neither of
+/// which exists yet — the same reasoning that withheld this whole enum until
+/// S2-3a, applied again at the next boundary.
 enum ProductStatus {
   DRAFT
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
+/// Why a product was rejected (S2-5). SDD 15.2 requires "a structured reason
+/// code plus optional free text" but defines no vocabulary for it — this set
+/// is a project decision, kept deliberately small, mirroring
+/// `KycRejectionReason`'s "small closed rejection reason enum" precedent.
+///
+/// Every member is reachable by a human reviewer's judgement alone, with no
+/// automated engine behind it: S2-5 builds no NSFW classifier, price-anomaly
+/// detector or keyword-policy engine (SDD 15.2's automatic pre-screening list
+/// beyond mandatory-field completeness is explicitly out of scope), so there
+/// is no `NSFW_IMAGE` or `PRICE_ANOMALY_DETECTED` member — a reviewer's own
+/// look at the listing is the only thing that reaches any of these six.
+///
+///  * `INCOMPLETE_MANDATORY_FIELDS` — the one automated pre-screening check
+///    S2-5 actually implements (HSN/country of origin/net quantity, per the
+///    product's category `CategoryRequirements` — BR-15/BR-21); also
+///    reachable by a human reviewer noticing the same gap.
+///  * `POLICY_VIOLATION` — prohibited content or a category-policy breach
+///    (BR-18), judged by the reviewer rather than an automated keyword check.
+///  * `MISLEADING_LISTING` — the name, description or attributes misrepresent
+///    the product.
+///  * `DUPLICATE_LISTING` — this vendor (or another) already lists the same
+///    product, judged by the reviewer rather than an automated hash match.
+///  * `PRICING_ISSUE` — a price that is implausible for the category, judged
+///    by the reviewer rather than an automated anomaly score.
+///  * `OTHER` — the escape hatch. Unlike `KycRejectionReason.OTHER`, this
+///    member needs no special-cased "must carry an explanation" rule: SDD
+///    15.2 makes the free-text note optional for every reason alike, `OTHER`
+///    included, so there is nothing for one member to require that the
+///    others do not.
+enum ProductRejectionReason {
+  INCOMPLETE_MANDATORY_FIELDS
+  POLICY_VIOLATION
+  MISLEADING_LISTING
+  DUPLICATE_LISTING
+  PRICING_ISSUE
+  OTHER
 }
 
 /// The marketing entity (SDD 5 module 4, SDD 6.3 "Product ↔ Variant").
@@ -630,10 +671,11 @@ enum ProductStatus {
 /// satisfy on its own.
 ///
 /// `hsn_code`/`country_of_origin`/`net_quantity` are stored with basic
-/// length limits only (S2-3 D-2). Whether they are actually *required* for
-/// this product's category is a question for the product submission /
-/// moderation flow (SDD 15.2's pre-screening), which does not exist yet —
-/// enforcing it here would invent a rule ahead of the flow that owns it.
+/// length limits only (S2-3 D-2) — this table never checks them against the
+/// category's `requirements` flags. That check exists now, in
+/// `SubmitProductForReviewUseCase` (S2-5), at the moment a vendor asks to
+/// enter `PENDING_REVIEW` — not here, and not on every edit: a `DRAFT` may
+/// stay incomplete indefinitely, exactly as S2-3 D-2 anticipated.
 ///
 /// `attribute_values` is genuinely open-shaped per SDD 6.1's JSONB
 /// principle: keys are `category_attributes.key` under this product's
@@ -652,6 +694,16 @@ model Product {
   netQuantity     String?       @map("net_quantity") @db.VarChar(40)
   attributeValues Json          @default("{}") @map("attribute_values")
   status          ProductStatus @default(DRAFT)
+
+  /// `rejectionReason` is required while `status = REJECTED` and forbidden
+  /// otherwise; `rejectionNote` is optional even while `REJECTED` — SDD 15.2,
+  /// verbatim: "a structured reason code plus optional free text".
+  /// `chk_products_rejection_requires_reason_and_note` is the copy of both
+  /// rules that survives an application bug. Both are cleared on every fresh
+  /// `submitForReview` (S2-5): a resubmission is not still carrying the
+  /// verdict on the attempt before it.
+  rejectionReason ProductRejectionReason? @map("rejection_reason")
+  rejectionNote   String?                 @map("rejection_note")
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)

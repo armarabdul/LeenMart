@@ -258,7 +258,11 @@ describe('product/product_variant RLS isolation (S2-3a)', () => {
     });
   });
 
-  describe('leenmart_admin — read-only, and only that (S2-3 D-6: no admin write path)', () => {
+  describe('leenmart_admin — read across every vendor, write only what S2-5 needs', () => {
+    // S2-3 D-6 ("no admin write path") held through S2-3a/S2-4; S2-5 adds the
+    // one write this role needed, for the moderation decision
+    // (`products_admin_decide`). Insert and delete remain refused — the
+    // decision only ever changes a row that already exists.
     it('reads across every vendor', async () => {
       const rows = await admin.$queryRaw<{ count: bigint }[]>`
         SELECT count(*) AS count FROM products WHERE id IN (${productA}::uuid, ${productB}::uuid)`;
@@ -266,13 +270,18 @@ describe('product/product_variant RLS isolation (S2-3a)', () => {
       expect(Number(rows[0]?.count)).toBe(2);
     });
 
-    it('cannot update a product', async () => {
+    it('can update a product — the S2-5 moderation decision path', async () => {
       const affected = await admin.$executeRawUnsafe(
         `UPDATE products SET name = 'admin-write' WHERE id = $1::uuid`,
         productA,
       );
 
-      expect(affected).toBe(0);
+      expect(affected).toBe(1);
+      const updated = await owner.product.findUnique({ where: { id: productA } });
+      expect(updated?.name).toBe('admin-write');
+
+      // Restored so later tests in this file see the fixture unchanged.
+      await owner.product.update({ where: { id: productA }, data: { name: 'Vendor A product' } });
     });
 
     it('cannot insert a product', async () => {

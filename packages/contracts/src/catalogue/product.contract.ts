@@ -7,13 +7,27 @@ import {
 } from '../common/primitives.js';
 
 /**
- * The moderation lifecycle (SDD 15.2), as far as it exists.
+ * The moderation lifecycle (SDD 15.2), as far as S2-5 builds it.
  *
- * `DRAFT` alone, because that is the only state the domain can currently
- * reach — a wider enum here would publish states nothing can produce and
- * clients could not act on.
+ * `PUBLISHED`/`UNPUBLISHED`/`DELISTED` are still withheld — a wider enum here
+ * would publish states nothing can produce and clients could not act on, the
+ * same reasoning that withheld this whole enum until S2-3a.
  */
-export const productStatusSchema = z.enum(['DRAFT']);
+export const productStatusSchema = z.enum(['DRAFT', 'PENDING_REVIEW', 'APPROVED', 'REJECTED']);
+
+/**
+ * The closed rejection vocabulary (S2-5), mirroring the domain's
+ * `ProductRejectionReason`. See that value object for why each member exists
+ * and why there is no `NSFW_IMAGE`/`PRICE_ANOMALY_DETECTED`-style member.
+ */
+export const productRejectionReasonSchema = z.enum([
+  'INCOMPLETE_MANDATORY_FIELDS',
+  'POLICY_VIOLATION',
+  'MISLEADING_LISTING',
+  'DUPLICATE_LISTING',
+  'PRICING_ISSUE',
+  'OTHER',
+]);
 
 export const productNameSchema = z.string().trim().min(1).max(200);
 export const productBrandSchema = z.string().trim().min(1).max(120);
@@ -137,7 +151,15 @@ export const vendorProductVariantSchema = z
   })
   .strict();
 
-/** One product as its owning vendor sees it. `deletedAt` is absent by construction. */
+/**
+ * One product as its owning vendor sees it. `deletedAt` is absent by
+ * construction.
+ *
+ * `rejectionReason`/`rejectionNote` are `null` except while `status` is
+ * `REJECTED` (S2-5) — SDD 15.2's "delivered to the vendor by push/email" is a
+ * later notification concern; this is what a vendor reading their own
+ * product sees today.
+ */
 export const vendorProductSchema = z
   .object({
     id: uuidSchema,
@@ -150,6 +172,8 @@ export const vendorProductSchema = z
     netQuantity: z.string().nullable(),
     attributeValues: productAttributeValuesSchema,
     status: productStatusSchema,
+    rejectionReason: productRejectionReasonSchema.nullable(),
+    rejectionNote: z.string().nullable(),
     createdAt: isoDateTimeSchema,
     updatedAt: isoDateTimeSchema,
   })
@@ -169,6 +193,7 @@ export const vendorProductListResponseSchema = z.array(vendorProductSchema);
 export const vendorProductVariantListResponseSchema = z.array(vendorProductVariantSchema);
 
 export type ProductStatusDto = z.infer<typeof productStatusSchema>;
+export type ProductRejectionReasonDto = z.infer<typeof productRejectionReasonSchema>;
 export type CreateProductVariantRequest = z.infer<typeof createProductVariantRequestSchema>;
 export type CreateProductRequest = z.infer<typeof createProductRequestSchema>;
 export type UpdateProductRequest = z.infer<typeof updateProductRequestSchema>;

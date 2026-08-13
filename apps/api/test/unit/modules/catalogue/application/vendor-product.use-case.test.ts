@@ -113,6 +113,8 @@ const productRepo = (overrides: Partial<ProductRepository> = {}): ProductReposit
     listPage: vi.fn().mockResolvedValue({ items: [], nextCursor: null, hasMore: false }),
     softDelete: vi.fn().mockResolvedValue(true),
     lockForVariantChange: vi.fn().mockResolvedValue(true),
+    submitForReviewIfEligible: vi.fn().mockResolvedValue(true),
+    decideIfPendingReview: vi.fn().mockResolvedValue(true),
     ...overrides,
   };
   return repository;

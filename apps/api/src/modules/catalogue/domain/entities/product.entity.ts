@@ -2,22 +2,25 @@ import type { VendorId } from '../../../identity/index.js';
 import { InvalidProductOperationError } from '../errors/catalogue-errors.js';
 import type { CategoryId } from '../value-objects/category-id.value-object.js';
 import type { ProductId } from '../value-objects/product-id.value-object.js';
+import type { ProductRejectionReason } from '../value-objects/product-rejection-reason.value-object.js';
 
 const NAME_MAX_LENGTH = 200;
 const BRAND_MAX_LENGTH = 120;
 const HSN_CODE_MAX_LENGTH = 8;
 const COUNTRY_OF_ORIGIN_MAX_LENGTH = 2;
 const NET_QUANTITY_MAX_LENGTH = 40;
+const REJECTION_NOTE_MAX_LENGTH = 1000;
 
 /** Whatever a product's category attribute definitions allow (SDD 6.1's JSONB principle). */
 export type ProductAttributeValues = Readonly<Record<string, unknown>>;
 
 /**
- * The moderation lifecycle (SDD 15.2). Only `DRAFT` is reachable in S2-3a —
- * see `ProductStatus` in `schema.prisma` for why the remaining states are not
- * declared anywhere yet.
+ * The moderation lifecycle (SDD 15.2), as far as S2-5 builds it:
+ * `DRAFT ─► PENDING_REVIEW ─► APPROVED` and `PENDING_REVIEW ─► REJECTED ─►
+ * (edit, resubmit) ─► PENDING_REVIEW`. `PUBLISHED`/`UNPUBLISHED`/`DELISTED`
+ * are not declared — see `ProductStatus` in `schema.prisma` for why.
  */
-export type ProductStatusName = 'DRAFT';
+export type ProductStatusName = 'DRAFT' | 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED';
 
 export interface ProductProps {
   readonly id: ProductId;
@@ -31,6 +34,9 @@ export interface ProductProps {
   readonly netQuantity: string | null;
   readonly attributeValues: ProductAttributeValues;
   readonly status: ProductStatusName;
+  /** Set together, and only while `status` is `REJECTED` — see `reject()`. */
+  readonly rejectionReason: ProductRejectionReason | null;
+  readonly rejectionNote: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly deletedAt: Date | null;
@@ -120,6 +126,21 @@ const normalisedDetails = (props: {
  * creating both in one transaction (S2-3 D-7), not by this class holding a
  * variant collection it would then have no way to keep in sync with the
  * database.
+ *
+ * **The moderation transitions this class enforces (S2-5) are legality only.**
+ * `submitForReview`/`approve`/`reject` refuse a status their current state
+ * forbids, the same way `assertLive` already refuses an edit to a deleted
+ * product — but none of them is the arbiter of a race between two callers who
+ * both loaded a legal state. That arbitration is
+ * `ProductRepository.submitForReviewIfEligible`/`decideIfPendingReview`'s job,
+ * a conditional database write, mirroring `VendorKyc`'s
+ * `startReview`/`claimForReviewIfUnclaimed` split exactly.
+ *
+ * **No separate draft/published version.** SDD 15.2 draws one for an already
+ * *published* product ("a published version and a draft version are tracked
+ * separately so a pending edit never takes a live listing down") — S2-5 never
+ * reaches `PUBLISHED`, so there is nothing yet for a second version to
+ * protect. One row, one status.
  */
 export class Product {
   private constructor(private readonly props: ProductProps) {}
@@ -145,6 +166,8 @@ export class Product {
       description: props.description,
       attributeValues: props.attributeValues,
       status: 'DRAFT',
+      rejectionReason: null,
+      rejectionNote: null,
       createdAt: props.now,
       updatedAt: props.now,
       deletedAt: null,
@@ -197,6 +220,14 @@ export class Product {
 
   get status(): ProductStatusName {
     return this.props.status;
+  }
+
+  get rejectionReason(): ProductRejectionReason | null {
+    return this.props.rejectionReason;
+  }
+
+  get rejectionNote(): string | null {
+    return this.props.rejectionNote;
   }
 
   get createdAt(): Date {
@@ -256,6 +287,93 @@ export class Product {
   softDelete(now: Date): Product {
     this.assertLive('deletedAt');
     return new Product({ ...this.props, deletedAt: now, updatedAt: now });
+  }
+
+  /**
+   * A vendor asks for their product to be reviewed (S2-5). Reachable from
+   * `DRAFT` on a first attempt and from `REJECTED` on a resubmission — both
+   * are the same act, and SDD 15.2's diagram draws exactly those two arrows
+   * into `PENDING_REVIEW`.
+   *
+   * **Mandatory-field completeness (BR-15/BR-21) is not checked here.**
+   * Whether HSN/country of origin/net quantity are required is a question
+   * about this product's *category*, which this aggregate holds only an id
+   * for — `SubmitProductForReviewUseCase` reads the category and refuses the
+   * request before ever calling this method, the same division `S2-3 D-2`
+   * always intended.
+   *
+   * Clears any prior rejection: a fresh review cycle does not carry the
+   * verdict on the attempt before it.
+   */
+  submitForReview(now: Date): Product {
+    this.assertLive('submitForReview');
+    if (this.props.status !== 'DRAFT' && this.props.status !== 'REJECTED') {
+      throw new InvalidProductOperationError(
+        'submitForReview',
+        `A product in ${this.props.status} cannot be submitted for review.`,
+      );
+    }
+    return new Product({
+      ...this.props,
+      status: 'PENDING_REVIEW',
+      rejectionReason: null,
+      rejectionNote: null,
+      updatedAt: now,
+    });
+  }
+
+  /** An administrator approves the submission (SDD 15.2). Reachable only from `PENDING_REVIEW`. */
+  approve(now: Date): Product {
+    this.assertLive('approve');
+    this.assertPendingReview('approve');
+    return new Product({
+      ...this.props,
+      status: 'APPROVED',
+      rejectionReason: null,
+      rejectionNote: null,
+      updatedAt: now,
+    });
+  }
+
+  /**
+   * An administrator refuses the submission with a structured reason and
+   * **optional** free text (SDD 15.2, verbatim: "always carries a structured
+   * reason code plus optional free text"). Reachable only from
+   * `PENDING_REVIEW`.
+   *
+   * `reason` is required — the one thing SDD 15.2 does not make optional.
+   * `note` may be omitted (`null`); when supplied it is trimmed and must be
+   * non-blank and within `REJECTION_NOTE_MAX_LENGTH` — a caller that *chose*
+   * to write something is still held to the same shape rules as any other
+   * free-text field, but choosing to write nothing at all is legitimate.
+   */
+  reject(reason: ProductRejectionReason, note: string | null, now: Date): Product {
+    this.assertLive('reject');
+    this.assertPendingReview('reject');
+    const trimmed = note?.trim() ?? null;
+    if (trimmed === '') {
+      throw new InvalidProductOperationError(
+        'reject',
+        'A rejection note, if supplied, must not be blank.',
+      );
+    }
+    assertWithinLength('rejectionNote', trimmed, REJECTION_NOTE_MAX_LENGTH);
+    return new Product({
+      ...this.props,
+      status: 'REJECTED',
+      rejectionReason: reason,
+      rejectionNote: trimmed,
+      updatedAt: now,
+    });
+  }
+
+  private assertPendingReview(operation: string): void {
+    if (this.props.status !== 'PENDING_REVIEW') {
+      throw new InvalidProductOperationError(
+        operation,
+        `A product in ${this.props.status} cannot be decided; it must be in PENDING_REVIEW.`,
+      );
+    }
   }
 
   private assertLive(field: string): void {

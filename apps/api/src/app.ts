@@ -89,9 +89,12 @@ const mountBusinessModules = (
   // The public catalogue surface (SDD 9.4/9.5, S2-2c): unauthenticated, no
   // tenant context, cache-friendly reads of the same platform-owned taxonomy.
   app.use('/api/v1/catalogue', catalogueModule.publicCategoryRouter);
-  // The vendor-facing catalogue surface (SDD 9.4, S2-3b): authenticated and
-  // tenant-scoped, unlike the two routers above.
+  // The vendor-facing catalogue surface (SDD 9.4, S2-3b/S2-5): authenticated
+  // and tenant-scoped, unlike the three routers around it.
   app.use('/api/v1/vendor/products', catalogueModule.vendorProductRouter);
+  // The admin product moderation surface (SDD 9.4, S2-5): cross-tenant on the
+  // elevated credential, no tenant context — mirrors adminKycRouter above.
+  app.use('/api/v1/admin/products', catalogueModule.adminProductRouter);
 
   // Further business modules mount here as they are built.
 };

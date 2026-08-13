@@ -54,4 +54,32 @@ export interface ProductRepository {
    * transaction wait and then observe the first's committed result.
    */
   lockForVariantChange(id: ProductId, now: Date): Promise<boolean>;
+
+  /**
+   * Moves a product into `PENDING_REVIEW`, but only if it is still `DRAFT` or
+   * `REJECTED` (S2-5).
+   *
+   * The arbiter of concurrent submissions. `Product.submitForReview` already
+   * refuses the ordinary case where the *loaded* status forbids it; this
+   * conditional write is the race the aggregate cannot see — two callers may
+   * both have loaded an eligible row before either wrote, and only one
+   * `UPDATE ... WHERE status IN (...)` can affect it. `false` means someone
+   * else changed the status first, mirroring
+   * `VendorKycRepository.claimForReviewIfUnclaimed`'s "not an error here; the
+   * caller decides what to do about it."
+   */
+  submitForReviewIfEligible(product: Product): Promise<boolean>;
+
+  /**
+   * Records an administrator's decision, but only if the product is still
+   * `PENDING_REVIEW` (S2-5).
+   *
+   * The arbiter of concurrent approve/reject decisions — the same
+   * "database decides who wins" reasoning `VendorKycRepository.saveDecisionIfUndecided`
+   * gives, with `PENDING_REVIEW` playing the role `decided_at IS NULL` plays
+   * there. There is deliberately no claim step ahead of this (S2-5 D-5-D): a
+   * lost race here is the *only* thing that needs arbitrating, so the decision
+   * itself is where the conditional write lives.
+   */
+  decideIfPendingReview(product: Product): Promise<boolean>;
 }

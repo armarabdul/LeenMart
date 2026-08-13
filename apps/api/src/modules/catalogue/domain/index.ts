@@ -20,6 +20,7 @@ export * from './value-objects/category-risk-level.value-object.js';
 export * from './value-objects/category-slug.value-object.js';
 export * from './value-objects/product-id.value-object.js';
 export * from './value-objects/product-variant-id.value-object.js';
+export * from './value-objects/product-rejection-reason.value-object.js';
 export * from './value-objects/sku.value-object.js';
 
 // errors

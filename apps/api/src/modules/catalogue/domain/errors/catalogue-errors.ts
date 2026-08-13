@@ -297,3 +297,64 @@ export class InvalidInventoryOperationError extends DomainRuleError {
     });
   }
 }
+
+/**
+ * A submission for review (S2-5) is missing a field its category requires —
+ * SDD 15.2's mandatory-field completeness pre-screen (HSN, country of origin,
+ * net quantity — BR-15/BR-21), made category-conditional by
+ * `CategoryRequirements`.
+ *
+ * A `DomainRuleError` rather than a validation failure, mirroring
+ * `IncompleteKycSubmissionError`: every individual field was well-formed
+ * shape-wise when the product was created or edited, and it is only *this
+ * category's* requirements that make the gap a problem — a `DRAFT` may carry
+ * exactly the same gap indefinitely (S2-3 D-2).
+ */
+export class IncompleteProductSubmissionError extends DomainRuleError {
+  constructor(issue: string, options: AppErrorOptions = {}) {
+    super('INCOMPLETE_PRODUCT_SUBMISSION', 'This product is not ready for review.', {
+      ...options,
+      details: [{ field: 'mandatoryFields', issue }],
+    });
+  }
+}
+
+/**
+ * The product's moderation status changed underneath a vendor's submit
+ * attempt, between the read and the conditional write.
+ *
+ * Distinct from `InvalidProductOperationError`, which `Product.submitForReview`
+ * raises when the *loaded* status already forbids submission — this is the
+ * race the aggregate cannot see: two concurrent submissions both loaded an
+ * eligible `DRAFT`/`REJECTED` row, and only one conditional update could win.
+ * Mirrors `KycAlreadyDecidedError`'s reasoning exactly, one transition
+ * earlier.
+ */
+export class ProductSubmissionConflictError extends ConflictError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This product cannot be submitted for review right now. Please reload and try again.', {
+      ...options,
+      code: 'PRODUCT_SUBMISSION_CONFLICT',
+    });
+  }
+}
+
+/**
+ * The product was already decided by another administrator between this
+ * reviewer loading it and deciding it.
+ *
+ * Mirrors `KycAlreadyDecidedError` exactly: `Product.approve`/`Product.reject`
+ * catch the ordinary case where the loaded status already forbids a decision;
+ * this is the race they cannot see, arbitrated by
+ * `ProductRepository.decideIfPendingReview`'s conditional write. There is
+ * deliberately no claim step ahead of it (S2-5 D-5-D) — the decision itself is
+ * the only thing conditional writes need to arbitrate.
+ */
+export class ProductAlreadyDecidedError extends ConflictError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This product has already been decided.', {
+      ...options,
+      code: 'PRODUCT_ALREADY_DECIDED',
+    });
+  }
+}

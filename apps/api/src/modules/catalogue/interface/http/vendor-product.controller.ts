@@ -20,6 +20,7 @@ import type { CreateProductUseCase } from '../../application/use-cases/create-pr
 import type { DeleteProductUseCase } from '../../application/use-cases/delete-product.use-case.js';
 import type { GetProductUseCase } from '../../application/use-cases/get-product.use-case.js';
 import type { ListProductsUseCase } from '../../application/use-cases/list-products.use-case.js';
+import type { SubmitProductForReviewUseCase } from '../../application/use-cases/submit-product-for-review.use-case.js';
 import type { UpdateProductUseCase } from '../../application/use-cases/update-product.use-case.js';
 
 export interface VendorProductController {
@@ -28,6 +29,7 @@ export interface VendorProductController {
   readonly get: (req: Request, res: Response) => Promise<void>;
   readonly update: (req: Request, res: Response) => Promise<void>;
   readonly remove: (req: Request, res: Response) => Promise<void>;
+  readonly submit: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface VendorProductControllerDeps {
@@ -36,6 +38,7 @@ export interface VendorProductControllerDeps {
   readonly getProductUseCase: GetProductUseCase;
   readonly listProductsUseCase: ListProductsUseCase;
   readonly deleteProductUseCase: DeleteProductUseCase;
+  readonly submitProductForReviewUseCase: SubmitProductForReviewUseCase;
 }
 
 /**
@@ -55,6 +58,8 @@ export const toProductResponse = (product: Product): VendorProduct => ({
   netQuantity: product.netQuantity,
   attributeValues: product.attributeValues,
   status: product.status,
+  rejectionReason: (product.rejectionReason?.name as VendorProduct['rejectionReason']) ?? null,
+  rejectionNote: product.rejectionNote,
   createdAt: product.createdAt.toISOString(),
   updatedAt: product.updatedAt.toISOString(),
 });
@@ -203,10 +208,24 @@ const removeHandler =
     res.status(200).json({ data: toProductResponse(product), meta: { requestId: getRequestId() } });
   };
 
+const submitHandler =
+  (useCase: SubmitProductForReviewUseCase): VendorProductController['submit'] =>
+  async (req: Request, res: Response): Promise<void> => {
+    const { principal } = contextOf(req, 'POST /vendor/products/:productId/submit');
+    const { params } = validatedData<unknown, unknown, { productId: string }>(req);
+
+    const { product } = await useCase.execute({
+      principal,
+      productId: toProductId(params.productId),
+    });
+
+    res.status(200).json({ data: toProductResponse(product), meta: { requestId: getRequestId() } });
+  };
+
 /**
- * Thin HTTP adapter for the vendor product surface (S2-3b). Parses nothing
- * itself, decides nothing, translates no errors — `validate()` and the global
- * error handler own those (SDD 17.1).
+ * Thin HTTP adapter for the vendor product surface (S2-3b/S2-5). Parses
+ * nothing itself, decides nothing, translates no errors — `validate()` and
+ * the global error handler own those (SDD 17.1).
  */
 export const createVendorProductController = (
   deps: VendorProductControllerDeps,
@@ -216,4 +235,5 @@ export const createVendorProductController = (
   get: getHandler(deps.getProductUseCase),
   update: updateHandler(deps.updateProductUseCase),
   remove: removeHandler(deps.deleteProductUseCase),
+  submit: submitHandler(deps.submitProductForReviewUseCase),
 });

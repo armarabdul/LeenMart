@@ -626,6 +626,48 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     snapshot: snapshotInventory,
   },
 
+  // S2-5: DRAFT/REJECTED -> PENDING_REVIEW. Same tenant-owned reasoning as
+  // the routes above — the id is client-supplied and belongs to a specific
+  // vendor's product.
+  {
+    method: 'POST',
+    prefix: '/api/v1/vendor/products',
+    path: '/:productId/submit',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied product id and transitions its moderation status.',
+    actor: vendorActor,
+    seed: seedProduct,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).post(`/api/v1/vendor/products/${resourceId}/submit`), actor),
+    snapshot: snapshotProduct,
+  },
+
+  // --- admin product moderation: /api/v1/admin/products (S2-5) ---
+  // Cross-tenant by design, the same reasoning the admin KYC surface above
+  // gives: the review queue spans every vendor on the elevated credential,
+  // and asserting isolation here would assert a bug.
+  {
+    method: 'GET',
+    prefix: '/api/v1/admin/products',
+    path: '/submissions',
+    classification: 'ADMIN',
+    why: 'The moderation queue is cross-tenant by design (S2-5, SDD 15.2).',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/admin/products',
+    path: '/submissions/:productId',
+    classification: 'ADMIN',
+    why: 'Admin detail read across every vendor, on the elevated credential.',
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/admin/products',
+    path: '/submissions/:productId/decision',
+    classification: 'ADMIN',
+    why: 'Admin approve/reject decision across every vendor (S2-5, SDD 15.2).',
+  },
+
   // --- customer self-service: /api/v1/me ---
   {
     method: 'POST',

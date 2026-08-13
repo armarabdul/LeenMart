@@ -109,13 +109,14 @@ describe('Product mutation (S2-3b)', () => {
       expect(updated.status).toBe('DRAFT');
     });
 
-    it('offers no mutator for status at all', () => {
-      // The moderation flow that moves it does not exist yet, and a setter
-      // added "for later" is a setter something will call early.
+    it('updateDetails offers no generic status setter — status moves only through the named S2-5 transitions', () => {
+      // `submitForReview`/`approve`/`reject` exist (S2-5, tested in
+      // product-moderation.test.ts); what must never exist is a setter that
+      // could move `status` to an arbitrary value.
       const methods = Object.getOwnPropertyNames(Product.prototype);
       expect(methods).not.toContain('changeStatus');
+      expect(methods).not.toContain('setStatus');
       expect(methods).not.toContain('publish');
-      expect(methods).not.toContain('submit');
     });
   });
 

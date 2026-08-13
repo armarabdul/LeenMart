@@ -190,6 +190,16 @@ export const createVendorProductRouter = (deps: VendorProductRouterDeps): Router
     asyncHandler(controller.remove),
   );
 
+  // S2-5: DRAFT/REJECTED -> PENDING_REVIEW. Same permission and tenant
+  // scoping as every other route here — submitting is still an act on the
+  // caller's own product, not a new authority.
+  router.post(
+    '/:productId/submit',
+    ...scoped,
+    validate({ params: productParamsSchema }),
+    asyncHandler(controller.submit),
+  );
+
   mountVariantRoutes(router, variants, scoped);
   mountInventoryRoutes(router, inventory, authenticated);
 

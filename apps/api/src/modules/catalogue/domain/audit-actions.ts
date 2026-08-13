@@ -45,6 +45,12 @@ export const CATALOGUE_AUDIT_ACTIONS = {
   PRODUCT_VARIANT_REMOVED: 'catalogue.product.variant_removed',
   /** A vendor set the stock level on one of their variants. */
   PRODUCT_INVENTORY_UPDATED: 'catalogue.product.inventory_updated',
+  /** A vendor asked for one of their products to be reviewed (S2-5), first attempt or resubmission alike. */
+  PRODUCT_SUBMITTED_FOR_REVIEW: 'catalogue.product.submitted_for_review',
+  /** An administrator approved a pending product (S2-5, SDD 15.2). */
+  PRODUCT_APPROVED: 'catalogue.product.approved',
+  /** An administrator rejected a pending product with a reason and an optional note (S2-5, SDD 15.2). */
+  PRODUCT_REJECTED: 'catalogue.product.rejected',
 } as const;
 
 export type CatalogueAuditAction =

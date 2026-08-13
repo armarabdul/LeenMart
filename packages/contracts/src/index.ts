@@ -2,6 +2,7 @@ export * from './catalogue/category-attribute.contract.js';
 export * from './catalogue/category.contract.js';
 export * from './catalogue/inventory.contract.js';
 export * from './catalogue/product.contract.js';
+export * from './catalogue/product-review.contract.js';
 export * from './common/envelope.js';
 export * from './common/primitives.js';
 export * from './customer/address.contract.js';
