@@ -67,6 +67,7 @@ export const disposeIntegrationHarness = async (
   });
   const vendorIds = vendors.map((vendor) => vendor.id);
 
+  await db.inventory.deleteMany({ where: { vendorId: { in: vendorIds } } });
   await db.productVariant.deleteMany({ where: { vendorId: { in: vendorIds } } });
   await db.product.deleteMany({ where: { vendorId: { in: vendorIds } } });
   await db.vendorProfile.deleteMany({ where: { id: { in: vendorIds } } });

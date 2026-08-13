@@ -32,6 +32,7 @@ const TENANT_TABLES = [
   'kyc_documents',
   'products',
   'product_variants',
+  'inventory',
 ];
 
 interface SourceFile {

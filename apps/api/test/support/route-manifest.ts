@@ -199,6 +199,9 @@ const snapshotProduct = (ctx: RouteTestContext, resourceId: string): Promise<unk
 const snapshotVariant = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
   ctx.db.productVariant.findUnique({ where: { id: variantIdOf(resourceId) } });
 
+const snapshotInventory = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
+  ctx.db.inventory.findUnique({ where: { variantId: variantIdOf(resourceId) } });
+
 /**
  * Every route the application actually mounts, classified.
  *
@@ -588,6 +591,39 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     attempt: (ctx, actor, resourceId) =>
       authed(request(ctx.app).delete(`/api/v1/vendor/products/${variantPath(resourceId)}`), actor),
     snapshot: snapshotVariant,
+  },
+
+  // Per-variant stock (S2-4). TENANT_OWNED for the same reason the variant
+  // routes are: both ids come from the client, and a counter belonging to
+  // another vendor must read as absent rather than forbidden.
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendor/products',
+    path: '/:productId/variants/:variantId/inventory',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied variant id and reads its stock level.',
+    actor: vendorActor,
+    seed: seedVariant,
+    attempt: (ctx, actor, resourceId) =>
+      authed(
+        request(ctx.app).get(`/api/v1/vendor/products/${variantPath(resourceId)}/inventory`),
+        actor,
+      ),
+  },
+  {
+    method: 'PATCH',
+    prefix: '/api/v1/vendor/products',
+    path: '/:productId/variants/:variantId/inventory',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied variant id and writes its stock level.',
+    actor: vendorActor,
+    seed: seedVariant,
+    attempt: (ctx, actor, resourceId) =>
+      authed(
+        request(ctx.app).patch(`/api/v1/vendor/products/${variantPath(resourceId)}/inventory`),
+        actor,
+      ).send({ available: 999, version: 1 }),
+    snapshot: snapshotInventory,
   },
 
   // --- customer self-service: /api/v1/me ---

@@ -238,3 +238,62 @@ export class ProductLastVariantError extends ConflictError {
     });
   }
 }
+
+/**
+ * No inventory row exists for the requested variant, as far as this caller is
+ * concerned.
+ *
+ * Covers "the variant does not exist", "it belongs to another vendor" and
+ * "it hangs off a different product" identically — the same non-disclosure
+ * `ProductVariantNotFoundError` records, for the same reason.
+ *
+ * A variant that exists but has no counter is *not* one of the cases: every
+ * variant is created with one, in the same transaction (S2-4 D-E). Reaching
+ * this error that way would mean the invariant had already been broken.
+ */
+export class InventoryNotFoundError extends NotFoundError {
+  constructor(options: AppErrorOptions = {}) {
+    super('No inventory exists for this variant.', {
+      ...options,
+      code: 'INVENTORY_NOT_FOUND',
+    });
+  }
+}
+
+/**
+ * The stock level moved between the vendor reading it and writing it back.
+ *
+ * The `version` a `PATCH` carries is what makes this detectable: the
+ * conditional write matches on it, and a stale one affects zero rows. Without
+ * it two vendor staff editing the same variant would silently overwrite each
+ * other and the last writer would win — which for a stock figure means
+ * quietly wrong numbers rather than a visible failure.
+ *
+ * Distinct from `InventoryNotFoundError` on purpose: the row is real and the
+ * caller may reach it, so re-reading and retrying is the correct response.
+ */
+export class InventoryVersionConflictError extends ConflictError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This stock level was changed by someone else. Please reload and try again.', {
+      ...options,
+      code: 'INVENTORY_VERSION_CONFLICT',
+    });
+  }
+}
+
+/**
+ * A stock figure that is not a whole number of zero or more.
+ *
+ * Mirrors `InvalidProductOperationError`, including the uniform message
+ * (SEC-15): what names the broken rule is `details[0]`. The database says the
+ * same thing in `chk_inventory_available_non_negative`, which is the copy that
+ * survives an application bug (SDD 14.4).
+ */
+export class InvalidInventoryOperationError extends DomainRuleError {
+  constructor(operation: string, issue: string, options: AppErrorOptions = {}) {
+    super('INVALID_INVENTORY_OPERATION', 'This action is not permitted for this inventory.', {
+      ...options,
+      details: [{ field: operation, issue }],
+    });
+  }
+}

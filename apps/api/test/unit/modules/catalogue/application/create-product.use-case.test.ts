@@ -9,6 +9,7 @@ import { CategoryNotFoundError } from '../../../../../src/modules/catalogue/doma
 import { ProductVariantSkuConflictError } from '../../../../../src/modules/catalogue/domain/errors/catalogue-errors.js';
 import type { CategoryRepository } from '../../../../../src/modules/catalogue/domain/repositories/category.repository.js';
 import type { ProductRepository } from '../../../../../src/modules/catalogue/domain/repositories/product.repository.js';
+import type { InventoryRepository } from '../../../../../src/modules/catalogue/domain/repositories/inventory.repository.js';
 import type { ProductVariantRepository } from '../../../../../src/modules/catalogue/domain/repositories/product-variant.repository.js';
 import { toCategoryId } from '../../../../../src/modules/catalogue/domain/value-objects/category-id.value-object.js';
 import { toCategorySlug } from '../../../../../src/modules/catalogue/domain/value-objects/category-slug.value-object.js';
@@ -55,6 +56,19 @@ const productRepo = (overrides: Partial<ProductRepository> = {}): ProductReposit
     listPage: vi.fn().mockResolvedValue({ items: [], nextCursor: null, hasMore: false }),
     softDelete: vi.fn().mockResolvedValue(true),
     lockForVariantChange: vi.fn().mockResolvedValue(true),
+    ...overrides,
+  };
+  return repository;
+};
+
+const inventoryRepo = (overrides: Partial<InventoryRepository> = {}): InventoryRepository => {
+  const repository: InventoryRepository = {
+    withTransaction: () => repository,
+    create: vi.fn(),
+    findByProductAndVariant: vi.fn().mockResolvedValue(null),
+    setIfVersionMatches: vi.fn().mockResolvedValue(true),
+    deleteForVariants: vi.fn().mockResolvedValue(0),
+    deleteForProduct: vi.fn().mockResolvedValue(0),
     ...overrides,
   };
   return repository;
@@ -130,6 +144,7 @@ const validInput = {
 interface DepsOverrides {
   productRepository?: ProductRepository;
   productVariantRepository?: ProductVariantRepository;
+  inventoryRepository?: InventoryRepository;
   categoryRepository?: CategoryRepository;
   transactionRunner?: TransactionRunner;
   auditWriter?: AuditWriter;
@@ -140,6 +155,7 @@ const deps = (
 ): {
   productRepository: ProductRepository;
   productVariantRepository: ProductVariantRepository;
+  inventoryRepository: InventoryRepository;
   categoryRepository: CategoryRepository;
   transactionRunner: TransactionRunner;
   auditWriter: AuditWriter;
@@ -149,6 +165,7 @@ const deps = (
 } => ({
   productRepository: overrides.productRepository ?? productRepo(),
   productVariantRepository: overrides.productVariantRepository ?? variantRepo(),
+  inventoryRepository: overrides.inventoryRepository ?? inventoryRepo(),
   categoryRepository: overrides.categoryRepository ?? categoryRepo(),
   transactionRunner: overrides.transactionRunner ?? runner(),
   auditWriter: overrides.auditWriter ?? new RecordingAuditWriter(),

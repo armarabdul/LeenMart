@@ -11,6 +11,7 @@ import {
   ProductNotFoundError,
   ProductVariantNotFoundError,
 } from '../../domain/errors/catalogue-errors.js';
+import type { InventoryRepository } from '../../domain/repositories/inventory.repository.js';
 import type { ProductRepository } from '../../domain/repositories/product.repository.js';
 import type { ProductVariantRepository } from '../../domain/repositories/product-variant.repository.js';
 import type { ProductId } from '../../domain/value-objects/product-id.value-object.js';
@@ -29,6 +30,8 @@ export interface RemoveProductVariantResult {
 export interface RemoveProductVariantDeps {
   readonly productRepository: ProductRepository;
   readonly productVariantRepository: ProductVariantRepository;
+  /** The counter goes with the variant, in this same transaction. */
+  readonly inventoryRepository: InventoryRepository;
   readonly transactionRunner: TransactionRunner;
   readonly auditWriter: AuditWriter;
   readonly clock: Clock;
@@ -62,6 +65,7 @@ export class RemoveProductVariantUseCase {
     const {
       productRepository,
       productVariantRepository,
+      inventoryRepository,
       transactionRunner,
       auditWriter,
       clock,
@@ -93,6 +97,10 @@ export class RemoveProductVariantUseCase {
       if (!(await variants.softDelete(deleted))) {
         throw new ProductVariantNotFoundError();
       }
+
+      // Only the winner of the conditional soft-delete reaches here, so a
+      // refused removal never strands or orphans a counter.
+      await inventoryRepository.withTransaction(scope).deleteForVariants([deleted.id]);
 
       await auditWriter.withTransaction(scope).record({
         actorId: input.principal.userId,

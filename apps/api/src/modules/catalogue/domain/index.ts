@@ -10,6 +10,7 @@ export * from './entities/category.entity.js';
 export * from './entities/category-attribute.entity.js';
 export * from './entities/product.entity.js';
 export * from './entities/product-variant.entity.js';
+export * from './entities/inventory.entity.js';
 
 // value objects
 export * from './value-objects/category-id.value-object.js';
@@ -29,3 +30,4 @@ export * from './repositories/category.repository.js';
 export * from './repositories/category-attribute.repository.js';
 export * from './repositories/product.repository.js';
 export * from './repositories/product-variant.repository.js';
+export * from './repositories/inventory.repository.js';

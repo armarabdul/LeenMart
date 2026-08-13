@@ -235,13 +235,15 @@ describe('database role separation', () => {
     it('enables RLS only on the tenant tables', async () => {
       // The role separation above is what gives these policies teeth; asserted
       // here too so a change to either half is caught from both sides.
-      // `products`/`product_variants` joined this list in S2-3a.
+      // `products`/`product_variants` joined this list in S2-3a; `inventory`
+      // in S2-4.
       const rows = await owner.$queryRawUnsafe<{ tablename: string }[]>(
         'SELECT tablename FROM pg_tables WHERE schemaname = $1 AND rowsecurity ORDER BY tablename',
         'public',
       );
 
       expect(rows.map((row) => row.tablename)).toEqual([
+        'inventory',
         'kyc_documents',
         'product_variants',
         'products',

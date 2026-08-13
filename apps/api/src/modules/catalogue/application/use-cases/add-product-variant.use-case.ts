@@ -12,9 +12,11 @@ import {
   CATALOGUE_AUDIT_ACTIONS,
   CATALOGUE_AUDIT_ENTITY_TYPES,
 } from '../../domain/audit-actions.js';
+import { Inventory } from '../../domain/entities/inventory.entity.js';
 import { ProductVariant } from '../../domain/entities/product-variant.entity.js';
 import { ProductNotFoundError } from '../../domain/errors/catalogue-errors.js';
 import type { ProductRepository } from '../../domain/repositories/product.repository.js';
+import type { InventoryRepository } from '../../domain/repositories/inventory.repository.js';
 import type { ProductVariantRepository } from '../../domain/repositories/product-variant.repository.js';
 import type { ProductId } from '../../domain/value-objects/product-id.value-object.js';
 import { toProductVariantId } from '../../domain/value-objects/product-variant-id.value-object.js';
@@ -36,6 +38,8 @@ export interface AddProductVariantResult {
 export interface AddProductVariantDeps {
   readonly productRepository: ProductRepository;
   readonly productVariantRepository: ProductVariantRepository;
+  /** A variant is never created without its counter (S2-4 D-E). */
+  readonly inventoryRepository: InventoryRepository;
   readonly transactionRunner: TransactionRunner;
   readonly auditWriter: AuditWriter;
   readonly idGenerator: IdGenerator;
@@ -67,6 +71,7 @@ export class AddProductVariantUseCase {
     const {
       productRepository,
       productVariantRepository,
+      inventoryRepository,
       transactionRunner,
       auditWriter,
       idGenerator,
@@ -104,6 +109,10 @@ export class AddProductVariantUseCase {
       });
 
       await productVariantRepository.withTransaction(scope).create(variant);
+      // Same transaction: if this fails, the variant never happened either.
+      await inventoryRepository
+        .withTransaction(scope)
+        .create(Inventory.initial({ variantId: variant.id, vendorId: variant.vendorId, now }));
 
       await auditWriter.withTransaction(scope).record({
         actorId: input.principal.userId,

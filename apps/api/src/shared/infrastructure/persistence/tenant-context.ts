@@ -27,6 +27,7 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'KycDocument',
   'Product',
   'ProductVariant',
+  'Inventory',
 ]);
 
 /**

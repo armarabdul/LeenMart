@@ -4,6 +4,7 @@ import {
   addProductVariantRequestSchema,
   createProductRequestSchema,
   updateProductRequestSchema,
+  setInventoryRequestSchema,
   updateProductVariantRequestSchema,
   vendorProductListQuerySchema,
 } from '@leen-mart/contracts';
@@ -18,6 +19,7 @@ import { validate } from '../../../../shared/interface/http/middleware/validate.
 import type { AccessTokenService, SessionDenylist } from '../../../identity/index.js';
 import type { VendorProductController } from './vendor-product.controller.js';
 import type { VendorProductVariantController } from './vendor-product-variant.controller.js';
+import type { VendorInventoryController } from './vendor-inventory.controller.js';
 
 const productParamsSchema = z.object({ productId: z.string().uuid() }).strict();
 
@@ -54,10 +56,41 @@ const variantParamsSchema = z
 export interface VendorProductRouterDeps {
   readonly controller: VendorProductController;
   readonly variants: VendorProductVariantController;
+  readonly inventory: VendorInventoryController;
   readonly accessTokenService: AccessTokenService;
   readonly sessionDenylist: SessionDenylist;
   readonly resolveVendorTenant: VendorTenantResolver;
 }
+
+/**
+ * The two per-variant stock routes (S2-4).
+ *
+ * `MANAGE_INVENTORY` rather than `CREATE_OR_EDIT_PRODUCT`: SDD 8.2 makes them
+ * separate rows, and a vendor staff member who may adjust stock is not
+ * necessarily one who may rewrite a listing. Same `OWN` semantics, so the
+ * tenant scoping is again what enforces it and there is no `requireFullAccess`.
+ */
+const mountInventoryRoutes = (
+  router: Router,
+  inventory: VendorInventoryController,
+  authenticated: RequestHandler[],
+): void => {
+  const scoped = [...authenticated, requirePermission('MANAGE_INVENTORY')];
+
+  router.get(
+    '/:productId/variants/:variantId/inventory',
+    ...scoped,
+    validate({ params: variantParamsSchema }),
+    asyncHandler(inventory.get),
+  );
+
+  router.patch(
+    '/:productId/variants/:variantId/inventory',
+    ...scoped,
+    validate({ params: variantParamsSchema, body: setInventoryRequestSchema }),
+    asyncHandler(inventory.set),
+  );
+};
 
 /** The five variant routes, split out purely to keep each function within its line budget. */
 const mountVariantRoutes = (
@@ -105,13 +138,22 @@ const mountVariantRoutes = (
 };
 
 export const createVendorProductRouter = (deps: VendorProductRouterDeps): Router => {
-  const { controller, variants, accessTokenService, sessionDenylist, resolveVendorTenant } = deps;
+  const {
+    controller,
+    variants,
+    inventory,
+    accessTokenService,
+    sessionDenylist,
+    resolveVendorTenant,
+  } = deps;
   const router = Router();
-  const scoped = [
+  // `authenticate` then `tenantContext` is shared by every route here; the
+  // permission differs, so it is applied per group rather than once.
+  const authenticated = [
     authenticate(accessTokenService, sessionDenylist),
     tenantContext(resolveVendorTenant),
-    requirePermission('CREATE_OR_EDIT_PRODUCT'),
   ];
+  const scoped = [...authenticated, requirePermission('CREATE_OR_EDIT_PRODUCT')];
 
   router.post(
     '/',
@@ -149,6 +191,7 @@ export const createVendorProductRouter = (deps: VendorProductRouterDeps): Router
   );
 
   mountVariantRoutes(router, variants, scoped);
+  mountInventoryRoutes(router, inventory, authenticated);
 
   return router;
 };

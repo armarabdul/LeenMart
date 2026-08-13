@@ -7,6 +7,7 @@ import {
 } from '../../domain/audit-actions.js';
 import type { Product } from '../../domain/entities/product.entity.js';
 import { ProductNotFoundError } from '../../domain/errors/catalogue-errors.js';
+import type { InventoryRepository } from '../../domain/repositories/inventory.repository.js';
 import type { ProductRepository } from '../../domain/repositories/product.repository.js';
 import type { ProductVariantRepository } from '../../domain/repositories/product-variant.repository.js';
 import type { ProductId } from '../../domain/value-objects/product-id.value-object.js';
@@ -24,6 +25,8 @@ export interface DeleteProductResult {
 export interface DeleteProductDeps {
   readonly productRepository: ProductRepository;
   readonly productVariantRepository: ProductVariantRepository;
+  /** Counters are removed outright with their variants — they carry no `deleted_at`. */
+  readonly inventoryRepository: InventoryRepository;
   readonly transactionRunner: TransactionRunner;
   readonly auditWriter: AuditWriter;
   readonly clock: Clock;
@@ -53,6 +56,7 @@ export class DeleteProductUseCase {
     const {
       productRepository,
       productVariantRepository,
+      inventoryRepository,
       transactionRunner,
       auditWriter,
       clock,
@@ -79,6 +83,11 @@ export class DeleteProductUseCase {
       const variantsRemoved = await productVariantRepository
         .withTransaction(scope)
         .softDeleteAllForProduct(deleted.id, now);
+
+      // Genuinely deleted, not soft-deleted: a counter belongs to its variant
+      // rather than having a lifecycle of its own, and leaving one behind
+      // would strand a row nothing could ever reach again.
+      await inventoryRepository.withTransaction(scope).deleteForProduct(deleted.id);
 
       await auditWriter.withTransaction(scope).record({
         actorId: input.principal.userId,

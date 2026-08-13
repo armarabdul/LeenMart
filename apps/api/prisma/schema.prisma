@@ -704,11 +704,69 @@ model ProductVariant {
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
 
   /// The composite FK: both halves must match the same `Product` row.
-  product Product @relation(fields: [productId, vendorId], references: [id, vendorId], onDelete: Restrict)
+  product   Product    @relation(fields: [productId, vendorId], references: [id, vendorId], onDelete: Restrict)
+  inventory Inventory?
 
   /// SDD 6.4's own indexing table: a vendor's own SKU must be unique to
   /// them, never globally — two different vendors may both use `SKU-001`.
   @@unique([vendorId, sku], map: "uq_product_variants_vendor_sku")
+  /// The composite-foreign-key target `Inventory` pins its own denormalised
+  /// `vendor_id` against — the same technique `uq_products_id_vendor` exists
+  /// for one level up, so the database itself refuses an inventory row whose
+  /// vendor does not match its variant's. Additive: `id` is already unique,
+  /// so this constrains nothing that was previously allowed.
+  @@unique([id, vendorId], map: "uq_product_variants_id_vendor")
   @@index([productId], map: "idx_product_variants_product")
   @@map("product_variants")
+}
+
+/// Per-variant stock (SDD 6.3 "Stock", SDD 6.4, FR-12).
+///
+/// A separate row per variant rather than columns on `product_variants`,
+/// exactly as SDD 6.3 prescribes: "Isolates the hot row from the wide product
+/// row; makes the atomic decrement cheap." The primary key is `variant_id`
+/// alone — SDD 6.4's "single-row lookup for the hot decrement path".
+///
+/// `vendor_id` is denormalised and pinned by the composite foreign key below,
+/// the same technique `product_variants` uses against `products`. It is what
+/// lets the RLS policy be a column comparison rather than a subquery — which
+/// matters more here than anywhere else, because this is the row every
+/// checkout in the system will contend on.
+///
+/// **Two `CHECK` constraints, and they are the point.** SDD 14.4 is explicit
+/// that the conditional decrement is "Backed by `CHECK (… >= 0)`, so the
+/// database itself makes overselling impossible regardless of application
+/// bugs." `reserved` carries the symmetric constraint.
+///
+/// `version` exists for optimistic concurrency on the *vendor-facing* set
+/// (S2-4): a stale `PATCH` affects zero rows and is refused. It is
+/// deliberately **not** what the Stage 3 checkout decrement will use — that is
+/// SDD 14.4's single atomic conditional `UPDATE … WHERE available >= :qty`,
+/// which needs no version at all.
+///
+/// No `deleted_at`: this is a counter belonging to a variant, not a
+/// user-visible entity of its own. It is created with its variant and removed
+/// with it, in the same transaction.
+model Inventory {
+  variantId String @id @map("variant_id") @db.Uuid
+  vendorId  String @map("vendor_id") @db.Uuid
+  available Int    @default(0)
+  reserved  Int    @default(0)
+  version   Int    @default(1)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  /// `Restrict`, matching every other catalogue foreign key: a variant with a
+  /// live inventory row must not vanish out from under it. The use cases
+  /// remove the counter in the same transaction as the variant instead.
+  variant ProductVariant @relation(fields: [variantId, vendorId], references: [id, vendorId], onDelete: Restrict)
+
+  /// Required by Prisma to express the one-to-one above as a composite
+  /// relation. Logically redundant — `variant_id` is already the primary key,
+  /// so the pair is unique by construction — but it is what lets the foreign
+  /// key pin `vendor_id` to the variant's own.
+  @@unique([variantId, vendorId], map: "uq_inventory_variant_vendor")
+  @@index([vendorId], map: "idx_inventory_vendor")
+  @@map("inventory")
 }

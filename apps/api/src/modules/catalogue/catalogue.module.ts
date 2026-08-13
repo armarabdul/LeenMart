@@ -1,7 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
 import type { Router } from 'express';
-import type { Clock, IdGenerator, Logger } from '@leen-mart/domain-kit';
-import { AmbientAuditWriter } from '../audit/index.js';
+import type { Clock, IdGenerator, Logger, TransactionRunner } from '@leen-mart/domain-kit';
+import { AmbientAuditWriter, type AuditWriter } from '../audit/index.js';
 import { PrismaAuditLogRepository } from '../audit/infrastructure/persistence/prisma-audit-log.repository.js';
 import type { AccessTokenService, SessionDenylist } from '../identity/index.js';
 import { AdminTransactionRunner } from '../../shared/infrastructure/persistence/tenant-prisma.js';
@@ -43,6 +43,14 @@ import { ListProductVariantsUseCase } from './application/use-cases/list-product
 import { RemoveProductVariantUseCase } from './application/use-cases/remove-product-variant.use-case.js';
 import { PrismaProductRepository } from './infrastructure/persistence/prisma-product.repository.js';
 import { PrismaProductVariantRepository } from './infrastructure/persistence/prisma-product-variant.repository.js';
+import { PrismaInventoryRepository } from './infrastructure/persistence/prisma-inventory.repository.js';
+import type { InventoryRepository } from './domain/repositories/inventory.repository.js';
+import { GetInventoryUseCase } from './application/use-cases/get-inventory.use-case.js';
+import { SetInventoryUseCase } from './application/use-cases/set-inventory.use-case.js';
+import {
+  createVendorInventoryController,
+  type VendorInventoryController,
+} from './interface/http/vendor-inventory.controller.js';
 import { createVendorProductController } from './interface/http/vendor-product.controller.js';
 import { createVendorProductVariantController } from './interface/http/vendor-product-variant.controller.js';
 import { createVendorProductRouter } from './interface/http/vendor-product.routes.js';
@@ -110,6 +118,54 @@ const buildPublicCategoryController = (
  * runner are built on that same client so an audit row joins the very
  * transaction the product write is in.
  */
+/** The two stock-route use cases, split out for the same line-budget reason as the builder below. */
+const buildVendorInventoryController = (params: {
+  inventoryRepository: InventoryRepository;
+  transactionRunner: TransactionRunner;
+  auditWriter: AuditWriter;
+  clock: Clock;
+  logger: Logger;
+}): VendorInventoryController =>
+  createVendorInventoryController({
+    getInventoryUseCase: new GetInventoryUseCase({
+      inventoryRepository: params.inventoryRepository,
+    }),
+    setInventoryUseCase: new SetInventoryUseCase(params),
+  });
+
+interface VendorProductShared {
+  readonly productRepository: PrismaProductRepository;
+  readonly productVariantRepository: PrismaProductVariantRepository;
+  readonly inventoryRepository: PrismaInventoryRepository;
+  readonly transactionRunner: PrismaTransactionRunner;
+  readonly auditWriter: AmbientAuditWriter;
+  readonly clock: Clock;
+  readonly logger: Logger;
+}
+
+/** The repositories and cross-cutting deps every product/variant/inventory use case shares. */
+const buildVendorProductShared = (params: {
+  prisma: PrismaClient;
+  idGenerator: IdGenerator;
+  clock: Clock;
+  logger: Logger;
+}): VendorProductShared => {
+  const { prisma, idGenerator, clock, logger } = params;
+  return {
+    productRepository: new PrismaProductRepository(prisma),
+    productVariantRepository: new PrismaProductVariantRepository(prisma),
+    inventoryRepository: new PrismaInventoryRepository(prisma),
+    transactionRunner: new PrismaTransactionRunner(prisma),
+    auditWriter: new AmbientAuditWriter({
+      auditLogRepository: new PrismaAuditLogRepository(prisma),
+      idGenerator,
+      clock,
+    }),
+    clock,
+    logger,
+  };
+};
+
 const buildVendorProductRouter = (params: {
   prisma: PrismaClient;
   categoryRepository: CategoryRepository;
@@ -120,21 +176,9 @@ const buildVendorProductRouter = (params: {
   clock: Clock;
   logger: Logger;
 }): Router => {
-  const { prisma, categoryRepository, idGenerator, clock, logger } = params;
-  const productRepository = new PrismaProductRepository(prisma);
-  const productVariantRepository = new PrismaProductVariantRepository(prisma);
-  const shared = {
-    productRepository,
-    productVariantRepository,
-    transactionRunner: new PrismaTransactionRunner(prisma),
-    auditWriter: new AmbientAuditWriter({
-      auditLogRepository: new PrismaAuditLogRepository(prisma),
-      idGenerator,
-      clock,
-    }),
-    clock,
-    logger,
-  };
+  const { categoryRepository, idGenerator, clock, logger } = params;
+  const shared = buildVendorProductShared(params);
+  const { productRepository, productVariantRepository, inventoryRepository } = shared;
 
   return createVendorProductRouter({
     controller: createVendorProductController({
@@ -159,6 +203,13 @@ const buildVendorProductRouter = (params: {
         productVariantRepository,
       }),
       removeProductVariantUseCase: new RemoveProductVariantUseCase(shared),
+    }),
+    inventory: buildVendorInventoryController({
+      inventoryRepository,
+      transactionRunner: shared.transactionRunner,
+      auditWriter: shared.auditWriter,
+      clock,
+      logger,
     }),
     accessTokenService: params.accessTokenService,
     sessionDenylist: params.sessionDenylist,

@@ -7,10 +7,12 @@ import {
   CATALOGUE_AUDIT_ENTITY_TYPES,
 } from '../../domain/audit-actions.js';
 import { Product, type ProductAttributeValues } from '../../domain/entities/product.entity.js';
+import { Inventory } from '../../domain/entities/inventory.entity.js';
 import { ProductVariant } from '../../domain/entities/product-variant.entity.js';
 import { CategoryNotFoundError } from '../../domain/errors/catalogue-errors.js';
 import type { CategoryRepository } from '../../domain/repositories/category.repository.js';
 import type { ProductRepository } from '../../domain/repositories/product.repository.js';
+import type { InventoryRepository } from '../../domain/repositories/inventory.repository.js';
 import type { ProductVariantRepository } from '../../domain/repositories/product-variant.repository.js';
 import type { CategoryId } from '../../domain/value-objects/category-id.value-object.js';
 import { toProductId } from '../../domain/value-objects/product-id.value-object.js';
@@ -53,6 +55,12 @@ export interface CreateProductResult {
 export interface CreateProductDeps {
   readonly productRepository: ProductRepository;
   readonly productVariantRepository: ProductVariantRepository;
+  /**
+   * Every variant is created with a counter, in this same transaction (S2-4
+   * D-E) — so a sellable unit can never exist without stock to sell, the same
+   * "never half a thing" reasoning D-7 applies to a product and its variant.
+   */
+  readonly inventoryRepository: InventoryRepository;
   /**
    * Categories are platform-owned, not tenant-scoped (S2-2a) — this is the
    * same `CategoryRepository` the admin and public surfaces use, just bound
@@ -120,6 +128,7 @@ export class CreateProductUseCase {
     const {
       productRepository,
       productVariantRepository,
+      inventoryRepository,
       categoryRepository,
       transactionRunner,
       auditWriter,
@@ -136,7 +145,8 @@ export class CreateProductUseCase {
       throw new CategoryNotFoundError();
     }
 
-    const { product, variant } = this.buildEntities(input, clock.now());
+    const now = clock.now();
+    const { product, variant } = this.buildEntities(input, now);
 
     // One transaction over two repositories and the audit write, the same
     // shape `DeleteCategoryUseCase` uses for a category and its attributes:
@@ -144,6 +154,9 @@ export class CreateProductUseCase {
     await transactionRunner.run(async (scope) => {
       await productRepository.withTransaction(scope).create(product);
       await productVariantRepository.withTransaction(scope).create(variant);
+      await inventoryRepository
+        .withTransaction(scope)
+        .create(Inventory.initial({ variantId: variant.id, vendorId: variant.vendorId, now }));
       await auditWriter.withTransaction(scope).record({
         actorId: input.principal.userId,
         actorRole: input.principal.role,

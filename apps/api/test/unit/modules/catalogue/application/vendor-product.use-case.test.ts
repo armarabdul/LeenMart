@@ -23,6 +23,7 @@ import { Product } from '../../../../../src/modules/catalogue/domain/entities/pr
 import { ProductVariant } from '../../../../../src/modules/catalogue/domain/entities/product-variant.entity.js';
 import type { CategoryRepository } from '../../../../../src/modules/catalogue/domain/repositories/category.repository.js';
 import type { ProductRepository } from '../../../../../src/modules/catalogue/domain/repositories/product.repository.js';
+import type { InventoryRepository } from '../../../../../src/modules/catalogue/domain/repositories/inventory.repository.js';
 import type { ProductVariantRepository } from '../../../../../src/modules/catalogue/domain/repositories/product-variant.repository.js';
 import { toCategoryId } from '../../../../../src/modules/catalogue/domain/value-objects/category-id.value-object.js';
 import { CategoryRiskLevel } from '../../../../../src/modules/catalogue/domain/value-objects/category-risk-level.value-object.js';
@@ -130,6 +131,19 @@ const variantRepo = (
     countLiveForProduct: vi.fn().mockResolvedValue(2),
     softDelete: vi.fn().mockResolvedValue(true),
     softDeleteAllForProduct: vi.fn().mockResolvedValue(0),
+    ...overrides,
+  };
+  return repository;
+};
+
+const inventoryRepo = (overrides: Partial<InventoryRepository> = {}): InventoryRepository => {
+  const repository: InventoryRepository = {
+    withTransaction: () => repository,
+    create: vi.fn(),
+    findByProductAndVariant: vi.fn().mockResolvedValue(null),
+    setIfVersionMatches: vi.fn().mockResolvedValue(true),
+    deleteForVariants: vi.fn().mockResolvedValue(0),
+    deleteForProduct: vi.fn().mockResolvedValue(0),
     ...overrides,
   };
   return repository;
@@ -277,6 +291,7 @@ describe('DeleteProductUseCase', () => {
       ...base(auditWriter),
       productRepository: products,
       productVariantRepository: variants,
+      inventoryRepository: inventoryRepo(),
     });
 
   it('soft-deletes the product and its variants at the same instant', async () => {
@@ -331,6 +346,7 @@ describe('AddProductVariantUseCase', () => {
       ...base(auditWriter),
       productRepository: products,
       productVariantRepository: variants,
+      inventoryRepository: inventoryRepo(),
       idGenerator: ids,
     });
 
@@ -401,6 +417,7 @@ describe('RemoveProductVariantUseCase', () => {
       ...base(auditWriter),
       productRepository: products,
       productVariantRepository: variants,
+      inventoryRepository: inventoryRepo(),
     });
 
   it('locks the parent product before reading or counting anything', async () => {

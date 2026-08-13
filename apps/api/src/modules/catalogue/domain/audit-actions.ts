@@ -43,6 +43,8 @@ export const CATALOGUE_AUDIT_ACTIONS = {
   PRODUCT_VARIANT_UPDATED: 'catalogue.product.variant_updated',
   /** A variant was soft-deleted on its own. */
   PRODUCT_VARIANT_REMOVED: 'catalogue.product.variant_removed',
+  /** A vendor set the stock level on one of their variants. */
+  PRODUCT_INVENTORY_UPDATED: 'catalogue.product.inventory_updated',
 } as const;
 
 export type CatalogueAuditAction =

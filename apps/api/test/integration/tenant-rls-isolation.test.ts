@@ -128,11 +128,13 @@ describe('tenant RLS isolation', () => {
     it('has row security on exactly the tenant-scoped tables', async () => {
       // `products`/`product_variants` joined this list in S2-3a — the first
       // catalogue tables that are vendor-owned rather than platform-owned.
+      // `inventory` joined in S2-4, the same reasoning one level deeper.
       const rows = await owner.$queryRaw<{ tablename: string }[]>`
         SELECT tablename FROM pg_tables
         WHERE schemaname = 'public' AND rowsecurity ORDER BY tablename`;
 
       expect(rows.map((row) => row.tablename)).toEqual([
+        'inventory',
         'kyc_documents',
         'product_variants',
         'products',
@@ -480,16 +482,17 @@ describe('tenant RLS isolation', () => {
       expect(await owner.vendorKycSubmission.findUnique({ where: { id: kycA } })).not.toBeNull();
     });
 
-    it('holds exactly the policies KYC-5 and S2-3a intend — five reads and two updates', async () => {
+    it('holds exactly the policies KYC-5, S2-3a and S2-4 intend — six reads and two updates', async () => {
       // The narrowness assertion. A later `FOR ALL` added "because the role
       // exists" would fail here rather than quietly widening the boundary.
-      // `products`/`product_variants` contribute read-only policies (D-6: no
-      // admin product surface in S2-3a, so no write policy for either).
+      // `products`/`product_variants`/`inventory` all contribute read-only
+      // policies (no admin write surface for any of the three).
       const rows = await owner.$queryRaw<{ tablename: string; cmd: string }[]>`
         SELECT tablename, cmd FROM pg_policies
         WHERE 'leenmart_admin' = ANY(roles) ORDER BY tablename, cmd`;
 
       expect(rows).toEqual([
+        { tablename: 'inventory', cmd: 'SELECT' },
         { tablename: 'kyc_documents', cmd: 'SELECT' },
         { tablename: 'product_variants', cmd: 'SELECT' },
         { tablename: 'products', cmd: 'SELECT' },
