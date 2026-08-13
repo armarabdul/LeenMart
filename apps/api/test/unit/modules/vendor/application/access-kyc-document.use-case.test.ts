@@ -12,7 +12,7 @@ import type {
   PresignedUpload,
   StoredObject,
   TemporaryObject,
-} from '../../../../../src/modules/vendor/application/ports/object-store.port.js';
+} from '../../../../../src/modules/media/index.js';
 import type {
   DataKeyCipher,
   GeneratedDataKey,

@@ -1,6 +1,7 @@
 import { toUuid, type Logger } from '@leen-mart/domain-kit';
 import type { AuditWriter } from '../../../audit/index.js';
 import type { Principal } from '../../../identity/index.js';
+import type { ObjectStore } from '../../../media/index.js';
 import { VENDOR_AUDIT_ACTIONS, VENDOR_AUDIT_ENTITY_TYPES } from '../../domain/audit-actions.js';
 import {
   InvalidKycOperationError,
@@ -10,7 +11,6 @@ import type { KycDocumentId } from '../../domain/value-objects/kyc-document-id.v
 import type { KycId } from '../../domain/value-objects/kyc-id.value-object.js';
 import type { DataKeyCipher } from '../ports/data-key-cipher.port.js';
 import type { DocumentCipher } from '../ports/document-cipher.port.js';
-import type { ObjectStore } from '../ports/object-store.port.js';
 import type { KycDocumentAccessQueryPort } from '../ports/kyc-document-access-query.port.js';
 
 export interface AccessKycDocumentInput {

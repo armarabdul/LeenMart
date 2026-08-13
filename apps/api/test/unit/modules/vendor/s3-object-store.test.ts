@@ -6,7 +6,7 @@ import {
   KYC_MAX_OBJECT_BYTES,
   S3ObjectStore,
   UPLOAD_URL_TTL_SECONDS,
-} from '../../../../src/modules/vendor/infrastructure/storage/s3-object-store.js';
+} from '../../../../src/modules/media/index.js';
 
 const BUCKET = 'leenmart-private-kyc';
 const KEY = 'vendor/abc/pan.enc';

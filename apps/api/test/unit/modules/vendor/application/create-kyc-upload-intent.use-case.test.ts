@@ -13,7 +13,7 @@ import type {
   PresignedUpload,
   StoredObject,
   TemporaryObject,
-} from '../../../../../src/modules/vendor/application/ports/object-store.port.js';
+} from '../../../../../src/modules/media/index.js';
 import type { VendorRepository } from '../../../../../src/modules/vendor/domain/repositories/vendor.repository.js';
 import { VendorProfile } from '../../../../../src/modules/vendor/domain/entities/vendor-profile.entity.js';
 import { VendorStatus } from '../../../../../src/modules/vendor/domain/value-objects/vendor-status.value-object.js';

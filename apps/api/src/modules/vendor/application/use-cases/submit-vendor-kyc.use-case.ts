@@ -2,6 +2,7 @@ import type { Clock, IdGenerator, Logger, TransactionRunner } from '@leen-mart/d
 import { NotFoundError, toUuid, ValidationError } from '@leen-mart/domain-kit';
 import type { AuditWriter } from '../../../audit/index.js';
 import type { Principal, VendorId } from '../../../identity/index.js';
+import type { ObjectStore } from '../../../media/index.js';
 import { VENDOR_AUDIT_ACTIONS, VENDOR_AUDIT_ENTITY_TYPES } from '../../domain/audit-actions.js';
 import { KycDocument } from '../../domain/entities/kyc-document.entity.js';
 import { VendorKyc, type KycIdentifiers } from '../../domain/entities/vendor-kyc.entity.js';
@@ -15,7 +16,6 @@ import { KycDocumentType } from '../../domain/value-objects/kyc-document-type.va
 import { toKycDocumentId } from '../../domain/value-objects/kyc-document-id.value-object.js';
 import { toKycId, type KycId } from '../../domain/value-objects/kyc-id.value-object.js';
 import { Pan } from '../../domain/value-objects/pan.value-object.js';
-import type { ObjectStore } from '../ports/object-store.port.js';
 
 /** One uploaded document as the client reports it. Never an object key — the server derives that. */
 export interface SubmittedKycDocument {

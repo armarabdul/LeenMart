@@ -1,10 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
 import { UuidV7Generator } from '@leen-mart/domain-kit';
-import {
-  KYC_MAX_OBJECT_BYTES,
-  S3ObjectStore,
-} from '../../src/modules/vendor/infrastructure/storage/s3-object-store.js';
+import { KYC_MAX_OBJECT_BYTES, S3ObjectStore } from '../../src/modules/media/index.js';
 
 /**
  * Integration test against the MinIO already in `infra/docker/docker-compose.yml`,

@@ -16,7 +16,7 @@ import type {
   PresignedUpload,
   StoredObject,
   TemporaryObject,
-} from '../../../../../src/modules/vendor/application/ports/object-store.port.js';
+} from '../../../../../src/modules/media/index.js';
 import type { VendorKycRepository } from '../../../../../src/modules/vendor/domain/repositories/vendor-kyc.repository.js';
 import type { VendorRepository } from '../../../../../src/modules/vendor/domain/repositories/vendor.repository.js';
 import type { VendorKyc } from '../../../../../src/modules/vendor/domain/entities/vendor-kyc.entity.js';

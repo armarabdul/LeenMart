@@ -11,7 +11,7 @@ import type { AuditWriter } from '../../src/modules/audit/index.js';
 import { VENDOR_AUDIT_ACTIONS } from '../../src/modules/vendor/domain/audit-actions.js';
 import { AccessKycDocumentUseCase } from '../../src/modules/vendor/application/use-cases/access-kyc-document.use-case.js';
 import { PrismaKycDocumentAccessQuery } from '../../src/modules/vendor/infrastructure/persistence/prisma-kyc-document-access-query.js';
-import { S3ObjectStore } from '../../src/modules/vendor/infrastructure/storage/s3-object-store.js';
+import { S3ObjectStore } from '../../src/modules/media/index.js';
 import { DevDataKeyCipher } from '../../src/modules/vendor/infrastructure/crypto/dev-data-key-cipher.js';
 import { AesGcmDocumentCipher } from '../../src/modules/vendor/infrastructure/crypto/aes-gcm-document-cipher.js';
 import { toKycId } from '../../src/modules/vendor/domain/value-objects/kyc-id.value-object.js';

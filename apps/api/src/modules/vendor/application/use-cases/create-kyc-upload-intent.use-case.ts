@@ -1,11 +1,11 @@
 import type { Clock, IdGenerator, Logger } from '@leen-mart/domain-kit';
 import { NotFoundError, ValidationError } from '@leen-mart/domain-kit';
 import type { Principal, VendorId } from '../../../identity/index.js';
+import type { ObjectStore } from '../../../media/index.js';
 import { KycDocumentType } from '../../domain/value-objects/kyc-document-type.value-object.js';
 import { toKycId, type KycId } from '../../domain/value-objects/kyc-id.value-object.js';
 import type { VendorRepository } from '../../domain/repositories/vendor.repository.js';
 import type { DataKeyCipher } from '../ports/data-key-cipher.port.js';
-import type { ObjectStore } from '../ports/object-store.port.js';
 
 /** What the client declares about one document. Never a key, never an id. */
 export interface RequestedKycDocument {

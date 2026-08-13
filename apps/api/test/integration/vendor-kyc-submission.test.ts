@@ -10,7 +10,7 @@ import { SubmitVendorKycUseCase } from '../../src/modules/vendor/application/use
 import { PrismaVendorKycRepository } from '../../src/modules/vendor/infrastructure/persistence/prisma-vendor-kyc.repository.js';
 import { PrismaVendorRepository } from '../../src/modules/vendor/infrastructure/persistence/prisma-vendor.repository.js';
 import { HmacIdentifierFingerprinter } from '../../src/modules/vendor/infrastructure/security/hmac-identifier-fingerprinter.js';
-import { S3ObjectStore } from '../../src/modules/vendor/infrastructure/storage/s3-object-store.js';
+import { S3ObjectStore } from '../../src/modules/media/index.js';
 import { PrismaTransactionRunner } from '../../src/shared/infrastructure/persistence/tenant-prisma.js';
 import { runWithTenant } from '../../src/shared/infrastructure/persistence/tenant-context.js';
 import { toSessionId } from '../../src/modules/identity/domain/value-objects/session-id.value-object.js';
