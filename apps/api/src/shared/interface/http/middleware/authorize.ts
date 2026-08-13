@@ -91,3 +91,25 @@ export const requirePermission = (permission: Permission): RequestHandler => {
     next();
   };
 };
+
+/**
+ * Refuses a grant the matrix marks `READ_ONLY`.
+ *
+ * Not a second authorisation mechanism and not a role check: it reads the
+ * `accessLevel` `requirePermission` already derived from `PERMISSION_MATRIX`,
+ * so the matrix stays the only place roles are named. SDD 7.4 step 2 asks "may
+ * this role perform this action at all?", and for a writing route the honest
+ * answer for a READ_ONLY grant is no — the same 403, since a caller learning
+ * *which* half of the grant they lack learns the shape of the model.
+ *
+ * Must be mounted after `requirePermission`, whose job it is to set
+ * `req.accessLevel`; on its own it fails closed, because an unset level is not
+ * `FULL`.
+ *
+ * Lived in `vendor/interface/http/admin-kyc.routes.ts` until the catalogue's
+ * admin surface needed the identical guard. Moved here rather than copied: two
+ * copies of an authorisation check are two places for it to drift.
+ */
+export const requireFullAccess: RequestHandler = (req, _res, next) => {
+  next(req.accessLevel === 'FULL' ? undefined : new UnauthorizedError());
+};

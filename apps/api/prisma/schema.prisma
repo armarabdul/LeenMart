@@ -485,3 +485,71 @@ model KycDocument {
   @@index([vendorId], map: "idx_kyc_documents_vendor")
   @@map("kyc_documents")
 }
+
+/// Catalogue risk tier (SDD 15.2). Drives admin queue prioritisation; under
+/// the Stage-2 decision that every vendor is trust tier `NEW`, it does not
+/// yet route anything to auto-approval.
+///
+/// Assigned explicitly per category and never inherited: inheritance would
+/// mean moving a subtree silently reclassified every listing beneath it.
+enum CategoryRiskLevel {
+  LOW
+  MEDIUM
+  RESTRICTED
+}
+
+/// Catalogue taxonomy (SDD 5 module 4, SDD 6.3).
+///
+/// Adjacency list (`parent_id`) plus a materialised `path`, exactly the shape
+/// SDD 6.3 prescribes. The path is a denormalised `uuid[]` of ancestors rather
+/// than `ltree`: the array needs no extension, is natively expressible in
+/// Prisma, and is GIN-indexable, whereas `ltree` would require a new extension
+/// and `Unsupported(...)` typing that the generated client cannot select.
+///
+/// Platform-owned, not vendor-owned: there is no tenant column, so this table
+/// is deliberately outside `TENANT_SCOPED_MODELS` and carries no RLS policy.
+/// The public catalogue reads it without any tenant context at all.
+///
+/// The three `requires_*` booleans are SDD 15.2's mandatory-field completeness
+/// screen (HSN, country of origin, net quantity — BR-15/BR-21), made
+/// category-conditional. They are explicit columns rather than
+/// `category_attributes` rows because they are a closed, statutory set, not
+/// open-shaped per-category data.
+///
+/// **FSSAI (BR-17) is deliberately absent.** Food categories will eventually
+/// need a licence-conditional requirement, but that needs vendor licence
+/// storage with a number and an expiry that does not exist anywhere in this
+/// schema. Adding a `requires_fssai` flag now would create a requirement
+/// nothing could satisfy. Deferred compliance work, tracked, not forgotten.
+model Category {
+  id       String   @id @db.Uuid
+  parentId String?  @map("parent_id") @db.Uuid
+  /// Ancestor ids, root-first, excluding self. Empty for a root.
+  path     String[] @db.Uuid
+  /// 1 for a root, 5 at most. Always `cardinality(path) + 1`.
+  depth    Int      @db.SmallInt
+  name     String   @db.VarChar(120)
+  /// Stable public URL key. Immutable once assigned — a slug that changes is
+  /// not a stable URL.
+  slug     String   @db.VarChar(140)
+
+  riskLevel               CategoryRiskLevel @default(LOW) @map("risk_level")
+  requiresHsn             Boolean           @default(false) @map("requires_hsn")
+  requiresCountryOfOrigin Boolean           @default(false) @map("requires_country_of_origin")
+  requiresNetQuantity     Boolean           @default(false) @map("requires_net_quantity")
+
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  /// `Restrict`, not `Cascade`: rows are soft-deleted, so this key should
+  /// never fire — and if a hard delete is ever attempted, the database
+  /// refuses rather than silently orphaning a subtree.
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children Category[] @relation("CategoryTree")
+
+  @@index([parentId], map: "idx_categories_parent")
+  @@index([path], type: Gin, map: "idx_categories_path")
+  @@map("categories")
+}

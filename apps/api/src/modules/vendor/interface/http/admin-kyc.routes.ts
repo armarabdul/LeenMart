@@ -1,4 +1,4 @@
-import { Router, type RequestHandler } from 'express';
+import { Router } from 'express';
 import { z } from 'zod';
 import {
   adminKycQueueQuerySchema,
@@ -7,13 +7,12 @@ import {
 } from '@leen-mart/contracts';
 import { asyncHandler } from '../../../../shared/interface/http/middleware/async-handler.js';
 import { authenticate } from '../../../../shared/interface/http/middleware/authenticate.js';
-import { requirePermission } from '../../../../shared/interface/http/middleware/authorize.js';
-import { validate } from '../../../../shared/interface/http/middleware/validate.js';
 import {
-  UnauthorizedError,
-  type AccessTokenService,
-  type SessionDenylist,
-} from '../../../identity/index.js';
+  requireFullAccess,
+  requirePermission,
+} from '../../../../shared/interface/http/middleware/authorize.js';
+import { validate } from '../../../../shared/interface/http/middleware/validate.js';
+import type { AccessTokenService, SessionDenylist } from '../../../identity/index.js';
 import type { AdminKycController } from './admin-kyc.controller.js';
 
 const kycIdParamsSchema = z.object({ kycId: z.string().uuid() }).strict();
@@ -21,20 +20,6 @@ const kycIdParamsSchema = z.object({ kycId: z.string().uuid() }).strict();
 const kycDocumentParamsSchema = z
   .object({ kycId: z.string().uuid(), documentId: z.string().uuid() })
   .strict();
-
-/**
- * Refuses a grant the matrix marks `READ_ONLY`.
- *
- * Not a second authorisation mechanism and not a role check: it reads the
- * `accessLevel` `requirePermission` already derived from `PERMISSION_MATRIX`,
- * so the matrix stays the only place roles are named. SDD 7.4 step 2 asks "may
- * this role perform this action at all?", and for a writing route the honest
- * answer for a READ_ONLY grant is no — the same 403, since a caller learning
- * *which* half of the grant they lack learns the shape of the model.
- */
-const requireFullAccess: RequestHandler = (req, _res, next) => {
-  next(req.accessLevel === 'FULL' ? undefined : new UnauthorizedError());
-};
 
 /**
  * Mounted at `/api/v1/admin/kyc` — the admin surface (SDD 9.4), separate from

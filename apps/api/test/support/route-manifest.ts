@@ -260,6 +260,57 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     why: 'Admin decision across every vendor (KYC-5 Commit 3).',
   },
 
+  // --- admin taxonomy: /api/v1/admin/categories (S2-2a) ---
+  //
+  // Every route here is ADMIN rather than TENANT_OWNED, and for a stronger
+  // reason than the KYC admin surface: categories are platform-owned and carry
+  // no vendor column at all, so there is no tenant boundary for one admin to
+  // cross into another's data. `MANAGE_CATEGORIES_OR_COMMISSION` plus
+  // `requireFullAccess` is the whole of the authorisation story, and the role
+  // matrix for it is asserted directly in admin-category.test.ts.
+  {
+    method: 'GET',
+    prefix: '/api/v1/admin/categories',
+    path: '/',
+    classification: 'ADMIN',
+    why: 'Platform-owned taxonomy list; no tenant column exists to scope by.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/admin/categories',
+    path: '/:categoryId',
+    classification: 'ADMIN',
+    why: 'Platform-owned taxonomy detail; the id names a category, not a tenant’s resource.',
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/admin/categories',
+    path: '/',
+    classification: 'ADMIN',
+    why: 'Creates a platform-owned category; FULL-access admins only.',
+  },
+  {
+    method: 'PATCH',
+    prefix: '/api/v1/admin/categories',
+    path: '/:categoryId',
+    classification: 'ADMIN',
+    why: 'Edits a platform-owned category; FULL-access admins only.',
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/admin/categories',
+    path: '/:categoryId/parent',
+    classification: 'ADMIN',
+    why: 'Moves a platform-owned subtree; FULL-access admins only.',
+  },
+  {
+    method: 'DELETE',
+    prefix: '/api/v1/admin/categories',
+    path: '/:categoryId',
+    classification: 'ADMIN',
+    why: 'Soft-deletes a platform-owned category; FULL-access admins only.',
+  },
+
   // --- customer self-service: /api/v1/me ---
   {
     method: 'POST',
@@ -319,15 +370,18 @@ export const isTenantOwned = (route: ManifestRoute): route is TenantOwnedRoute =
  * The key the completeness guard compares on: method plus **sub-path only**,
  * because that is all Express 5 exposes.
  *
- * Two consequences, both accepted deliberately (S2-1, RD3):
+ * Three consequences, all accepted deliberately (S2-1, RD3):
  *
  *   * `POST /login` is mounted by both the identity router and the admin auth
  *     router. They collapse to one key here, so the guard cannot tell them
  *     apart — both are still classified individually above.
+ *   * `POST /` is likewise mounted by both the vendor router (registration)
+ *     and the admin categories router (create). Same collapse, same handling:
+ *     each is classified on its own entry, and the set absorbs the overlap.
  *   * `app.ts` currently mounts `adminKycRouter` twice at the same prefix, so
  *     the live router reports its five routes twice. Set semantics absorb the
  *     duplicate rather than failing on it; this is a pre-existing condition in
- *     production code that S2-1 does not touch.
+ *     production code that S2-1 did not touch.
  */
 export const routeKey = (method: string, path: string): string => `${method.toUpperCase()} ${path}`;
 
