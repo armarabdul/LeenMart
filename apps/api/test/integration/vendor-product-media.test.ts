@@ -17,6 +17,7 @@ import { PrismaAuditLogRepository } from '../../src/modules/audit/infrastructure
 import { CATALOGUE_AUDIT_ACTIONS } from '../../src/modules/catalogue/domain/audit-actions.js';
 import { DecideProductUseCase } from '../../src/modules/catalogue/application/use-cases/decide-product.use-case.js';
 import { PrismaProductRepository } from '../../src/modules/catalogue/infrastructure/persistence/prisma-product.repository.js';
+import { PrismaProductMediaRepository } from '../../src/modules/catalogue/infrastructure/persistence/prisma-product-media.repository.js';
 import { AdminTransactionRunner } from '../../src/shared/infrastructure/persistence/tenant-prisma.js';
 import { toProductId } from '../../src/modules/catalogue/domain/value-objects/product-id.value-object.js';
 import { toSessionId } from '../../src/modules/identity/domain/value-objects/session-id.value-object.js';
@@ -106,6 +107,26 @@ describe('vendor product media', () => {
   ): request.Test =>
     request(app).post(mediaPath(productId)).set('Authorization', auth()).send(body);
 
+  /**
+   * Direct DB insert of one live `READY` media row (S2-8's approval gate),
+   * separate from whichever media item a given test is actually exercising
+   * — never the real upload/complete/worker pipeline, which is not what
+   * these ASM-14 tests are about.
+   */
+  const seedReadyMedia = async (productId: string): Promise<void> => {
+    await db.productMedia.create({
+      data: {
+        id: randomUUID(),
+        productId,
+        vendorId: vendor.vendorId,
+        objectKey: `product-media/${vendor.vendorId}/${productId}/${randomUUID()}.jpg`,
+        contentType: 'image/jpeg',
+        sizeBytes: 1024,
+        status: 'READY',
+      },
+    });
+  };
+
   /** Mints an intent and PUTs matching bytes to the real store, so the row is genuinely ready to complete. */
   const uploadReadyMedia = async (productId: string): Promise<string> => {
     const intent = (await requestIntent(productId).expect(201)).body as IntentBody;
@@ -131,9 +152,15 @@ describe('vendor product media', () => {
       .post(`/api/v1/vendor/products/${productId}/submit`)
       .set('Authorization', auth())
       .expect(200);
+    // S2-8's approval gate: a media item of this ASM-14 suite's own concern
+    // (uploaded/completed separately by each test) is never what satisfies
+    // it — this is a second, independent one, purely so `approveProduct`
+    // itself can succeed.
+    await seedReadyMedia(productId);
 
     const decideProductUseCase = new DecideProductUseCase({
       productRepository: new PrismaProductRepository(harness.container.adminPrisma),
+      productMediaRepository: new PrismaProductMediaRepository(harness.container.adminPrisma),
       transactionRunner: new AdminTransactionRunner(harness.container.adminPrisma),
       auditWriter: new AmbientAuditWriter({
         auditLogRepository: new PrismaAuditLogRepository(harness.container.adminPrisma),
@@ -449,6 +476,11 @@ describe('vendor product media', () => {
         .post(`${mediaPath(productId)}/${mediaId}/complete`)
         .set('Authorization', auth())
         .expect(200);
+      // No worker runs in this suite, so `complete` alone only reaches
+      // PROCESSING — forced to READY directly so the S2-8 approval gate
+      // below is satisfied; the removal this test actually proves out
+      // triggers ASM-14 regardless of the removed item's own status.
+      await db.productMedia.update({ where: { id: mediaId }, data: { status: 'READY' } });
       await approveProduct(productId);
 
       await request(app)

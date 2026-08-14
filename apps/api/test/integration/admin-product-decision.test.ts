@@ -15,6 +15,7 @@ import type { AuditWriter } from '../../src/modules/audit/index.js';
 import { CATALOGUE_AUDIT_ACTIONS } from '../../src/modules/catalogue/domain/audit-actions.js';
 import { DecideProductUseCase } from '../../src/modules/catalogue/application/use-cases/decide-product.use-case.js';
 import { PrismaProductRepository } from '../../src/modules/catalogue/infrastructure/persistence/prisma-product.repository.js';
+import { PrismaProductMediaRepository } from '../../src/modules/catalogue/infrastructure/persistence/prisma-product-media.repository.js';
 import { AdminTransactionRunner } from '../../src/shared/infrastructure/persistence/tenant-prisma.js';
 import { toProductId } from '../../src/modules/catalogue/domain/value-objects/product-id.value-object.js';
 import { toSessionId } from '../../src/modules/identity/domain/value-objects/session-id.value-object.js';
@@ -185,6 +186,27 @@ describe('product moderation', () => {
       .post(`${productsPath}/${productId}/submit`)
       .set('Authorization', `Bearer ${actor.token}`);
 
+  /**
+   * Direct DB insert of one live `READY` media row (S2-8's approval gate) —
+   * never the real upload/complete/worker pipeline, which is what
+   * `vendor-product-media.test.ts`/`product-media-processing.test.ts` already
+   * exercise. This suite's job is the moderation *decision*, not the media
+   * pipeline that produces a `READY` row in production.
+   */
+  const seedReadyMedia = async (productId: string, actor: VendorActor): Promise<void> => {
+    await db.productMedia.create({
+      data: {
+        id: randomUUID(),
+        productId,
+        vendorId: actor.vendorId,
+        objectKey: `product-media/${actor.vendorId}/${productId}/${randomUUID()}.jpg`,
+        contentType: 'image/jpeg',
+        sizeBytes: 1024,
+        status: 'READY',
+      },
+    });
+  };
+
   const queuePath = '/api/v1/admin/products/submissions';
   const listQueue = (token: string, query = ''): request.Test =>
     request(app).get(`${queuePath}${query}`).set('Authorization', `Bearer ${token}`);
@@ -337,6 +359,7 @@ describe('product moderation', () => {
       async (role) => {
         const productId = await seedProduct(vendor);
         await submit(vendor, productId).expect(200);
+        await seedReadyMedia(productId, vendor);
         const { token } = await adminFor(role);
 
         await listQueue(token).expect(200);
@@ -363,6 +386,7 @@ describe('product moderation', () => {
     it('reads a product detail regardless of status', async () => {
       const productId = await seedProduct(vendor);
       await submit(vendor, productId).expect(200);
+      await seedReadyMedia(productId, vendor);
       const { token } = await adminFor('CATALOGUE_MODERATOR');
       await decide(token, productId, { decision: 'APPROVE' }).expect(200);
 
@@ -380,6 +404,7 @@ describe('product moderation', () => {
     it('approves a PENDING_REVIEW product', async () => {
       const productId = await seedProduct(vendor);
       await submit(vendor, productId).expect(200);
+      await seedReadyMedia(productId, vendor);
       const { token, userId } = await adminFor('CATALOGUE_MODERATOR');
 
       const body = (await decide(token, productId, { decision: 'APPROVE' }).expect(200))
@@ -494,6 +519,10 @@ describe('product moderation', () => {
       it('lets exactly one of two simultaneous decisions win, with no last-writer-wins', async () => {
         const productId = await seedProduct(vendor);
         await submit(vendor, productId).expect(200);
+        // So the race is genuinely between the two decisions themselves —
+        // without this, APPROVE would always lose to the S2-8 media gate
+        // rather than to the conditional-write race this test proves.
+        await seedReadyMedia(productId, vendor);
         const { token } = await adminFor('CATALOGUE_MODERATOR');
 
         const results = await Promise.all([
@@ -519,6 +548,7 @@ describe('product moderation', () => {
       it('refuses a second decision after the first has committed', async () => {
         const productId = await seedProduct(vendor);
         await submit(vendor, productId).expect(200);
+        await seedReadyMedia(productId, vendor);
         const { token } = await adminFor('CATALOGUE_MODERATOR');
 
         await decide(token, productId, { decision: 'APPROVE' }).expect(200);
@@ -531,6 +561,63 @@ describe('product moderation', () => {
         expect([409, 422]).toContain(second.status);
         const row = await db.product.findUniqueOrThrow({ where: { id: productId } });
         expect(row.status).toBe('APPROVED');
+      });
+    });
+
+    describe('media readiness gate (S2-8, SDD 12.2 step 6)', () => {
+      it('refuses approval with zero media', async () => {
+        const productId = await seedProduct(vendor);
+        await submit(vendor, productId).expect(200);
+        const { token } = await adminFor('CATALOGUE_MODERATOR');
+
+        const response = await decide(token, productId, { decision: 'APPROVE' });
+
+        expect(response.status).toBe(422);
+        expect((response.body as ErrorBody).error.code).toBe('PRODUCT_MEDIA_NOT_READY');
+        const row = await db.product.findUniqueOrThrow({ where: { id: productId } });
+        expect(row.status).toBe('PENDING_REVIEW');
+      });
+
+      it('refuses approval while media is still PROCESSING', async () => {
+        const productId = await seedProduct(vendor);
+        await submit(vendor, productId).expect(200);
+        await db.productMedia.create({
+          data: {
+            id: randomUUID(),
+            productId,
+            vendorId: vendor.vendorId,
+            objectKey: `product-media/${vendor.vendorId}/${productId}/${randomUUID()}.jpg`,
+            contentType: 'image/jpeg',
+            sizeBytes: 1024,
+            status: 'PROCESSING',
+          },
+        });
+        const { token } = await adminFor('CATALOGUE_MODERATOR');
+
+        const response = await decide(token, productId, { decision: 'APPROVE' });
+
+        expect(response.status).toBe(422);
+        expect((response.body as ErrorBody).error.code).toBe('PRODUCT_MEDIA_NOT_READY');
+      });
+
+      it('allows approval once a live READY media item exists', async () => {
+        const productId = await seedProduct(vendor);
+        await submit(vendor, productId).expect(200);
+        await seedReadyMedia(productId, vendor);
+        const { token } = await adminFor('CATALOGUE_MODERATOR');
+
+        const body = (await decide(token, productId, { decision: 'APPROVE' }).expect(200))
+          .body as DecisionBody;
+
+        expect(body.data.status).toBe('APPROVED');
+      });
+
+      it('does not gate a REJECT decision on media', async () => {
+        const productId = await seedProduct(vendor);
+        await submit(vendor, productId).expect(200);
+        const { token } = await adminFor('CATALOGUE_MODERATOR');
+
+        await decide(token, productId, { decision: 'REJECT', reason: 'PRICING_ISSUE' }).expect(200);
       });
     });
 
@@ -576,12 +663,17 @@ describe('product moderation', () => {
       it('rolls back the decision when the audit write fails', async () => {
         const productId = await seedProduct(vendor);
         await submit(vendor, productId).expect(200);
+        await seedReadyMedia(productId, vendor);
         const { userId } = await adminFor('CATALOGUE_MODERATOR');
 
         const productRepository = new PrismaProductRepository(harness.container.adminPrisma);
+        const productMediaRepository = new PrismaProductMediaRepository(
+          harness.container.adminPrisma,
+        );
         const transactionRunner = new AdminTransactionRunner(harness.container.adminPrisma);
         const decideProductUseCase = new DecideProductUseCase({
           productRepository,
+          productMediaRepository,
           transactionRunner,
           auditWriter: new FailingAuditWriter(),
           clock,

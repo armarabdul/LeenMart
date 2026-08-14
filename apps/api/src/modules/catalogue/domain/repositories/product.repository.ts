@@ -78,6 +78,21 @@ export interface ProductRepository {
   reenterReviewIfApproved(product: Product): Promise<boolean>;
 
   /**
+   * Persists a detail edit together with the ASM-14 detail-change reopening
+   * (S2-8), atomically and conditional on the product still being
+   * `APPROVED` — the same "database decides who wins" arbitration
+   * `reenterReviewIfApproved` uses, extended to also carry the edited fields
+   * in the one conditional write. Unlike the media trigger, the write that
+   * must reopen the product *is* the edit itself: there is no separate row
+   * whose change can be persisted first.
+   *
+   * `false` means the product was no longer `APPROVED` by the time this
+   * write reached PostgreSQL (or the row is gone) — the caller's edit is not
+   * applied at all in that case, not partially.
+   */
+  updateAndReenterReviewIfApproved(product: Product): Promise<boolean>;
+
+  /**
    * Moves a product into `PENDING_REVIEW`, but only if it is still `DRAFT` or
    * `REJECTED` (S2-5).
    *

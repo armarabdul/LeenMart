@@ -10,19 +10,23 @@ import { GetProductReviewUseCase } from '../../../../../src/modules/catalogue/ap
 import {
   IncompleteProductSubmissionError,
   ProductAlreadyDecidedError,
+  ProductMediaNotReadyError,
   ProductNotFoundError,
   ProductSubmissionConflictError,
 } from '../../../../../src/modules/catalogue/domain/errors/catalogue-errors.js';
 import { Category } from '../../../../../src/modules/catalogue/domain/entities/category.entity.js';
 import { Product } from '../../../../../src/modules/catalogue/domain/entities/product.entity.js';
+import { ProductMedia } from '../../../../../src/modules/catalogue/domain/entities/product-media.entity.js';
 import { ProductRejectionReason } from '../../../../../src/modules/catalogue/domain/value-objects/product-rejection-reason.value-object.js';
 import type { CategoryRepository } from '../../../../../src/modules/catalogue/domain/repositories/category.repository.js';
 import type { ProductRepository } from '../../../../../src/modules/catalogue/domain/repositories/product.repository.js';
+import type { ProductMediaRepository } from '../../../../../src/modules/catalogue/domain/repositories/product-media.repository.js';
 import type { ProductReviewQueryPort } from '../../../../../src/modules/catalogue/application/ports/product-review-query.port.js';
 import { toCategoryId } from '../../../../../src/modules/catalogue/domain/value-objects/category-id.value-object.js';
 import { CategoryRiskLevel } from '../../../../../src/modules/catalogue/domain/value-objects/category-risk-level.value-object.js';
 import { toCategorySlug } from '../../../../../src/modules/catalogue/domain/value-objects/category-slug.value-object.js';
 import { toProductId } from '../../../../../src/modules/catalogue/domain/value-objects/product-id.value-object.js';
+import { toProductMediaId } from '../../../../../src/modules/catalogue/domain/value-objects/product-media-id.value-object.js';
 import { toSessionId } from '../../../../../src/modules/identity/domain/value-objects/session-id.value-object.js';
 import { toUserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 import { toVendorId } from '../../../../../src/modules/identity/domain/value-objects/vendor-id.value-object.js';
@@ -81,6 +85,53 @@ const draftProduct = (overrides: Partial<{ hsnCode: string | null }> = {}): Prod
 
 const pendingProduct = (): Product => draftProduct().submitForReview(NOW);
 
+const mediaOf = (
+  productId: ReturnType<typeof toProductId> = toProductId(ids.generate()),
+): ProductMedia =>
+  ProductMedia.create({
+    id: toProductMediaId(ids.generate()),
+    productId,
+    vendorId,
+    objectKey: `product-media/${vendorId}/${productId}/x.jpg`,
+    contentType: 'image/jpeg',
+    sizeBytes: 2048,
+    now: NOW,
+  });
+
+/** The one shape `DecideProductUseCase`'s S2-8 media-readiness gate accepts. */
+const readyMedia = (productId?: ReturnType<typeof toProductId>): ProductMedia =>
+  mediaOf(productId).completeUpload(NOW).markReady(NOW);
+const processingMedia = (productId?: ReturnType<typeof toProductId>): ProductMedia =>
+  mediaOf(productId).completeUpload(NOW);
+const failedMedia = (productId?: ReturnType<typeof toProductId>): ProductMedia =>
+  mediaOf(productId).completeUpload(NOW).markFailed('PROCESSING_ERROR', NOW);
+const awaitingUploadMedia = (productId?: ReturnType<typeof toProductId>): ProductMedia =>
+  mediaOf(productId);
+
+/**
+ * `listByProductId` already excludes soft-deleted rows (S2-8 relies on this
+ * exactly the way the use case itself does) — defaults to one `READY` item so
+ * every pre-existing `DecideProductUseCase` test in this file, which predates
+ * the S2-8 gate and does not care about media, keeps passing unchanged.
+ */
+const mediaRepo = (overrides: Partial<ProductMediaRepository> = {}): ProductMediaRepository => {
+  const repository: ProductMediaRepository = {
+    withTransaction: () => repository,
+    create: vi.fn(),
+    findById: vi.fn().mockResolvedValue(null),
+    findByProductAndId: vi.fn().mockResolvedValue(null),
+    listByProductId: vi.fn().mockResolvedValue([readyMedia()]),
+    countLiveForProduct: vi.fn().mockResolvedValue(1),
+    completeIfAwaitingUpload: vi.fn().mockResolvedValue(true),
+    markReadyIfProcessing: vi.fn().mockResolvedValue(true),
+    markFailedIfProcessing: vi.fn().mockResolvedValue(true),
+    markProcessingIfFailed: vi.fn().mockResolvedValue(true),
+    softDelete: vi.fn().mockResolvedValue(true),
+    ...overrides,
+  };
+  return repository;
+};
+
 const runner = (onRollback?: () => void): TransactionRunner => ({
   run: async (work) => {
     try {
@@ -105,6 +156,7 @@ const productRepo = (overrides: Partial<ProductRepository> = {}): ProductReposit
     decideIfPendingReview: vi.fn().mockResolvedValue(true),
     lockForMediaChange: vi.fn().mockResolvedValue(true),
     reenterReviewIfApproved: vi.fn().mockResolvedValue(true),
+    updateAndReenterReviewIfApproved: vi.fn().mockResolvedValue(true),
     ...overrides,
   };
   return repository;
@@ -352,9 +404,11 @@ describe('DecideProductUseCase', () => {
     }),
     auditWriter: AuditWriter = new RecordingAuditWriter(),
     onRollback?: () => void,
+    media: ProductMediaRepository = mediaRepo(),
   ): DecideProductUseCase =>
     new DecideProductUseCase({
       productRepository: products,
+      productMediaRepository: media,
       transactionRunner: runner(onRollback),
       auditWriter,
       clock,
@@ -391,6 +445,124 @@ describe('DecideProductUseCase', () => {
       expect(
         await issueOf(() =>
           build(products).execute({
+            principal: adminPrincipal(),
+            productId: toProductId(ids.generate()),
+            command: { decision: 'APPROVE' },
+          }),
+        ),
+      ).toMatch(/must be in PENDING_REVIEW/);
+    });
+  });
+
+  describe('media readiness gate (S2-8, SDD 12.2 step 6)', () => {
+    const approve = (
+      products: ProductRepository,
+      media: ProductMediaRepository,
+    ): Promise<{ product: Product }> =>
+      build(products, new RecordingAuditWriter(), undefined, media).execute({
+        principal: adminPrincipal(),
+        productId: toProductId(ids.generate()),
+        command: { decision: 'APPROVE' },
+      });
+
+    it('rejects approval with zero media', async () => {
+      const products = productRepo({ findById: vi.fn().mockResolvedValue(pendingProduct()) });
+      const media = mediaRepo({ listByProductId: vi.fn().mockResolvedValue([]) });
+
+      await expect(approve(products, media)).rejects.toBeInstanceOf(ProductMediaNotReadyError);
+      expect(products.decideIfPendingReview).not.toHaveBeenCalled();
+    });
+
+    it('rejects approval when the only media is soft-deleted', async () => {
+      // listByProductId already excludes deleted rows — this is the same
+      // "no live media" case as zero media, from the gate's point of view.
+      const products = productRepo({ findById: vi.fn().mockResolvedValue(pendingProduct()) });
+      const media = mediaRepo({ listByProductId: vi.fn().mockResolvedValue([]) });
+
+      await expect(approve(products, media)).rejects.toBeInstanceOf(ProductMediaNotReadyError);
+    });
+
+    it('allows approval with exactly one READY item', async () => {
+      const products = productRepo({ findById: vi.fn().mockResolvedValue(pendingProduct()) });
+      const media = mediaRepo({ listByProductId: vi.fn().mockResolvedValue([readyMedia()]) });
+
+      const { product } = await approve(products, media);
+      expect(product.status).toBe('APPROVED');
+    });
+
+    it('allows approval with multiple READY items', async () => {
+      const products = productRepo({ findById: vi.fn().mockResolvedValue(pendingProduct()) });
+      const media = mediaRepo({
+        listByProductId: vi.fn().mockResolvedValue([readyMedia(), readyMedia(), readyMedia()]),
+      });
+
+      const { product } = await approve(products, media);
+      expect(product.status).toBe('APPROVED');
+    });
+
+    it.each([
+      ['READY + PROCESSING', () => [readyMedia(), processingMedia()]],
+      ['READY + FAILED', () => [readyMedia(), failedMedia()]],
+      ['READY + AWAITING_UPLOAD', () => [readyMedia(), awaitingUploadMedia()]],
+      ['only PROCESSING', () => [processingMedia()]],
+      ['only FAILED', () => [failedMedia()]],
+      ['only AWAITING_UPLOAD', () => [awaitingUploadMedia()]],
+    ])('rejects approval for %s', async (_label, items) => {
+      const products = productRepo({ findById: vi.fn().mockResolvedValue(pendingProduct()) });
+      const media = mediaRepo({ listByProductId: vi.fn().mockResolvedValue(items()) });
+
+      await expect(approve(products, media)).rejects.toBeInstanceOf(ProductMediaNotReadyError);
+    });
+
+    it('ignores a soft-deleted PROCESSING/FAILED item when a live READY one exists', async () => {
+      // listByProductId's own "live only" contract is what makes this
+      // correct — the deleted rows simply never appear in the list the gate
+      // reads, so no separate deleted-vs-live filtering is needed here.
+      const products = productRepo({ findById: vi.fn().mockResolvedValue(pendingProduct()) });
+      const media = mediaRepo({ listByProductId: vi.fn().mockResolvedValue([readyMedia()]) });
+
+      const { product } = await approve(products, media);
+      expect(product.status).toBe('APPROVED');
+    });
+
+    it('leaves the product status unchanged when approval is refused for media', async () => {
+      const pending = pendingProduct();
+      const products = productRepo({ findById: vi.fn().mockResolvedValue(pending) });
+      const media = mediaRepo({ listByProductId: vi.fn().mockResolvedValue([]) });
+
+      await expect(approve(products, media)).rejects.toBeInstanceOf(ProductMediaNotReadyError);
+
+      expect(products.decideIfPendingReview).not.toHaveBeenCalled();
+      expect(pending.status).toBe('PENDING_REVIEW');
+    });
+
+    it('does not gate a REJECT decision on media at all', async () => {
+      const products = productRepo({ findById: vi.fn().mockResolvedValue(pendingProduct()) });
+      const media = mediaRepo({ listByProductId: vi.fn().mockResolvedValue([]) });
+
+      const { product } = await build(
+        products,
+        new RecordingAuditWriter(),
+        undefined,
+        media,
+      ).execute({
+        principal: adminPrincipal(),
+        productId: toProductId(ids.generate()),
+        command: { decision: 'REJECT', reason: 'PRICING_ISSUE' },
+      });
+
+      expect(product.status).toBe('REJECTED');
+    });
+
+    it('checks media readiness only after confirming the product is legally decidable', async () => {
+      // A DRAFT product must still answer "must be in PENDING_REVIEW", never
+      // a media error that would be true but beside the point.
+      const products = productRepo({ findById: vi.fn().mockResolvedValue(draftProduct()) });
+      const media = mediaRepo({ listByProductId: vi.fn().mockResolvedValue([]) });
+
+      expect(
+        await issueOf(() =>
+          build(products, new RecordingAuditWriter(), undefined, media).execute({
             principal: adminPrincipal(),
             productId: toProductId(ids.generate()),
             command: { decision: 'APPROVE' },

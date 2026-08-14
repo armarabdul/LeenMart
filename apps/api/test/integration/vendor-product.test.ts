@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import type { Express } from 'express';
 import type { PrismaClient } from '@prisma/client';
+import { NullLogger } from '@leen-mart/domain-kit';
 import { CATALOGUE_AUDIT_ACTIONS } from '../../src/modules/catalogue/domain/audit-actions.js';
 import {
   createIntegrationHarness,
@@ -10,6 +11,16 @@ import {
   type IntegrationHarness,
 } from '../support/integration-app.js';
 import { signUpCustomer, signUpVendorOwner, type VendorActor } from '../support/actors.js';
+import { AmbientAuditWriter } from '../../src/modules/audit/index.js';
+import { PrismaAuditLogRepository } from '../../src/modules/audit/infrastructure/persistence/prisma-audit-log.repository.js';
+import { DecideProductUseCase } from '../../src/modules/catalogue/application/use-cases/decide-product.use-case.js';
+import { PrismaProductRepository } from '../../src/modules/catalogue/infrastructure/persistence/prisma-product.repository.js';
+import { PrismaProductMediaRepository } from '../../src/modules/catalogue/infrastructure/persistence/prisma-product-media.repository.js';
+import { AdminTransactionRunner } from '../../src/shared/infrastructure/persistence/tenant-prisma.js';
+import { toProductId } from '../../src/modules/catalogue/domain/value-objects/product-id.value-object.js';
+import { toSessionId } from '../../src/modules/identity/domain/value-objects/session-id.value-object.js';
+import { toUserId } from '../../src/modules/identity/domain/value-objects/user-id.value-object.js';
+import type { Principal } from '../../src/modules/identity/application/ports/principal.js';
 
 const EMAIL_PREFIX = 'vendor-product-';
 
@@ -130,6 +141,63 @@ describe('vendor product endpoints', () => {
       });
 
   const auth = (actor: VendorActor): string => `Bearer ${actor.token}`;
+
+  /**
+   * Direct DB insert of one live `READY` media row (S2-8's approval gate) —
+   * never the real upload/complete/worker pipeline, which
+   * `vendor-product-media.test.ts` already exercises. This suite's job is
+   * plain product CRUD and the ASM-14 detail-edit trigger, not the media
+   * pipeline that produces a `READY` row in production.
+   */
+  const seedReadyMedia = async (productId: string, actor: VendorActor): Promise<void> => {
+    await db.productMedia.create({
+      data: {
+        id: randomUUID(),
+        productId,
+        vendorId: actor.vendorId,
+        objectKey: `product-media/${actor.vendorId}/${productId}/${randomUUID()}.jpg`,
+        contentType: 'image/jpeg',
+        sizeBytes: 1024,
+        status: 'READY',
+      },
+    });
+  };
+
+  /**
+   * Moves a product straight from DRAFT to APPROVED, bypassing the admin MFA
+   * flow — the same direct-use-case shortcut `admin-product-decision.test.ts`/
+   * `vendor-product-media.test.ts` use.
+   */
+  const approveProduct = async (actor: VendorActor, productId: string): Promise<void> => {
+    await request(app)
+      .post(`${productsPath}/${productId}/submit`)
+      .set('Authorization', auth(actor))
+      .expect(200);
+    await seedReadyMedia(productId, actor);
+
+    const decideProductUseCase = new DecideProductUseCase({
+      productRepository: new PrismaProductRepository(harness.container.adminPrisma),
+      productMediaRepository: new PrismaProductMediaRepository(harness.container.adminPrisma),
+      transactionRunner: new AdminTransactionRunner(harness.container.adminPrisma),
+      auditWriter: new AmbientAuditWriter({
+        auditLogRepository: new PrismaAuditLogRepository(harness.container.adminPrisma),
+        idGenerator: harness.container.idGenerator,
+        clock: harness.container.clock,
+      }),
+      clock: harness.container.clock,
+      logger: new NullLogger(),
+    });
+    const principal: Principal = {
+      userId: toUserId(randomUUID()),
+      sessionId: toSessionId(randomUUID()),
+      role: 'CATALOGUE_MODERATOR',
+    };
+    await decideProductUseCase.execute({
+      principal,
+      productId: toProductId(productId),
+      command: { decision: 'APPROVE' },
+    });
+  };
 
   beforeAll(async () => {
     harness = createIntegrationHarness();
@@ -355,6 +423,94 @@ describe('vendor product endpoints', () => {
         .set('Authorization', auth(vendorA))
         .send({ name: 'x' })
         .expect(404);
+    });
+  });
+
+  describe('ASM-14 detail-edit re-review (S2-8)', () => {
+    it('re-enters PENDING_REVIEW when the name changes on an APPROVED product', async () => {
+      const { product } = await seedProduct();
+      await approveProduct(vendorA, product.id);
+
+      const response = await request(app)
+        .patch(`${productsPath}/${product.id}`)
+        .set('Authorization', auth(vendorA))
+        .send({ name: 'Renamed After Approval' })
+        .expect(200);
+
+      expect((response.body as ProductBody).data.status).toBe('PENDING_REVIEW');
+    });
+
+    it('re-enters PENDING_REVIEW when the category changes on an APPROVED product', async () => {
+      const { product } = await seedProduct();
+      await approveProduct(vendorA, product.id);
+      const otherCategoryId = await seedCategory();
+
+      const response = await request(app)
+        .patch(`${productsPath}/${product.id}`)
+        .set('Authorization', auth(vendorA))
+        .send({ categoryId: otherCategoryId })
+        .expect(200);
+
+      expect((response.body as ProductBody).data.status).toBe('PENDING_REVIEW');
+    });
+
+    it('re-enters PENDING_REVIEW when the brand changes on an APPROVED product', async () => {
+      const { product } = await seedProduct();
+      await approveProduct(vendorA, product.id);
+
+      const response = await request(app)
+        .patch(`${productsPath}/${product.id}`)
+        .set('Authorization', auth(vendorA))
+        .send({ brand: 'Acme' })
+        .expect(200);
+
+      expect((response.body as ProductBody).data.status).toBe('PENDING_REVIEW');
+    });
+
+    it('stays APPROVED for a description-only edit', async () => {
+      const { product } = await seedProduct();
+      await approveProduct(vendorA, product.id);
+
+      const response = await request(app)
+        .patch(`${productsPath}/${product.id}`)
+        .set('Authorization', auth(vendorA))
+        .send({ description: 'Updated copy, nothing structural.' })
+        .expect(200);
+
+      expect((response.body as ProductBody).data.status).toBe('APPROVED');
+    });
+
+    it('records the reopening audit entry alongside PRODUCT_UPDATED', async () => {
+      const { product } = await seedProduct();
+      await approveProduct(vendorA, product.id);
+
+      await request(app)
+        .patch(`${productsPath}/${product.id}`)
+        .set('Authorization', auth(vendorA))
+        .send({ name: 'Renamed Again' })
+        .expect(200);
+
+      const actions = (
+        await db.auditLog.findMany({
+          where: { entityId: product.id, entityType: 'Product' },
+          orderBy: { createdAt: 'asc' },
+        })
+      ).map((row) => row.action);
+
+      expect(actions).toContain(CATALOGUE_AUDIT_ACTIONS.PRODUCT_REVIEW_REOPENED_FOR_DETAIL_CHANGE);
+      expect(actions).toContain(CATALOGUE_AUDIT_ACTIONS.PRODUCT_UPDATED);
+    });
+
+    it('does not trigger for a DRAFT product', async () => {
+      const { product } = await seedProduct();
+
+      const response = await request(app)
+        .patch(`${productsPath}/${product.id}`)
+        .set('Authorization', auth(vendorA))
+        .send({ name: 'Renamed While Draft' })
+        .expect(200);
+
+      expect((response.body as ProductBody).data.status).toBe('DRAFT');
     });
   });
 

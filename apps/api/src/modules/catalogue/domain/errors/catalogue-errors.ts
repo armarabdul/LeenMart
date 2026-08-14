@@ -360,6 +360,58 @@ export class ProductAlreadyDecidedError extends ConflictError {
 }
 
 /**
+ * The product's status changed underneath a detail edit that also needed to
+ * reopen it for review (S2-8, ASM-14), between this use case's read and its
+ * conditional write.
+ *
+ * Distinct from `ProductNotFoundError`: the row is real and was `APPROVED`
+ * when read — something else (a concurrent edit or, in principle, another
+ * `APPROVED → PENDING_REVIEW` trigger) moved it away from `APPROVED` first.
+ * Mirrors `ProductSubmissionConflictError`'s reasoning exactly, one trigger
+ * over, arbitrated by `ProductRepository.updateAndReenterReviewIfApproved`'s
+ * conditional write.
+ */
+export class ProductUpdateConflictError extends ConflictError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This product could not be updated right now. Please reload and try again.', {
+      ...options,
+      code: 'PRODUCT_UPDATE_CONFLICT',
+    });
+  }
+}
+
+/**
+ * The product cannot be approved because its live media is not ready — SDD
+ * 12.2 step 6: "Product publication is blocked while any of its media is not
+ * READY" (S2-8 decision: `APPROVED` is this codebase's Stage-2 stand-in for
+ * "published," the same substitution S2-7 made for public search).
+ *
+ * Checked in `DecideProductUseCase`, never in `Product.approve()` itself:
+ * media is a sibling aggregate this entity holds no reference to, the exact
+ * division `IncompleteProductSubmissionError`'s category-requirements check
+ * draws in `SubmitProductForReviewUseCase`, for the same reason.
+ *
+ * Requires at least one live (non-deleted) `READY` media item and zero live
+ * non-`READY` ones. A product with no media at all fails this the same way
+ * as one whose only media is still `PROCESSING` — both are "not demonstrably
+ * ready," and the SDD draws no exception for the empty case.
+ */
+export class ProductMediaNotReadyError extends DomainRuleError {
+  constructor(options: AppErrorOptions = {}) {
+    super('PRODUCT_MEDIA_NOT_READY', 'This product is not ready to be approved.', {
+      ...options,
+      details: [
+        {
+          field: 'media',
+          issue:
+            'Requires at least one live READY media item and none still AWAITING_UPLOAD, PROCESSING, or FAILED.',
+        },
+      ],
+    });
+  }
+}
+
+/**
  * An operation a media item's own shape forbids — a blank object key or
  * content type, a non-positive size, completing or deleting an already-
  * deleted item, or completing an item that is not `AWAITING_UPLOAD`.

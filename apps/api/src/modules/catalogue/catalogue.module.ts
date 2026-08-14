@@ -415,6 +415,10 @@ const buildAdminProductRouter = (params: {
   const { adminPrisma, idGenerator, clock, logger } = params;
   const productReviewQuery = new PrismaProductReviewQuery(adminPrisma);
   const productRepository = new PrismaProductRepository(adminPrisma);
+  // Read-only here (S2-8) — `product_media_admin_read`'s `USING (true)`
+  // policy was provisioned in S2-6a's own migration for exactly this future
+  // cross-tenant admin read; see `DecideProductDeps.productMediaRepository`.
+  const productMediaRepository = new PrismaProductMediaRepository(adminPrisma);
   // The admin runner, not `PrismaTransactionRunner`: that one opens a tenant
   // transaction and refuses without a tenant context, which this router
   // deliberately never establishes.
@@ -436,6 +440,7 @@ const buildAdminProductRouter = (params: {
       getProductReviewUseCase: new GetProductReviewUseCase({ productReviewQuery, logger }),
       decideProductUseCase: new DecideProductUseCase({
         productRepository,
+        productMediaRepository,
         transactionRunner,
         auditWriter,
         clock,

@@ -17,6 +17,7 @@ import { PrismaAuditLogRepository } from '../../src/modules/audit/infrastructure
 import { CATALOGUE_AUDIT_ACTIONS } from '../../src/modules/catalogue/domain/audit-actions.js';
 import { DecideProductUseCase } from '../../src/modules/catalogue/application/use-cases/decide-product.use-case.js';
 import { PrismaProductRepository } from '../../src/modules/catalogue/infrastructure/persistence/prisma-product.repository.js';
+import { PrismaProductMediaRepository } from '../../src/modules/catalogue/infrastructure/persistence/prisma-product-media.repository.js';
 import { AdminTransactionRunner } from '../../src/shared/infrastructure/persistence/tenant-prisma.js';
 import { toProductId } from '../../src/modules/catalogue/domain/value-objects/product-id.value-object.js';
 import { toSessionId } from '../../src/modules/identity/domain/value-objects/session-id.value-object.js';
@@ -101,15 +102,36 @@ describe('vendor product media concurrency', () => {
     return intent.data.mediaId;
   };
 
+  /**
+   * Direct DB insert of one live `READY` media row (S2-8's approval gate),
+   * separate from whichever media item a given test is actually exercising.
+   */
+  const seedReadyMedia = async (productId: string): Promise<void> => {
+    await db.productMedia.create({
+      data: {
+        id: randomUUID(),
+        productId,
+        vendorId: vendor.vendorId,
+        objectKey: `product-media/${vendor.vendorId}/${productId}/${randomUUID()}.jpg`,
+        contentType: 'image/jpeg',
+        sizeBytes: 1024,
+        status: 'READY',
+      },
+    });
+  };
+
   /** Same direct-use-case shortcut `admin-product-decision.test.ts`/`vendor-product-media.test.ts` use to reach APPROVED without the admin MFA flow. */
   const approveProduct = async (productId: string): Promise<void> => {
     await request(app)
       .post(`/api/v1/vendor/products/${productId}/submit`)
       .set('Authorization', auth())
       .expect(200);
+    // S2-8's approval gate.
+    await seedReadyMedia(productId);
 
     const decideProductUseCase = new DecideProductUseCase({
       productRepository: new PrismaProductRepository(harness.container.adminPrisma),
+      productMediaRepository: new PrismaProductMediaRepository(harness.container.adminPrisma),
       transactionRunner: new AdminTransactionRunner(harness.container.adminPrisma),
       auditWriter: new AmbientAuditWriter({
         auditLogRepository: new PrismaAuditLogRepository(harness.container.adminPrisma),
@@ -208,11 +230,13 @@ describe('vendor product media concurrency', () => {
   describe('ASM-14 concurrent reopening', () => {
     it('two simultaneous media changes on an APPROVED product both succeed and reopen it exactly once', async () => {
       const productId = await seedProduct();
+      await approveProduct(productId);
       // Two separate media items so both completions are legitimately
-      // independent operations, not a race over the same row.
+      // independent operations, not a race over the same row. Minted after
+      // approval — S2-8's gate only concerns itself with the state at
+      // approval time, not with what a vendor uploads afterward.
       const mediaA = await uploadReadyMedia(productId);
       const mediaB = await uploadReadyMedia(productId);
-      await approveProduct(productId);
 
       const complete = (mediaId: string): request.Test =>
         request(app)

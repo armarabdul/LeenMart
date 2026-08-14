@@ -57,6 +57,8 @@ export const CATALOGUE_AUDIT_ACTIONS = {
   PRODUCT_MEDIA_REMOVED: 'catalogue.product.media_removed',
   /** An APPROVED product automatically re-entered PENDING_REVIEW because its media changed (S2-6a, ASM-14). */
   PRODUCT_REVIEW_REOPENED_FOR_MEDIA_CHANGE: 'catalogue.product.review_reopened_for_media_change',
+  /** An APPROVED product automatically re-entered PENDING_REVIEW because its name, category or brand changed (S2-8, ASM-14). */
+  PRODUCT_REVIEW_REOPENED_FOR_DETAIL_CHANGE: 'catalogue.product.review_reopened_for_detail_change',
 } as const;
 
 export type CatalogueAuditAction =

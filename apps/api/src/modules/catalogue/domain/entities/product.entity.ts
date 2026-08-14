@@ -15,11 +15,12 @@ const REJECTION_NOTE_MAX_LENGTH = 1000;
 export type ProductAttributeValues = Readonly<Record<string, unknown>>;
 
 /**
- * The moderation lifecycle (SDD 15.2), as far as S2-5/S2-6a build it:
+ * The moderation lifecycle (SDD 15.2), as far as S2-5/S2-6a/S2-8 build it:
  * `DRAFT ─► PENDING_REVIEW ─► APPROVED` and `PENDING_REVIEW ─► REJECTED ─►
  * (edit, resubmit) ─► PENDING_REVIEW`, plus `APPROVED ─► PENDING_REVIEW` on a
- * media change (ASM-14, S2-6a D-S2-6-L). `PUBLISHED`/`UNPUBLISHED`/`DELISTED`
- * are not declared — see `ProductStatus` in `schema.prisma` for why.
+ * media change (ASM-14, S2-6a D-S2-6-L) or a name/category/brand edit
+ * (ASM-14, S2-8). `PUBLISHED`/`UNPUBLISHED`/`DELISTED` are not declared — see
+ * `ProductStatus` in `schema.prisma` for why.
  */
 export type ProductStatusName = 'DRAFT' | 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED';
 
@@ -372,9 +373,9 @@ export class Product {
    * The trust hole ASM-14 exists to close (SDD 15.2, S2-6a D-S2-6-L):
    * "editing an approved product... Title, images, category, brand,
    * restricted attributes | Re-enters PENDING_REVIEW". S2-6a wires only the
-   * *images* row of that table — media is the sole trigger implemented here;
-   * title/category/brand/attribute edits remain untouched, exactly as they
-   * were before this method existed.
+   * *images* row of that table; S2-8 adds the title/category/brand row via
+   * `reenterReviewForDetailChange` below. Restricted attributes, the price
+   * band, and the `NEW`-tier-vendor row remain deferred.
    *
    * Reachable only from `APPROVED`. Distinct from `submitForReview` on
    * purpose: this is a **system-triggered** side effect of a vendor's media
@@ -393,6 +394,31 @@ export class Product {
     if (this.props.status !== 'APPROVED') {
       throw new InvalidProductOperationError(
         'reenterReviewForMediaChange',
+        `A product in ${this.props.status} cannot be returned to review this way; it must be APPROVED.`,
+      );
+    }
+    return new Product({ ...this.props, status: 'PENDING_REVIEW', updatedAt: now });
+  }
+
+  /**
+   * ASM-14's detail-edit trigger (SDD 15.2, S2-8): the name/title, category
+   * or brand changed on an `APPROVED` product. Reachable only from
+   * `APPROVED` — the identical shape `reenterReviewForMediaChange`
+   * establishes for the media trigger; this is the same rule, a different
+   * cause. Restricted attributes, the price band, and the `NEW`-tier-vendor
+   * row are explicitly deferred (S2-8 decision) — this method exists for
+   * exactly the three fields `UpdateProductUseCase` checks and no others.
+   *
+   * Called on the *already field-updated* product (the result of
+   * `updateDetails`), never on the pre-edit one — the returned instance
+   * carries both the new field values and the new status, so one repository
+   * call persists both.
+   */
+  reenterReviewForDetailChange(now: Date): Product {
+    this.assertLive('reenterReviewForDetailChange');
+    if (this.props.status !== 'APPROVED') {
+      throw new InvalidProductOperationError(
+        'reenterReviewForDetailChange',
         `A product in ${this.props.status} cannot be returned to review this way; it must be APPROVED.`,
       );
     }

@@ -8,10 +8,12 @@ import {
 import type { Product } from '../../domain/entities/product.entity.js';
 import {
   ProductAlreadyDecidedError,
+  ProductMediaNotReadyError,
   ProductNotFoundError,
 } from '../../domain/errors/catalogue-errors.js';
 import { ProductRejectionReason } from '../../domain/value-objects/product-rejection-reason.value-object.js';
 import type { ProductRepository } from '../../domain/repositories/product.repository.js';
+import type { ProductMediaRepository } from '../../domain/repositories/product-media.repository.js';
 import type { ProductId } from '../../domain/value-objects/product-id.value-object.js';
 
 /**
@@ -42,6 +44,17 @@ export interface DecideProductResult {
 
 export interface DecideProductDeps {
   readonly productRepository: ProductRepository;
+  /**
+   * Read-only here (S2-8, SDD 12.2 step 6) — this use case never writes a
+   * media row. Built on the same `adminPrisma` credential as
+   * `productRepository`: `product_media_admin_read`'s `USING (true)` policy
+   * exists for exactly this cross-tenant admin read (its own migration
+   * comment names the future need explicitly), mirroring how
+   * `products_admin_read` already lets this use case read the product row
+   * itself on that credential — not a new privilege, the one already
+   * provisioned for it.
+   */
+  readonly productMediaRepository: ProductMediaRepository;
   readonly transactionRunner: TransactionRunner;
   readonly auditWriter: AuditWriter;
   readonly clock: Clock;
@@ -75,13 +88,27 @@ const decide = (product: Product, input: DecideProductInput, now: Date): Product
  *
  * One transaction, on the admin credential — a decision is a single row's
  * status changing, unlike KYC's decision which also transitions the vendor's
- * separate lifecycle state, so there is only one repository here.
+ * separate lifecycle state, so there is only one product repository here;
+ * `productMediaRepository` is a second, read-only one (S2-8).
+ *
+ * **The media-readiness gate (S2-8, SDD 12.2 step 6)** runs only for
+ * `APPROVE`, and only *after* the domain has already confirmed the decision
+ * is legal — a product outside `PENDING_REVIEW` still answers with the
+ * ordinary "must be in PENDING_REVIEW" error, never a media one that would
+ * be true but beside the point.
  */
 export class DecideProductUseCase {
   constructor(private readonly deps: DecideProductDeps) {}
 
   async execute(input: DecideProductInput): Promise<DecideProductResult> {
-    const { productRepository, transactionRunner, auditWriter, clock, logger } = this.deps;
+    const {
+      productRepository,
+      productMediaRepository,
+      transactionRunner,
+      auditWriter,
+      clock,
+      logger,
+    } = this.deps;
 
     return transactionRunner.run(async (scope) => {
       const repository = productRepository.withTransaction(scope);
@@ -95,6 +122,10 @@ export class DecideProductUseCase {
       // Domain first: it owns "may this be decided at all?" and throws for a
       // product outside `PENDING_REVIEW`, or a rejection with a blank note.
       const decided = decide(existing, input, now);
+
+      if (input.command.decision === 'APPROVE') {
+        await this.assertMediaReady(productMediaRepository.withTransaction(scope), existing.id);
+      }
 
       // Then the race the domain cannot see. Both administrators may have
       // loaded the same `PENDING_REVIEW` row before either wrote; only one
@@ -130,5 +161,23 @@ export class DecideProductUseCase {
 
       return { product: decided };
     });
+  }
+
+  /**
+   * SDD 12.2 step 6 (S2-8): refuses approval unless the product has at least
+   * one live `READY` media item and no live item in any other status.
+   * `listByProductId` already excludes soft-deleted rows, which is what
+   * makes "only deleted media" and "a live READY item plus a deleted
+   * PROCESSING/FAILED one" resolve correctly with no extra filtering here —
+   * a deleted row simply never appears in `items`.
+   */
+  private async assertMediaReady(
+    media: ProductMediaRepository,
+    productId: ProductId,
+  ): Promise<void> {
+    const items = await media.listByProductId(productId);
+    if (items.length === 0 || items.some((item) => item.status !== 'READY')) {
+      throw new ProductMediaNotReadyError();
+    }
   }
 }

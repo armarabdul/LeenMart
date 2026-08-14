@@ -231,4 +231,24 @@ export class PrismaProductRepository implements ProductRepository {
     });
     return result.count === 1;
   }
+
+  /** Same field set as `update`, plus `status`, conditional on `status = 'APPROVED'` (S2-8, ASM-14). */
+  async updateAndReenterReviewIfApproved(product: Product): Promise<boolean> {
+    const result = await this.prisma.product.updateMany({
+      where: { id: product.id, deletedAt: null, status: 'APPROVED' },
+      data: {
+        categoryId: product.categoryId,
+        name: product.name,
+        brand: product.brand,
+        description: product.description,
+        hsnCode: product.hsnCode,
+        countryOfOrigin: product.countryOfOrigin,
+        netQuantity: product.netQuantity,
+        attributeValues: product.attributeValues as Prisma.InputJsonValue,
+        status: product.status,
+        updatedAt: product.updatedAt,
+      },
+    });
+    return result.count === 1;
+  }
 }

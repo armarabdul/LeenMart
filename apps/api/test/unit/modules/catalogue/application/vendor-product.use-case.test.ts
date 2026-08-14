@@ -16,11 +16,13 @@ import {
   CategoryNotFoundError,
   ProductLastVariantError,
   ProductNotFoundError,
+  ProductUpdateConflictError,
   ProductVariantNotFoundError,
 } from '../../../../../src/modules/catalogue/domain/errors/catalogue-errors.js';
 import { Category } from '../../../../../src/modules/catalogue/domain/entities/category.entity.js';
 import { Product } from '../../../../../src/modules/catalogue/domain/entities/product.entity.js';
 import { ProductVariant } from '../../../../../src/modules/catalogue/domain/entities/product-variant.entity.js';
+import { ProductRejectionReason } from '../../../../../src/modules/catalogue/domain/value-objects/product-rejection-reason.value-object.js';
 import type { CategoryRepository } from '../../../../../src/modules/catalogue/domain/repositories/category.repository.js';
 import type { ProductRepository } from '../../../../../src/modules/catalogue/domain/repositories/product.repository.js';
 import type { InventoryRepository } from '../../../../../src/modules/catalogue/domain/repositories/inventory.repository.js';
@@ -80,6 +82,8 @@ const product = (): Product =>
     now: NOW,
   });
 
+const approvedProduct = (): Product => product().submitForReview(NOW).approve(NOW);
+
 const variant = (productId = toProductId(ids.generate())): ProductVariant =>
   ProductVariant.create({
     id: toProductVariantId(ids.generate()),
@@ -117,6 +121,7 @@ const productRepo = (overrides: Partial<ProductRepository> = {}): ProductReposit
     decideIfPendingReview: vi.fn().mockResolvedValue(true),
     lockForMediaChange: vi.fn().mockResolvedValue(true),
     reenterReviewIfApproved: vi.fn().mockResolvedValue(true),
+    updateAndReenterReviewIfApproved: vi.fn().mockResolvedValue(true),
     ...overrides,
   };
   return repository;
@@ -282,6 +287,164 @@ describe('UpdateProductUseCase', () => {
       useCase.execute({ principal, productId: existing.id, changes: { name: 'x' } }),
     ).rejects.toThrow(/audit/i);
     expect(rolledBack).toHaveBeenCalledTimes(1);
+  });
+
+  describe('ASM-14 detail-edit re-review (S2-8)', () => {
+    it('re-enters PENDING_REVIEW when the name changes on an APPROVED product', async () => {
+      const existing = approvedProduct();
+
+      const { product: updated } = await build(
+        productRepo({ findById: vi.fn().mockResolvedValue(existing) }),
+      ).execute({ principal, productId: existing.id, changes: { name: 'Renamed' } });
+
+      expect(updated.status).toBe('PENDING_REVIEW');
+      expect(updated.name).toBe('Renamed');
+    });
+
+    it('re-enters PENDING_REVIEW when the category changes on an APPROVED product', async () => {
+      const existing = approvedProduct();
+      const newCategoryId = toCategoryId(ids.generate());
+
+      const { product: updated } = await build(
+        productRepo({ findById: vi.fn().mockResolvedValue(existing) }),
+      ).execute({ principal, productId: existing.id, changes: { categoryId: newCategoryId } });
+
+      expect(updated.status).toBe('PENDING_REVIEW');
+      expect(updated.categoryId).toBe(newCategoryId);
+    });
+
+    it('re-enters PENDING_REVIEW when the brand changes on an APPROVED product', async () => {
+      const existing = approvedProduct();
+
+      const { product: updated } = await build(
+        productRepo({ findById: vi.fn().mockResolvedValue(existing) }),
+      ).execute({ principal, productId: existing.id, changes: { brand: 'Acme' } });
+
+      expect(updated.status).toBe('PENDING_REVIEW');
+      expect(updated.brand).toBe('Acme');
+    });
+
+    it('stays APPROVED for a description-only change', async () => {
+      const existing = approvedProduct();
+
+      const { product: updated } = await build(
+        productRepo({ findById: vi.fn().mockResolvedValue(existing) }),
+      ).execute({ principal, productId: existing.id, changes: { description: 'New copy.' } });
+
+      expect(updated.status).toBe('APPROVED');
+    });
+
+    it('stays APPROVED for an unrelated, non-triggering field change', async () => {
+      const existing = approvedProduct();
+
+      const { product: updated } = await build(
+        productRepo({ findById: vi.fn().mockResolvedValue(existing) }),
+      ).execute({ principal, productId: existing.id, changes: { netQuantity: '500 g' } });
+
+      expect(updated.status).toBe('APPROVED');
+    });
+
+    it('does not trigger for a DRAFT product, even on a name change', async () => {
+      const existing = product();
+
+      const { product: updated } = await build(
+        productRepo({ findById: vi.fn().mockResolvedValue(existing) }),
+      ).execute({ principal, productId: existing.id, changes: { name: 'Renamed' } });
+
+      expect(updated.status).toBe('DRAFT');
+    });
+
+    it('does not trigger for a PENDING_REVIEW product, even on a name change', async () => {
+      const existing = product().submitForReview(NOW);
+
+      const { product: updated } = await build(
+        productRepo({ findById: vi.fn().mockResolvedValue(existing) }),
+      ).execute({ principal, productId: existing.id, changes: { name: 'Renamed' } });
+
+      expect(updated.status).toBe('PENDING_REVIEW');
+    });
+
+    it('does not trigger for a REJECTED product, even on a name change', async () => {
+      const existing = product()
+        .submitForReview(NOW)
+        .reject(ProductRejectionReason.fromName('OTHER'), null, NOW);
+
+      const { product: updated } = await build(
+        productRepo({ findById: vi.fn().mockResolvedValue(existing) }),
+      ).execute({ principal, productId: existing.id, changes: { name: 'Renamed' } });
+
+      expect(updated.status).toBe('REJECTED');
+    });
+
+    it('does not re-enter review when the "new" name is the same as the existing one', async () => {
+      const existing = approvedProduct();
+
+      const { product: updated } = await build(
+        productRepo({ findById: vi.fn().mockResolvedValue(existing) }),
+      ).execute({ principal, productId: existing.id, changes: { name: existing.name } });
+
+      expect(updated.status).toBe('APPROVED');
+    });
+
+    it('does not re-enter review for a whitespace-only "change" to the name', async () => {
+      const existing = approvedProduct();
+
+      const { product: updated } = await build(
+        productRepo({ findById: vi.fn().mockResolvedValue(existing) }),
+      ).execute({ principal, productId: existing.id, changes: { name: `  ${existing.name}  ` } });
+
+      expect(updated.status).toBe('APPROVED');
+    });
+
+    it('persists through the conditional write, never the plain update, when triggering', async () => {
+      const existing = approvedProduct();
+      const products = productRepo({ findById: vi.fn().mockResolvedValue(existing) });
+
+      await build(products).execute({
+        principal,
+        productId: existing.id,
+        changes: { name: 'Renamed' },
+      });
+
+      expect(products.updateAndReenterReviewIfApproved).toHaveBeenCalledTimes(1);
+      expect(products.update).not.toHaveBeenCalled();
+    });
+
+    it('throws a conflict, applying nothing, when the conditional write loses the race', async () => {
+      const existing = approvedProduct();
+      const products = productRepo({
+        findById: vi.fn().mockResolvedValue(existing),
+        updateAndReenterReviewIfApproved: vi.fn().mockResolvedValue(false),
+      });
+
+      await expect(
+        build(products).execute({
+          principal,
+          productId: existing.id,
+          changes: { name: 'Renamed' },
+        }),
+      ).rejects.toBeInstanceOf(ProductUpdateConflictError);
+    });
+
+    it('records both the reopening audit entry and PRODUCT_UPDATED, each immediately after its own write', async () => {
+      const existing = approvedProduct();
+      const auditWriter = new RecordingAuditWriter();
+
+      await build(
+        productRepo({ findById: vi.fn().mockResolvedValue(existing) }),
+        auditWriter,
+      ).execute({ principal, productId: existing.id, changes: { name: 'Renamed' } });
+
+      // The reopening audit is written immediately after the one conditional
+      // write that both applies the edit and reopens the product — never
+      // speculatively before a write whose success it depends on, the same
+      // discipline every other conditional write in this module keeps.
+      // `PRODUCT_UPDATED` follows, describing the edit as a whole.
+      expect(auditWriter.entries.map((entry) => entry.action)).toEqual([
+        CATALOGUE_AUDIT_ACTIONS.PRODUCT_REVIEW_REOPENED_FOR_DETAIL_CHANGE,
+        CATALOGUE_AUDIT_ACTIONS.PRODUCT_UPDATED,
+      ]);
+    });
   });
 });
 
