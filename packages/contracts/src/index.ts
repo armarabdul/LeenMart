@@ -1,3 +1,4 @@
+export * from './cart/cart.contract.js';
 export * from './catalogue/category-attribute.contract.js';
 export * from './catalogue/category.contract.js';
 export * from './catalogue/inventory.contract.js';

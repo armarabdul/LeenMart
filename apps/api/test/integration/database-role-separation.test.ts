@@ -309,16 +309,24 @@ describe('database role separation', () => {
       ).rejects.toThrow(/permission denied for table products/);
     });
 
-    it('has no table grants beyond the two SELECT-only ones the S2-7 migration issues', async () => {
-      const rows = await owner.$queryRaw<{ count: bigint }[]>`
-        SELECT count(*) AS count
+    it('has no table grants beyond the four SELECT-only ones S2-7 and S3-1 issue', async () => {
+      // S2-7 granted `products`/`product_media`; S3-1 (cart eligibility and
+      // availability checks) added `product_variants`/`inventory` — the
+      // same narrow, per-table enumeration, never a schema-wide default.
+      const rows = await owner.$queryRaw<{ relname: string }[]>`
+        SELECT DISTINCT c.relname
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
         JOIN pg_roles r ON r.oid = acl.grantee
         WHERE n.nspname = 'public' AND r.rolname = 'leenmart_public'`;
 
-      expect(Number(rows[0]?.count)).toBe(2);
+      expect(rows.map((row) => row.relname).sort()).toEqual([
+        'inventory',
+        'product_media',
+        'product_variants',
+        'products',
+      ]);
     });
   });
 

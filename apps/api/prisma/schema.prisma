@@ -106,6 +106,7 @@ model User {
   mfaSecret     MfaSecret?
   mfaChallenges MfaChallenge[]
   addresses     Address[]
+  cart          Cart?
   // Two named relations because a KYC submission records the reviewer who
   // claimed it and the administrator who decided it as separate people.
   kycReviewed   VendorKycSubmission[] @relation("KycReviewer")
@@ -957,4 +958,58 @@ model Inventory {
   @@unique([variantId, vendorId], map: "uq_inventory_variant_vendor")
   @@index([vendorId], map: "idx_inventory_vendor")
   @@map("inventory")
+}
+
+/// A customer's cart (S3-1, SDD 5 module 6: "cart"). One per customer — a
+/// `UNIQUE` `user_id`, not a separate id lookup — since S3-1 has no guest-cart
+/// or multi-cart concept to justify anything richer.
+///
+/// Deliberately outside `TENANT_SCOPED_MODELS`: a cart belongs to a customer,
+/// not a vendor tenant, exactly like `Address` above. No RLS — ownership is
+/// enforced in application code by `(id, userId)`/`(cartId, userId)` scoping,
+/// the same convention `AddressRepository` already establishes.
+model Cart {
+  id        String   @id @db.Uuid
+  userId    String   @unique @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items CartItem[]
+
+  @@map("carts")
+}
+
+/// One line in a cart (S3-1). `variantId` is a **plain UUID with no foreign
+/// key** to `product_variants` — SDD 5.1 forbids a foreign key crossing a
+/// module boundary except to the shared `users`/`vendors` identity anchors,
+/// and `cart` and `catalogue` are separate modules (SDD 5). Existence and
+/// eligibility (belongs to an `APPROVED`, non-deleted product) are checked at
+/// write time against `catalogue`'s own repositories bound to the
+/// `leenmart_public` read path, the same way price/tax will later be
+/// snapshotted onto an order line rather than joined live.
+///
+/// No price/tax snapshot here (S3-1 explicitly excludes pricing/tax — SDD 5's
+/// "price snapshot" cart responsibility is deferred, not silently dropped).
+model CartItem {
+  id        String    @id @db.Uuid
+  cartId    String    @map("cart_id") @db.Uuid
+  variantId String    @map("variant_id") @db.Uuid
+  quantity  Int
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  cart Cart @relation(fields: [cartId], references: [id], onDelete: Cascade)
+
+  /// `uq_cart_items_cart_variant` — one live row per variant per cart, the
+  /// database-level backing for "adding an already-present variant
+  /// increments its quantity" rather than creating a second row — is
+  /// deliberately absent here and hand-added only in the migration (a
+  /// partial unique index, `WHERE deleted_at IS NULL`), the same way
+  /// `idx_addresses_one_default_per_user` is: Prisma's schema DSL has no
+  /// WHERE clause for indexes, so expressing it here would drift from the
+  /// migration on the next `prisma migrate dev`.
+  @@index([cartId], map: "idx_cart_items_cart")
+  @@map("cart_items")
 }

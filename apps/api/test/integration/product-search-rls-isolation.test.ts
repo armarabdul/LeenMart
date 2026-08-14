@@ -308,17 +308,23 @@ describe('leenmart_public RLS isolation (S2-7)', () => {
       // rather than `information_schema`, which restricts what it shows to
       // "currently enabled roles" and would make this assertion depend on
       // exactly which role is asking.
-      const rows = await owner.$queryRaw<{ count: bigint }[]>`
-        SELECT count(*) AS count
+      const rows = await owner.$queryRaw<{ relname: string }[]>`
+        SELECT DISTINCT c.relname
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
         JOIN pg_roles r ON r.oid = acl.grantee
         WHERE n.nspname = 'public' AND r.rolname = 'leenmart_public' AND acl.privilege_type = 'SELECT'`;
 
-      // Exactly the two SELECT grants the S2-7 migration issues — products
-      // and product_media, nothing else.
-      expect(Number(rows[0]?.count)).toBe(2);
+      // Exactly the four SELECT grants issued so far: S2-7's `products` and
+      // `product_media`, plus S3-1's `product_variants` and `inventory`
+      // (cart eligibility/availability checks) — nothing else.
+      expect(rows.map((row) => row.relname).sort()).toEqual([
+        'inventory',
+        'product_media',
+        'product_variants',
+        'products',
+      ]);
     });
   });
 });

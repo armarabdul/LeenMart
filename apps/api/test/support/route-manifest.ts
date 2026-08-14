@@ -235,6 +235,50 @@ const mediaIdOf = (resourceId: string): string => resourceId.split('/').at(-1) ?
 const snapshotMedia = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
   ctx.db.productMedia.findUnique({ where: { id: mediaIdOf(resourceId) } });
 
+// --- cart (S3-1) --------------------------------------------------------
+
+/**
+ * Seeds a fresh `APPROVED` product+variant with stock (so it is visible
+ * under `leenmart_public` and passes the availability check — S3-1's
+ * eligibility gate) and one cart item owned by `owner`, returning the
+ * item's id.
+ */
+const seedCartItem = async (ctx: RouteTestContext, owner: Actor): Promise<string> => {
+  const categoryId = await seedCategoryRow(ctx);
+  const vendor = await vendorActor(ctx, 'cart-matrix-vendor');
+  const createResponse = await authed(request(ctx.app).post('/api/v1/vendor/products'), vendor)
+    .send({
+      categoryId,
+      name: `Cart Matrix Product ${(productSeq += 1)}`,
+      variant: {
+        sku: `CART-MATRIX-${Date.now()}-${productSeq}`,
+        name: 'Default',
+        price: { amount: '19900', currency: 'INR' },
+        unitOfMeasure: 'per piece',
+        quantityStep: 1,
+      },
+    })
+    .expect(201);
+  const productId = (createResponse.body as { data: { product: { id: string } } }).data.product.id;
+  const variantRow = await ctx.db.productVariant.findFirstOrThrow({ where: { productId } });
+
+  await ctx.db.inventory.update({ where: { variantId: variantRow.id }, data: { available: 100 } });
+  await ctx.db.product.update({ where: { id: productId }, data: { status: 'APPROVED' } });
+
+  const response = await authed(request(ctx.app).post('/api/v1/me/cart/items'), owner)
+    .send({ variantId: variantRow.id, quantity: 1 })
+    .expect(201);
+  const item = (
+    response.body as { data: { items: { id: string; variantId: string }[] } }
+  ).data.items.find((row) => row.variantId === variantRow.id);
+  if (!item) throw new Error('seedCartItem: item not found in response after add');
+  return item.id;
+};
+
+/** The whole stored row — the matrix always addresses an item by its own id, never a `cartId`. */
+const snapshotCartItem = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
+  ctx.db.cartItem.findUnique({ where: { id: resourceId } });
+
 /**
  * Every route the application actually mounts, classified.
  *
@@ -813,6 +857,53 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     path: '/',
     classification: 'PUBLIC',
     why: 'Unauthenticated (auth-optional) product search; RLS on leenmart_public confines results to APPROVED, non-deleted rows regardless of tenant.',
+  },
+
+  // --- cart: /api/v1/me/cart (S3-1) ---
+  {
+    method: 'GET',
+    prefix: '/api/v1/me',
+    path: '/cart',
+    classification: 'SELF_SCOPED',
+    why: 'Returns only the caller’s own cart; takes no resource id.',
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/me',
+    path: '/cart/items',
+    classification: 'SELF_SCOPED',
+    why: 'Adds to the caller’s own cart (created on first use); takes no resource id.',
+  },
+  {
+    method: 'PATCH',
+    prefix: '/api/v1/me',
+    path: '/cart/items/:itemId',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied cart item id and writes to it.',
+    seed: seedCartItem,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).patch(`/api/v1/me/cart/items/${resourceId}`), actor).send({
+        quantity: 2,
+      }),
+    snapshot: snapshotCartItem,
+  },
+  {
+    method: 'DELETE',
+    prefix: '/api/v1/me',
+    path: '/cart/items/:itemId',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied cart item id and soft-deletes it.',
+    seed: seedCartItem,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).delete(`/api/v1/me/cart/items/${resourceId}`), actor),
+    snapshot: snapshotCartItem,
+  },
+  {
+    method: 'DELETE',
+    prefix: '/api/v1/me',
+    path: '/cart',
+    classification: 'SELF_SCOPED',
+    why: 'Clears only the caller’s own cart; takes no resource id.',
   },
 ];
 

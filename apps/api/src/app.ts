@@ -11,6 +11,7 @@ import {
   createNotFoundHandler,
 } from './shared/interface/http/middleware/error-handler.js';
 import { createHealthRouter } from './shared/interface/http/routes/health.routes.js';
+import { createCartModule } from './modules/cart/index.js';
 import { createCatalogueModule } from './modules/catalogue/index.js';
 import { createCustomerModule } from './modules/customer/index.js';
 import {
@@ -78,6 +79,12 @@ const mountBusinessModules = (
 
   const customerModule = createCustomerModule(params);
   app.use('/api/v1/me', customerModule.router);
+
+  // The cart surface (SDD 5 module 6 / S3-1): customer-owned, mounted at the
+  // same `/api/v1/me` prefix as `addresses` — no tenant context, same as
+  // `customerModule` above.
+  const cartModule = createCartModule(params);
+  app.use('/api/v1/me', cartModule.router);
 
   // The taxonomy admin surface (SDD 9.4). No tenant context: categories are
   // platform-owned and carry no vendor column for one to scope.
