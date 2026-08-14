@@ -58,6 +58,8 @@ const productRepo = (overrides: Partial<ProductRepository> = {}): ProductReposit
     lockForVariantChange: vi.fn().mockResolvedValue(true),
     submitForReviewIfEligible: vi.fn().mockResolvedValue(true),
     decideIfPendingReview: vi.fn().mockResolvedValue(true),
+    lockForMediaChange: vi.fn().mockResolvedValue(true),
+    reenterReviewIfApproved: vi.fn().mockResolvedValue(true),
     ...overrides,
   };
   return repository;

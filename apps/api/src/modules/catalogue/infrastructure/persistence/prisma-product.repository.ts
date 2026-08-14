@@ -214,4 +214,21 @@ export class PrismaProductRepository implements ProductRepository {
     });
     return result.count === 1;
   }
+
+  /** Same mechanism as `lockForVariantChange` — an `UPDATE` of `updated_at`, which is what takes the lock. */
+  async lockForMediaChange(id: ProductId, now: Date): Promise<boolean> {
+    const result = await this.prisma.product.updateMany({
+      where: { id, deletedAt: null },
+      data: { updatedAt: now },
+    });
+    return result.count === 1;
+  }
+
+  async reenterReviewIfApproved(product: Product): Promise<boolean> {
+    const result = await this.prisma.product.updateMany({
+      where: { id: product.id, deletedAt: null, status: 'APPROVED' },
+      data: { status: product.status, updatedAt: product.updatedAt },
+    });
+    return result.count === 1;
+  }
 }

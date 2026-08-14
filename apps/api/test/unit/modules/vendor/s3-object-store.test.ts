@@ -27,7 +27,14 @@ const buildStore = (): { store: S3ObjectStore; send: ReturnType<typeof vi.fn> } 
   const send = vi.fn();
   (client as unknown as { send: unknown }).send = send;
 
-  return { store: new S3ObjectStore(client, { bucket: BUCKET }), send };
+  return {
+    store: new S3ObjectStore(client, {
+      bucket: BUCKET,
+      allowedContentTypes: KYC_ALLOWED_CONTENT_TYPES,
+      maxObjectBytes: KYC_MAX_OBJECT_BYTES,
+    }),
+    send,
+  };
 };
 
 const expiresInOf = (url: string): number => Number(new URL(url).searchParams.get('X-Amz-Expires'));
@@ -209,6 +216,68 @@ describe('S3ObjectStore', () => {
       );
 
       await expect(store.delete(KEY)).rejects.toMatchObject({ kind: 'INTEGRATION' });
+    });
+  });
+
+  describe('multiple instances (S2-6a regression)', () => {
+    // Guards the bug S2-6a found and fixed: `presignPut` used to read
+    // `KYC_ALLOWED_CONTENT_TYPES`/`KYC_MAX_OBJECT_BYTES` as hardcoded module
+    // constants rather than `this.config`, so a second `S3ObjectStore`
+    // instance silently enforced KYC's rules regardless of its own bucket.
+    // These prove a differently-configured instance enforces *its own*
+    // allowlist and cap, independent of the KYC instance built above.
+    const PRODUCT_MEDIA_ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+    const PRODUCT_MEDIA_MAX_OBJECT_BYTES = 10 * 1024 * 1024;
+
+    const buildProductMediaStore = (): S3ObjectStore => {
+      const client = new S3Client({
+        region: 'auto',
+        endpoint: 'http://localhost:9000',
+        forcePathStyle: true,
+        credentials: { accessKeyId: 'test-key', secretAccessKey: 'test-secret' },
+      });
+      return new S3ObjectStore(client, {
+        bucket: 'leenmart-public-media',
+        allowedContentTypes: PRODUCT_MEDIA_ALLOWED_CONTENT_TYPES,
+        maxObjectBytes: PRODUCT_MEDIA_MAX_OBJECT_BYTES,
+      });
+    };
+
+    it('accepts a type KYC refuses (application/pdf is not in the product-media allowlist)', async () => {
+      const store = buildProductMediaStore();
+
+      await expect(
+        store.presignPut({ key: KEY, contentType: 'image/webp', contentLength: 1024 }),
+      ).resolves.toMatchObject({ contentType: 'image/webp' });
+    });
+
+    it('refuses a type only KYC allows', async () => {
+      const store = buildProductMediaStore();
+
+      await expect(
+        store.presignPut({ key: KEY, contentType: 'application/pdf', contentLength: 1024 }),
+      ).rejects.toMatchObject({ code: 'UNSUPPORTED_CONTENT_TYPE' });
+    });
+
+    it('enforces its own size cap, not the KYC instance’s', async () => {
+      const store = buildProductMediaStore();
+
+      await expect(
+        store.presignPut({
+          key: KEY,
+          contentType: 'image/jpeg',
+          contentLength: PRODUCT_MEDIA_MAX_OBJECT_BYTES + 1,
+        }),
+      ).rejects.toMatchObject({ code: 'FILE_TOO_LARGE' });
+    });
+
+    it('leaves the KYC instance unaffected by the product-media instance existing', async () => {
+      const { store: kycStore } = buildStore();
+      buildProductMediaStore();
+
+      await expect(
+        kycStore.presignPut({ key: KEY, contentType: 'image/webp', contentLength: 1024 }),
+      ).rejects.toMatchObject({ code: 'UNSUPPORTED_CONTENT_TYPE' });
     });
   });
 

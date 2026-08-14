@@ -21,6 +21,7 @@ const productionEnv = {
   KYC_KMS_KEY_ID: 'arn:aws:kms:ap-south-1:000000000000:key/real',
   KYC_S3_SECRET_ACCESS_KEY: 'a-real-object-storage-secret',
   KYC_FINGERPRINT_PEPPER: '9'.repeat(64),
+  PRODUCT_MEDIA_S3_SECRET_ACCESS_KEY: 'a-real-product-media-secret',
   APP_DATABASE_URL: 'postgresql://leenmart_app:secret@db:5432/leenmart?schema=public',
   ADMIN_DATABASE_URL: 'postgresql://leenmart_admin:secret@db:5432/leenmart?schema=public',
 };
@@ -174,6 +175,12 @@ describe('environment configuration', () => {
       expect(() =>
         loadEnv({ ...productionEnv, KYC_S3_SECRET_ACCESS_KEY: 'leenmart-dev-secret' }),
       ).toThrow(/KYC_S3_SECRET_ACCESS_KEY/);
+    });
+
+    it('refuses the development product-media object-storage secret in production (S2-6a)', () => {
+      expect(() =>
+        loadEnv({ ...productionEnv, PRODUCT_MEDIA_S3_SECRET_ACCESS_KEY: 'leenmart-dev-secret' }),
+      ).toThrow(/PRODUCT_MEDIA_S3_SECRET_ACCESS_KEY/);
     });
 
     it('accepts a fully configured production environment', () => {

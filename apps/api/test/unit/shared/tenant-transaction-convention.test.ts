@@ -33,6 +33,7 @@ const TENANT_TABLES = [
   'products',
   'product_variants',
   'inventory',
+  'product_media',
 ];
 
 interface SourceFile {

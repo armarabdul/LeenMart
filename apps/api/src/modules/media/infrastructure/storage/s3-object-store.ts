@@ -47,6 +47,17 @@ export const TEMPORARY_DELIVERY_PREFIX = 'kyc-temp-delivery/';
 
 export interface S3ObjectStoreConfig {
   readonly bucket: string;
+  /**
+   * The declared-type allowlist and size cap `presignPut` enforces (S2-6:
+   * previously hardcoded to `KYC_ALLOWED_CONTENT_TYPES`/`KYC_MAX_OBJECT_BYTES`,
+   * which silently made every instance of this class enforce KYC's rules
+   * regardless of which bucket it was configured for — a latent bug that
+   * stayed invisible as long as KYC was the only caller. Explicit config is
+   * what makes a second instance, with product media's own allowlist and cap,
+   * actually independent rather than accidentally sharing KYC's.
+   */
+  readonly allowedContentTypes: readonly string[];
+  readonly maxObjectBytes: number;
 }
 
 /**
@@ -70,16 +81,15 @@ export class S3ObjectStore implements ObjectStore {
   ) {}
 
   async presignPut(input: PresignPutInput): Promise<PresignedUpload> {
+    const { allowedContentTypes, maxObjectBytes } = this.config;
+
     // Validated before signing, never after: an issued URL is a capability,
     // and there is no taking one back.
-    if (!KYC_ALLOWED_CONTENT_TYPES.includes(input.contentType)) {
+    if (!allowedContentTypes.includes(input.contentType)) {
       throw new ValidationError('This file type is not accepted.', {
         code: 'UNSUPPORTED_CONTENT_TYPE',
         details: [
-          {
-            field: 'contentType',
-            issue: `Must be one of: ${KYC_ALLOWED_CONTENT_TYPES.join(', ')}`,
-          },
+          { field: 'contentType', issue: `Must be one of: ${allowedContentTypes.join(', ')}` },
         ],
       });
     }
@@ -89,12 +99,10 @@ export class S3ObjectStore implements ObjectStore {
         details: [{ field: 'contentLength', issue: 'Must be a positive integer.' }],
       });
     }
-    if (input.contentLength > KYC_MAX_OBJECT_BYTES) {
+    if (input.contentLength > maxObjectBytes) {
       throw new ValidationError('This file is too large.', {
         code: 'FILE_TOO_LARGE',
-        details: [
-          { field: 'contentLength', issue: `Must not exceed ${KYC_MAX_OBJECT_BYTES} bytes.` },
-        ],
+        details: [{ field: 'contentLength', issue: `Must not exceed ${maxObjectBytes} bytes.` }],
       });
     }
 

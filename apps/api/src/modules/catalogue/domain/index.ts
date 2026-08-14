@@ -10,6 +10,7 @@ export * from './entities/category.entity.js';
 export * from './entities/category-attribute.entity.js';
 export * from './entities/product.entity.js';
 export * from './entities/product-variant.entity.js';
+export * from './entities/product-media.entity.js';
 export * from './entities/inventory.entity.js';
 
 // value objects
@@ -20,6 +21,7 @@ export * from './value-objects/category-risk-level.value-object.js';
 export * from './value-objects/category-slug.value-object.js';
 export * from './value-objects/product-id.value-object.js';
 export * from './value-objects/product-variant-id.value-object.js';
+export * from './value-objects/product-media-id.value-object.js';
 export * from './value-objects/product-rejection-reason.value-object.js';
 export * from './value-objects/sku.value-object.js';
 
@@ -31,4 +33,5 @@ export * from './repositories/category.repository.js';
 export * from './repositories/category-attribute.repository.js';
 export * from './repositories/product.repository.js';
 export * from './repositories/product-variant.repository.js';
+export * from './repositories/product-media.repository.js';
 export * from './repositories/inventory.repository.js';

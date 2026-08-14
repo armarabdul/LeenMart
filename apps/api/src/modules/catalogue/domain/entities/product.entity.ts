@@ -15,9 +15,10 @@ const REJECTION_NOTE_MAX_LENGTH = 1000;
 export type ProductAttributeValues = Readonly<Record<string, unknown>>;
 
 /**
- * The moderation lifecycle (SDD 15.2), as far as S2-5 builds it:
+ * The moderation lifecycle (SDD 15.2), as far as S2-5/S2-6a build it:
  * `DRAFT ─► PENDING_REVIEW ─► APPROVED` and `PENDING_REVIEW ─► REJECTED ─►
- * (edit, resubmit) ─► PENDING_REVIEW`. `PUBLISHED`/`UNPUBLISHED`/`DELISTED`
+ * (edit, resubmit) ─► PENDING_REVIEW`, plus `APPROVED ─► PENDING_REVIEW` on a
+ * media change (ASM-14, S2-6a D-S2-6-L). `PUBLISHED`/`UNPUBLISHED`/`DELISTED`
  * are not declared — see `ProductStatus` in `schema.prisma` for why.
  */
 export type ProductStatusName = 'DRAFT' | 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED';
@@ -365,6 +366,37 @@ export class Product {
       rejectionNote: trimmed,
       updatedAt: now,
     });
+  }
+
+  /**
+   * The trust hole ASM-14 exists to close (SDD 15.2, S2-6a D-S2-6-L):
+   * "editing an approved product... Title, images, category, brand,
+   * restricted attributes | Re-enters PENDING_REVIEW". S2-6a wires only the
+   * *images* row of that table — media is the sole trigger implemented here;
+   * title/category/brand/attribute edits remain untouched, exactly as they
+   * were before this method existed.
+   *
+   * Reachable only from `APPROVED`. Distinct from `submitForReview` on
+   * purpose: this is a **system-triggered** side effect of a vendor's media
+   * change, never a vendor action in its own right, so it does not accept
+   * `DRAFT`/`REJECTED` the way `submitForReview` does, and there is no HTTP
+   * route that calls it directly — `CompleteProductMediaUploadUseCase`/
+   * `RemoveProductMediaUseCase` call it internally, atomically, in the same
+   * transaction as the media write.
+   *
+   * Clears nothing that isn't already null: `APPROVED` never carries a
+   * rejection, so there is nothing here for `submitForReview`'s "clears any
+   * prior rejection" comment to apply to.
+   */
+  reenterReviewForMediaChange(now: Date): Product {
+    this.assertLive('reenterReviewForMediaChange');
+    if (this.props.status !== 'APPROVED') {
+      throw new InvalidProductOperationError(
+        'reenterReviewForMediaChange',
+        `A product in ${this.props.status} cannot be returned to review this way; it must be APPROVED.`,
+      );
+    }
+    return new Product({ ...this.props, status: 'PENDING_REVIEW', updatedAt: now });
   }
 
   private assertPendingReview(operation: string): void {

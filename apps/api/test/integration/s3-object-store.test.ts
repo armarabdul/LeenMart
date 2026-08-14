@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
 import { UuidV7Generator } from '@leen-mart/domain-kit';
-import { KYC_MAX_OBJECT_BYTES, S3ObjectStore } from '../../src/modules/media/index.js';
+import {
+  KYC_ALLOWED_CONTENT_TYPES,
+  KYC_MAX_OBJECT_BYTES,
+  S3ObjectStore,
+} from '../../src/modules/media/index.js';
 
 /**
  * Integration test against the MinIO already in `infra/docker/docker-compose.yml`,
@@ -25,7 +29,11 @@ describe('S3ObjectStore against MinIO', () => {
     forcePathStyle: true,
     credentials: { accessKeyId: 'leenmart', secretAccessKey: 'leenmart-dev-secret' },
   });
-  const store = new S3ObjectStore(client, { bucket });
+  const store = new S3ObjectStore(client, {
+    bucket,
+    allowedContentTypes: KYC_ALLOWED_CONTENT_TYPES,
+    maxObjectBytes: KYC_MAX_OBJECT_BYTES,
+  });
 
   const created: string[] = [];
   const newKey = (): string => {

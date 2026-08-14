@@ -101,6 +101,26 @@ const assertProductionKycConfig = (
 };
 
 /**
+ * The production guard specific to product media (S2-6a), mirroring
+ * `assertProductionKycConfig`'s object-storage check exactly. A separate
+ * function rather than folded into that one: this credential protects a
+ * different, *public*, bucket, and the two must never be confused with each
+ * other even in how they are validated.
+ */
+const assertProductionProductMediaConfig = (
+  env: { PRODUCT_MEDIA_S3_SECRET_ACCESS_KEY: string },
+  ctx: z.RefinementCtx,
+): void => {
+  if (env.PRODUCT_MEDIA_S3_SECRET_ACCESS_KEY === 'leenmart-dev-secret') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['PRODUCT_MEDIA_S3_SECRET_ACCESS_KEY'],
+      message: 'Real object-storage credentials must be set in production.',
+    });
+  }
+};
+
+/**
  * Production must not serve requests on the owner connection.
  *
  * Outside production the runtime URLs fall back to `DATABASE_URL`, so a
@@ -277,6 +297,22 @@ const envSchema = z
       .string()
       .regex(/^[0-9a-f]{64}$/i, 'must be a 64-character hexadecimal string (32 bytes)')
       .default(INSECURE_DEV_KYC_FINGERPRINT_PEPPER),
+
+    // --- product media object storage (SDD 12.1/12.2): S3-compatible, MinIO
+    // locally, R2 in production. A separate bucket *and* a separate
+    // credential from KYC_S3_* — least privilege, the same reasoning
+    // INSECURE_DEV_KYC_WRAPPING_KEY gives for not reusing the MFA key: one
+    // compromised credential must not also reach the other bucket.
+    // `leenmart-public-media` is served publicly via CDN (SDD 12.1); the
+    // private KYC bucket must never be reachable through this credential, or
+    // vice versa.
+    PRODUCT_MEDIA_S3_ENDPOINT: z.string().url().default('http://localhost:9000'),
+    PRODUCT_MEDIA_S3_REGION: z.string().min(1).default('auto'),
+    PRODUCT_MEDIA_S3_BUCKET: z.string().min(1).default('leenmart-public-media'),
+    PRODUCT_MEDIA_S3_ACCESS_KEY_ID: z.string().min(1).default('leenmart'),
+    PRODUCT_MEDIA_S3_SECRET_ACCESS_KEY: z.string().min(1).default('leenmart-dev-secret'),
+    /** Same reasoning `KYC_S3_FORCE_PATH_STYLE` gives: MinIO needs it, R2 accepts it. */
+    PRODUCT_MEDIA_S3_FORCE_PATH_STYLE: booleanFromString.default('true'),
   })
   .superRefine((env, ctx) => {
     // Guard rails that only apply once real users are involved.
@@ -310,6 +346,7 @@ const envSchema = z
         });
       }
       assertProductionKycConfig(env, ctx);
+      assertProductionProductMediaConfig(env, ctx);
       assertProductionDatabaseRoles(env, ctx);
     }
   });

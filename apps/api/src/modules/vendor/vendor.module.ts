@@ -8,7 +8,12 @@ import type { VendorTenantResolver } from '../../shared/interface/http/middlewar
 import { AmbientAuditWriter, type AuditWriter } from '../audit/index.js';
 import { PrismaAuditLogRepository } from '../audit/infrastructure/persistence/prisma-audit-log.repository.js';
 import type { AccessTokenService, SessionDenylist, UserId, VendorId } from '../identity/index.js';
-import { S3ObjectStore, type ObjectStore } from '../media/index.js';
+import {
+  KYC_ALLOWED_CONTENT_TYPES,
+  KYC_MAX_OBJECT_BYTES,
+  S3ObjectStore,
+  type ObjectStore,
+} from '../media/index.js';
 import type { DataKeyCipher } from './application/ports/data-key-cipher.port.js';
 import type { DocumentCipher } from './application/ports/document-cipher.port.js';
 import { AccessKycDocumentUseCase } from './application/use-cases/access-kyc-document.use-case.js';
@@ -106,6 +111,14 @@ const createKycS3Client = (env: Env): S3Client =>
       accessKeyId: env.KYC_S3_ACCESS_KEY_ID,
       secretAccessKey: env.KYC_S3_SECRET_ACCESS_KEY,
     },
+  });
+
+/** Split out purely to keep `createVendorModule` under this file's line budget. */
+const buildKycObjectStore = (env: Env): S3ObjectStore =>
+  new S3ObjectStore(createKycS3Client(env), {
+    bucket: env.KYC_S3_BUCKET,
+    allowedContentTypes: KYC_ALLOWED_CONTENT_TYPES,
+    maxObjectBytes: KYC_MAX_OBJECT_BYTES,
   });
 
 /**
@@ -409,7 +422,7 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
   // One instance each, shared by the vendor-facing and admin paths: neither
   // object storage nor the data-key cipher carries a tenant credential the
   // way Postgres does, so there is exactly one of each to build.
-  const objectStore = new S3ObjectStore(createKycS3Client(env), { bucket: env.KYC_S3_BUCKET });
+  const objectStore = buildKycObjectStore(env);
   const dataKeyCipher = createDataKeyCipher(env);
   // Stateless — no KMS/network dependency, unlike `dataKeyCipher` — so one
   // instance needs no construction parameters at all.

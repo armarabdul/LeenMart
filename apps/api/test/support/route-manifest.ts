@@ -203,6 +203,39 @@ const snapshotInventory = (ctx: RouteTestContext, resourceId: string): Promise<u
   ctx.db.inventory.findUnique({ where: { variantId: variantIdOf(resourceId) } });
 
 /**
+ * Seeds a product and one `AWAITING_UPLOAD` media row under it (S2-6a),
+ * returning `productId/mediaId` — same encoding `seedVariant` uses, for the
+ * same reason (`mediaPath` below is `variantPath`'s sibling).
+ *
+ * A bare upload-intent is enough: the routes under attack here
+ * (`complete`/`remove`) only need a row to exist under someone else's
+ * product, not a completed upload.
+ */
+const seedMedia = async (ctx: RouteTestContext, owner: Actor): Promise<string> => {
+  const productId = await seedProduct(ctx, owner);
+  const response = await authed(
+    request(ctx.app).post(`/api/v1/vendor/products/${productId}/media`),
+    owner,
+  )
+    .send({ contentType: 'image/jpeg', sizeBytes: 512 })
+    .expect(201);
+  const mediaId = (response.body as { data: { mediaId: string } }).data.mediaId;
+  return `${productId}/${mediaId}`;
+};
+
+const mediaPath = (resourceId: string): string => {
+  const [productId, mediaId] = resourceId.includes('/')
+    ? resourceId.split('/')
+    : [resourceId, resourceId];
+  return `${productId}/media/${mediaId}`;
+};
+
+const mediaIdOf = (resourceId: string): string => resourceId.split('/').at(-1) ?? resourceId;
+
+const snapshotMedia = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
+  ctx.db.productMedia.findUnique({ where: { id: mediaIdOf(resourceId) } });
+
+/**
  * Every route the application actually mounts, classified.
  *
  * This is the "route table" SDD 6.6 layer 2 is generated from. It is declared
@@ -624,6 +657,55 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
         actor,
       ).send({ available: 999, version: 1 }),
     snapshot: snapshotInventory,
+  },
+
+  // Per-product media (S2-6a). `POST`/`GET` are SELF_SCOPED for the same
+  // reasoning `POST`/`GET .../variants` above are: both run against a
+  // product the tenant-scoped lookup already proved is the caller's own, so
+  // they lean on the mechanism the `:productId` TENANT_OWNED entries above
+  // already exercise rather than repeating it. `complete`/`remove` name a
+  // media id of their own, so — like `:variantId` — those two get their own
+  // proof.
+  {
+    method: 'POST',
+    prefix: '/api/v1/vendor/products',
+    path: '/:productId/media',
+    classification: 'SELF_SCOPED',
+    why: 'Mints an upload intent under a product the tenant-scoped lookup already proved is the caller’s own.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendor/products',
+    path: '/:productId/media',
+    classification: 'SELF_SCOPED',
+    why: 'Lists media of a product the tenant-scoped lookup already proved is the caller’s own.',
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/vendor/products',
+    path: '/:productId/media/:mediaId/complete',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied media id and completes it.',
+    actor: vendorActor,
+    seed: seedMedia,
+    attempt: (ctx, actor, resourceId) =>
+      authed(
+        request(ctx.app).post(`/api/v1/vendor/products/${mediaPath(resourceId)}/complete`),
+        actor,
+      ),
+    snapshot: snapshotMedia,
+  },
+  {
+    method: 'DELETE',
+    prefix: '/api/v1/vendor/products',
+    path: '/:productId/media/:mediaId',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied media id and soft-deletes it.',
+    actor: vendorActor,
+    seed: seedMedia,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).delete(`/api/v1/vendor/products/${mediaPath(resourceId)}`), actor),
+    snapshot: snapshotMedia,
   },
 
   // S2-5: DRAFT/REJECTED -> PENDING_REVIEW. Same tenant-owned reasoning as

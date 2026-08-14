@@ -129,6 +129,7 @@ describe('tenant RLS isolation', () => {
       // `products`/`product_variants` joined this list in S2-3a — the first
       // catalogue tables that are vendor-owned rather than platform-owned.
       // `inventory` joined in S2-4, the same reasoning one level deeper.
+      // `product_media` joined in S2-6a.
       const rows = await owner.$queryRaw<{ tablename: string }[]>`
         SELECT tablename FROM pg_tables
         WHERE schemaname = 'public' AND rowsecurity ORDER BY tablename`;
@@ -136,6 +137,7 @@ describe('tenant RLS isolation', () => {
       expect(rows.map((row) => row.tablename)).toEqual([
         'inventory',
         'kyc_documents',
+        'product_media',
         'product_variants',
         'products',
         'vendor_kyc_submissions',
@@ -482,12 +484,13 @@ describe('tenant RLS isolation', () => {
       expect(await owner.vendorKycSubmission.findUnique({ where: { id: kycA } })).not.toBeNull();
     });
 
-    it('holds exactly the policies KYC-5, S2-3a, S2-4 and S2-5 intend — six reads and three updates', async () => {
+    it('holds exactly the policies KYC-5, S2-3a, S2-4, S2-5 and S2-6a intend — seven reads and three updates', async () => {
       // The narrowness assertion. A later `FOR ALL` added "because the role
       // exists" would fail here rather than quietly widening the boundary.
-      // `product_variants`/`inventory` still contribute read-only policies
-      // only; `products` gained its first write policy in S2-5
-      // (`products_admin_decide`), for the admin approve/reject decision.
+      // `product_variants`/`inventory`/`product_media` all contribute
+      // read-only policies only; `products` gained its first write policy in
+      // S2-5 (`products_admin_decide`), for the admin approve/reject
+      // decision — S2-6a adds no admin write surface for media.
       const rows = await owner.$queryRaw<{ tablename: string; cmd: string }[]>`
         SELECT tablename, cmd FROM pg_policies
         WHERE 'leenmart_admin' = ANY(roles) ORDER BY tablename, cmd`;
@@ -495,6 +498,7 @@ describe('tenant RLS isolation', () => {
       expect(rows).toEqual([
         { tablename: 'inventory', cmd: 'SELECT' },
         { tablename: 'kyc_documents', cmd: 'SELECT' },
+        { tablename: 'product_media', cmd: 'SELECT' },
         { tablename: 'product_variants', cmd: 'SELECT' },
         { tablename: 'products', cmd: 'SELECT' },
         { tablename: 'products', cmd: 'UPDATE' },

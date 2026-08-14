@@ -236,7 +236,7 @@ describe('database role separation', () => {
       // The role separation above is what gives these policies teeth; asserted
       // here too so a change to either half is caught from both sides.
       // `products`/`product_variants` joined this list in S2-3a; `inventory`
-      // in S2-4.
+      // in S2-4; `product_media` in S2-6a.
       const rows = await owner.$queryRawUnsafe<{ tablename: string }[]>(
         'SELECT tablename FROM pg_tables WHERE schemaname = $1 AND rowsecurity ORDER BY tablename',
         'public',
@@ -245,6 +245,7 @@ describe('database role separation', () => {
       expect(rows.map((row) => row.tablename)).toEqual([
         'inventory',
         'kyc_documents',
+        'product_media',
         'product_variants',
         'products',
         'vendor_kyc_submissions',

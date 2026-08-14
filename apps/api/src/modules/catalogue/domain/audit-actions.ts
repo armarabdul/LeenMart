@@ -51,6 +51,12 @@ export const CATALOGUE_AUDIT_ACTIONS = {
   PRODUCT_APPROVED: 'catalogue.product.approved',
   /** An administrator rejected a pending product with a reason and an optional note (S2-5, SDD 15.2). */
   PRODUCT_REJECTED: 'catalogue.product.rejected',
+  /** A vendor's media upload for a product was confirmed and entered processing (S2-6a, SDD 12.2). */
+  PRODUCT_MEDIA_ADDED: 'catalogue.product.media_added',
+  /** A vendor soft-deleted one of a product's media items (S2-6a). */
+  PRODUCT_MEDIA_REMOVED: 'catalogue.product.media_removed',
+  /** An APPROVED product automatically re-entered PENDING_REVIEW because its media changed (S2-6a, ASM-14). */
+  PRODUCT_REVIEW_REOPENED_FOR_MEDIA_CHANGE: 'catalogue.product.review_reopened_for_media_change',
 } as const;
 
 export type CatalogueAuditAction =

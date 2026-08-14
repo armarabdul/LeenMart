@@ -28,6 +28,7 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'Product',
   'ProductVariant',
   'Inventory',
+  'ProductMedia',
 ]);
 
 /**

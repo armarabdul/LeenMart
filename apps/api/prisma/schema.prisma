@@ -663,6 +663,22 @@ enum ProductRejectionReason {
   OTHER
 }
 
+/// The upload/processing lifecycle of one `ProductMedia` row (S2-6a, SDD
+/// 12.2). Only the two states S2-6a's own code can produce are declared —
+/// `AWAITING_UPLOAD` (§12.2 step 2, "a pending media_asset row") and
+/// `PROCESSING` (once the client confirms the upload landed) — the same
+/// discipline `ProductStatus` already applies: a member nothing can produce
+/// would be a guess about a feature that does not exist yet.
+///
+/// `READY` and `FAILED` are S2-6b's (the async worker, D-S2-6-A/K): they
+/// arrive in their own migration when the code that produces them exists,
+/// exactly as `ProductStatus` grew `PENDING_REVIEW`/`APPROVED`/`REJECTED` in
+/// S2-5 rather than being declared upfront in S2-3a.
+enum ProductMediaStatus {
+  AWAITING_UPLOAD
+  PROCESSING
+}
+
 /// The marketing entity (SDD 5 module 4, SDD 6.3 "Product ↔ Variant").
 /// Vendor-owned and tenant-scoped — unlike `Category`, which is
 /// platform-owned. `ProductVariant` is the sellable unit; every product has
@@ -714,6 +730,7 @@ model Product {
   /// products must not vanish out from under them.
   category Category         @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   variants ProductVariant[]
+  media    ProductMedia[]
 
   /// The composite-foreign-key target `ProductVariant` pins its own
   /// denormalised `vendor_id` against — the exact technique
@@ -770,6 +787,48 @@ model ProductVariant {
   @@unique([id, vendorId], map: "uq_product_variants_id_vendor")
   @@index([productId], map: "idx_product_variants_product")
   @@map("product_variants")
+}
+
+/// One uploaded media asset for a product (S2-6a, SDD 12.1/12.2). Vendor-
+/// owned and tenant-scoped, always reached through its parent `Product` —
+/// SDD 6.2's entity diagram draws `product_media` as a sibling of
+/// `product_variants`, both children of `products`, **not** nested under a
+/// variant (products carry media; variants carry price/stock).
+///
+/// `vendor_id` is denormalised from `Product.vendorId`, the same composite-FK
+/// technique `ProductVariant.vendorId` already uses — the database itself
+/// refuses a media row whose vendor does not match its product's.
+///
+/// Carries no filename, no caption, no display position and no dimensions —
+/// none of these are SDD-specified (S2-6 inspection R5), and none is needed
+/// yet: S2-6a's own API surface has nothing that would read them.
+///
+/// `objectKey` is never accepted from a caller — `CreateProductMediaUploadIntentUseCase`
+/// derives it server-side, the same discipline `CreateKycUploadIntentUseCase`'s
+/// `objectKeyFor` already establishes, so a vendor cannot aim an upload at
+/// another vendor's (or another product's) object.
+model ProductMedia {
+  id          String             @id @db.Uuid
+  productId   String             @map("product_id") @db.Uuid
+  vendorId    String             @map("vendor_id") @db.Uuid
+  objectKey   String             @map("object_key")
+  contentType String             @map("content_type") @db.VarChar(100)
+  sizeBytes   Int                @map("size_bytes")
+  status      ProductMediaStatus @default(AWAITING_UPLOAD)
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  /// The composite FK: both halves must match the same `Product` row —
+  /// identical technique to `ProductVariant.product` above.
+  product Product @relation(fields: [productId, vendorId], references: [id, vendorId], onDelete: Restrict)
+
+  /// One row per uploaded object; a vendor may re-upload under a fresh
+  /// `ProductMedia` row freely, so there is no uniqueness constraint on the
+  /// key beyond the primary key itself.
+  @@index([productId], map: "idx_product_media_product")
+  @@map("product_media")
 }
 
 /// Per-variant stock (SDD 6.3 "Stock", SDD 6.4, FR-12).

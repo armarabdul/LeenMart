@@ -1,10 +1,14 @@
+import { S3Client } from '@aws-sdk/client-s3';
 import type { PrismaClient } from '@prisma/client';
 import type { Router } from 'express';
 import type { Clock, IdGenerator, Logger, TransactionRunner } from '@leen-mart/domain-kit';
+import { PRODUCT_MEDIA_MAX_BYTES, productMediaContentTypeSchema } from '@leen-mart/contracts';
 import { AmbientAuditWriter, type AuditWriter } from '../audit/index.js';
 import { PrismaAuditLogRepository } from '../audit/infrastructure/persistence/prisma-audit-log.repository.js';
 import type { AccessTokenService, SessionDenylist } from '../identity/index.js';
+import type { Env } from '../../shared/config/env.js';
 import { AdminTransactionRunner } from '../../shared/infrastructure/persistence/tenant-prisma.js';
+import { S3ObjectStore, type ObjectStore } from '../media/index.js';
 import { CreateCategoryUseCase } from './application/use-cases/create-category.use-case.js';
 import { DeleteCategoryUseCase } from './application/use-cases/delete-category.use-case.js';
 import { GetCategoryUseCase } from './application/use-cases/get-category.use-case.js';
@@ -45,8 +49,13 @@ import { SubmitProductForReviewUseCase } from './application/use-cases/submit-pr
 import { ListProductReviewQueueUseCase } from './application/use-cases/list-product-review-queue.use-case.js';
 import { GetProductReviewUseCase } from './application/use-cases/get-product-review.use-case.js';
 import { DecideProductUseCase } from './application/use-cases/decide-product.use-case.js';
+import { CreateProductMediaUploadIntentUseCase } from './application/use-cases/create-product-media-upload-intent.use-case.js';
+import { CompleteProductMediaUploadUseCase } from './application/use-cases/complete-product-media-upload.use-case.js';
+import { ListProductMediaUseCase } from './application/use-cases/list-product-media.use-case.js';
+import { RemoveProductMediaUseCase } from './application/use-cases/remove-product-media.use-case.js';
 import { PrismaProductRepository } from './infrastructure/persistence/prisma-product.repository.js';
 import { PrismaProductVariantRepository } from './infrastructure/persistence/prisma-product-variant.repository.js';
+import { PrismaProductMediaRepository } from './infrastructure/persistence/prisma-product-media.repository.js';
 import { PrismaInventoryRepository } from './infrastructure/persistence/prisma-inventory.repository.js';
 import { PrismaProductReviewQuery } from './infrastructure/persistence/prisma-product-review-query.js';
 import type { InventoryRepository } from './domain/repositories/inventory.repository.js';
@@ -58,6 +67,7 @@ import {
 } from './interface/http/vendor-inventory.controller.js';
 import { createVendorProductController } from './interface/http/vendor-product.controller.js';
 import { createVendorProductVariantController } from './interface/http/vendor-product-variant.controller.js';
+import { createVendorProductMediaController } from './interface/http/vendor-product-media.controller.js';
 import { createVendorProductRouter } from './interface/http/vendor-product.routes.js';
 import { createAdminProductController } from './interface/http/admin-product.controller.js';
 import { createAdminProductRouter } from './interface/http/admin-product.routes.js';
@@ -80,6 +90,8 @@ export interface CatalogueModuleDeps {
    * `adminPrisma` above is for.
    */
   readonly prisma: PrismaClient;
+  /** `PRODUCT_MEDIA_S3_*` (S2-6a) lives here, the same source `vendor.module.ts` reads its own `KYC_S3_*` block from. */
+  readonly env: Env;
   readonly accessTokenService: AccessTokenService;
   readonly sessionDenylist: SessionDenylist;
   /**
@@ -145,6 +157,7 @@ const buildVendorInventoryController = (params: {
 interface VendorProductShared {
   readonly productRepository: PrismaProductRepository;
   readonly productVariantRepository: PrismaProductVariantRepository;
+  readonly productMediaRepository: PrismaProductMediaRepository;
   readonly inventoryRepository: PrismaInventoryRepository;
   readonly transactionRunner: PrismaTransactionRunner;
   readonly auditWriter: AmbientAuditWriter;
@@ -152,7 +165,37 @@ interface VendorProductShared {
   readonly logger: Logger;
 }
 
-/** The repositories and cross-cutting deps every product/variant/inventory use case shares. */
+/**
+ * The `leenmart-public-media` bucket's client (S2-6a, SDD 12.1), built the
+ * same way `createKycS3Client` builds `vendor.module.ts`'s: the endpoint and
+ * credentials are the entire difference between MinIO locally and R2 in
+ * production, and `S3ObjectStore` itself never branches on environment.
+ */
+const createProductMediaS3Client = (env: Env): S3Client =>
+  new S3Client({
+    region: env.PRODUCT_MEDIA_S3_REGION,
+    endpoint: env.PRODUCT_MEDIA_S3_ENDPOINT,
+    forcePathStyle: env.PRODUCT_MEDIA_S3_FORCE_PATH_STYLE,
+    credentials: {
+      accessKeyId: env.PRODUCT_MEDIA_S3_ACCESS_KEY_ID,
+      secretAccessKey: env.PRODUCT_MEDIA_S3_SECRET_ACCESS_KEY,
+    },
+  });
+
+/**
+ * The allowlist/cap come from the contracts package (D-S2-6-I) — the same
+ * values `createProductMediaUploadIntentRequestSchema` validates against on
+ * the wire, passed here explicitly rather than duplicated as a second set of
+ * literals the way `KYC_ALLOWED_CONTENT_TYPES`/`KYC_MAX_OBJECT_BYTES` are.
+ */
+const buildProductMediaObjectStore = (env: Env): ObjectStore =>
+  new S3ObjectStore(createProductMediaS3Client(env), {
+    bucket: env.PRODUCT_MEDIA_S3_BUCKET,
+    allowedContentTypes: productMediaContentTypeSchema.options,
+    maxObjectBytes: PRODUCT_MEDIA_MAX_BYTES,
+  });
+
+/** The repositories and cross-cutting deps every product/variant/media/inventory use case shares. */
 const buildVendorProductShared = (params: {
   prisma: PrismaClient;
   idGenerator: IdGenerator;
@@ -162,6 +205,7 @@ const buildVendorProductShared = (params: {
   const { prisma, idGenerator, clock, logger } = params;
   return {
     productRepository: new PrismaProductRepository(prisma),
+    productMediaRepository: new PrismaProductMediaRepository(prisma),
     productVariantRepository: new PrismaProductVariantRepository(prisma),
     inventoryRepository: new PrismaInventoryRepository(prisma),
     transactionRunner: new PrismaTransactionRunner(prisma),
@@ -175,8 +219,57 @@ const buildVendorProductShared = (params: {
   };
 };
 
+/** The four media-route use cases (S2-6a), split out for the same line-budget reason as the builder below. */
+const buildVendorProductMediaController = (
+  shared: VendorProductShared,
+  objectStore: ObjectStore,
+  idGenerator: IdGenerator,
+): ReturnType<typeof createVendorProductMediaController> => {
+  const {
+    productRepository,
+    productMediaRepository,
+    transactionRunner,
+    auditWriter,
+    clock,
+    logger,
+  } = shared;
+  return createVendorProductMediaController({
+    createProductMediaUploadIntentUseCase: new CreateProductMediaUploadIntentUseCase({
+      productRepository,
+      productMediaRepository,
+      objectStore,
+      transactionRunner,
+      idGenerator,
+      clock,
+      logger,
+    }),
+    completeProductMediaUploadUseCase: new CompleteProductMediaUploadUseCase({
+      productRepository,
+      productMediaRepository,
+      objectStore,
+      transactionRunner,
+      auditWriter,
+      clock,
+      logger,
+    }),
+    listProductMediaUseCase: new ListProductMediaUseCase({
+      productRepository,
+      productMediaRepository,
+    }),
+    removeProductMediaUseCase: new RemoveProductMediaUseCase({
+      productRepository,
+      productMediaRepository,
+      transactionRunner,
+      auditWriter,
+      clock,
+      logger,
+    }),
+  });
+};
+
 const buildVendorProductRouter = (params: {
   prisma: PrismaClient;
+  env: Env;
   categoryRepository: CategoryRepository;
   accessTokenService: AccessTokenService;
   sessionDenylist: SessionDenylist;
@@ -188,6 +281,7 @@ const buildVendorProductRouter = (params: {
   const { categoryRepository, idGenerator, clock, logger } = params;
   const shared = buildVendorProductShared(params);
   const { productRepository, productVariantRepository, inventoryRepository } = shared;
+  const productMediaObjectStore = buildProductMediaObjectStore(params.env);
 
   return createVendorProductRouter({
     controller: createVendorProductController({
@@ -217,6 +311,7 @@ const buildVendorProductRouter = (params: {
       }),
       removeProductVariantUseCase: new RemoveProductVariantUseCase(shared),
     }),
+    media: buildVendorProductMediaController(shared, productMediaObjectStore, idGenerator),
     inventory: buildVendorInventoryController({
       inventoryRepository,
       transactionRunner: shared.transactionRunner,
@@ -348,9 +443,10 @@ const buildAdminProductRouter = (params: {
 };
 
 /**
- * The catalogue module (SDD 5, module 4): taxonomy, vendor products and the
- * moderation core (S2-5). Media and search are still later chunks; nothing
- * here anticipates them.
+ * The catalogue module (SDD 5, module 4): taxonomy, vendor products, the
+ * moderation core (S2-5) and the product media data model/upload flow
+ * (S2-6a). Search, the async processing worker (S2-6b) and public media
+ * delivery (S2-6c) are still later chunks; nothing here anticipates them.
  *
  * Four routers, and the credential each runs on is the whole security story.
  * `adminCategoryRouter` uses `adminPrisma` for the admin-owned taxonomy.
@@ -368,6 +464,7 @@ export const createCatalogueModule = (deps: CatalogueModuleDeps): CatalogueModul
   const {
     adminPrisma,
     prisma,
+    env,
     accessTokenService,
     sessionDenylist,
     resolveVendorTenant,
@@ -383,6 +480,7 @@ export const createCatalogueModule = (deps: CatalogueModuleDeps): CatalogueModul
 
   const vendorProductRouter = buildVendorProductRouter({
     prisma,
+    env,
     categoryRepository: publicCategoryRepository,
     accessTokenService,
     sessionDenylist,

@@ -183,4 +183,46 @@ describe('Product moderation transitions (S2-5)', () => {
       expect(edited.rejectionReason?.name).toBe('MISLEADING_LISTING');
     });
   });
+
+  describe('reenterReviewForMediaChange (S2-6a, ASM-14)', () => {
+    it('moves an APPROVED product back to PENDING_REVIEW', () => {
+      const approved = pendingReview().approve(NOW);
+      const reopened = approved.reenterReviewForMediaChange(LATER);
+      expect(reopened.status).toBe('PENDING_REVIEW');
+      expect(reopened.updatedAt).toEqual(LATER);
+    });
+
+    it('touches only status and updatedAt — title, category, brand and every other field are untouched', () => {
+      const approved = pendingReview().approve(NOW);
+      const reopened = approved.reenterReviewForMediaChange(LATER);
+
+      expect(reopened.name).toBe(approved.name);
+      expect(reopened.categoryId).toBe(approved.categoryId);
+      expect(reopened.brand).toBe(approved.brand);
+      expect(reopened.id).toBe(approved.id);
+      expect(reopened.vendorId).toBe(approved.vendorId);
+    });
+
+    it('carries no rejection — this is not a decision, just a reopening', () => {
+      const reopened = pendingReview().approve(NOW).reenterReviewForMediaChange(LATER);
+      expect(reopened.rejectionReason).toBeNull();
+      expect(reopened.rejectionNote).toBeNull();
+    });
+
+    it.each<ProductStatusName>(['DRAFT', 'PENDING_REVIEW', 'REJECTED'])(
+      'refuses from %s — only an APPROVED product can be returned to review this way',
+      (status) => {
+        const product =
+          status === 'DRAFT' ? draft() : status === 'PENDING_REVIEW' ? pendingReview() : rejected();
+        expect(issueOf(() => product.reenterReviewForMediaChange(LATER))).toMatch(
+          /must be APPROVED/i,
+        );
+      },
+    );
+
+    it('refuses on a deleted product', () => {
+      const deleted = pendingReview().approve(NOW).softDelete(LATER);
+      expect(issueOf(() => deleted.reenterReviewForMediaChange(LATER))).toMatch(/deleted/i);
+    });
+  });
 });

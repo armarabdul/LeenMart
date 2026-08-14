@@ -56,6 +56,28 @@ export interface ProductRepository {
   lockForVariantChange(id: ProductId, now: Date): Promise<boolean>;
 
   /**
+   * The same lock, for the same reason, one aggregate over (S2-6a). "At most
+   * `MAX_IMAGES_PER_PRODUCT` media items" spans rows exactly the way "at
+   * least one live variant" does, so it needs the identical serialisation
+   * point: two concurrent uploads that each count seven live media items and
+   * each proceed would leave nine. A distinct method from
+   * `lockForVariantChange` rather than a shared one — they lock the same row
+   * for the same mechanical reason, but conflating the two names would blur
+   * which invariant a caller is actually protecting.
+   */
+  lockForMediaChange(id: ProductId, now: Date): Promise<boolean>;
+
+  /**
+   * Returns a product to `PENDING_REVIEW`, but only if it is still `APPROVED`
+   * (S2-6a, ASM-14). The arbiter of a media change racing a second one, or
+   * racing an admin decision that just approved the product — mirrors
+   * `submitForReviewIfEligible`'s "database decides who wins" exactly, one
+   * transition later and with `APPROVED` playing the role `DRAFT`/`REJECTED`
+   * play there.
+   */
+  reenterReviewIfApproved(product: Product): Promise<boolean>;
+
+  /**
    * Moves a product into `PENDING_REVIEW`, but only if it is still `DRAFT` or
    * `REJECTED` (S2-5).
    *

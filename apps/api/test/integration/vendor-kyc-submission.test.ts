@@ -10,7 +10,11 @@ import { SubmitVendorKycUseCase } from '../../src/modules/vendor/application/use
 import { PrismaVendorKycRepository } from '../../src/modules/vendor/infrastructure/persistence/prisma-vendor-kyc.repository.js';
 import { PrismaVendorRepository } from '../../src/modules/vendor/infrastructure/persistence/prisma-vendor.repository.js';
 import { HmacIdentifierFingerprinter } from '../../src/modules/vendor/infrastructure/security/hmac-identifier-fingerprinter.js';
-import { S3ObjectStore } from '../../src/modules/media/index.js';
+import {
+  KYC_ALLOWED_CONTENT_TYPES,
+  KYC_MAX_OBJECT_BYTES,
+  S3ObjectStore,
+} from '../../src/modules/media/index.js';
 import { PrismaTransactionRunner } from '../../src/shared/infrastructure/persistence/tenant-prisma.js';
 import { runWithTenant } from '../../src/shared/infrastructure/persistence/tenant-context.js';
 import { toSessionId } from '../../src/modules/identity/domain/value-objects/session-id.value-object.js';
@@ -467,7 +471,11 @@ describe('POST /api/v1/vendors/me/kyc', () => {
       const useCase = new SubmitVendorKycUseCase({
         vendorRepository: new PrismaVendorRepository(container.prisma),
         vendorKycRepository: new PrismaVendorKycRepository(container.prisma),
-        objectStore: new S3ObjectStore(s3, { bucket: container.env.KYC_S3_BUCKET }),
+        objectStore: new S3ObjectStore(s3, {
+          bucket: container.env.KYC_S3_BUCKET,
+          allowedContentTypes: KYC_ALLOWED_CONTENT_TYPES,
+          maxObjectBytes: KYC_MAX_OBJECT_BYTES,
+        }),
         fingerprinter: new HmacIdentifierFingerprinter(container.env.KYC_FINGERPRINT_PEPPER),
         transactionRunner: new PrismaTransactionRunner(container.prisma),
         auditWriter: new FailingAuditWriter(),

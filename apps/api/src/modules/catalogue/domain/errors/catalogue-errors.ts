@@ -358,3 +358,97 @@ export class ProductAlreadyDecidedError extends ConflictError {
     });
   }
 }
+
+/**
+ * An operation a media item's own shape forbids — a blank object key or
+ * content type, a non-positive size, completing or deleting an already-
+ * deleted item, or completing an item that is not `AWAITING_UPLOAD`.
+ *
+ * Mirrors `InvalidProductOperationError` exactly, including the uniform
+ * message (SEC-15): what names the broken rule is `details[0]`.
+ */
+export class InvalidProductMediaOperationError extends DomainRuleError {
+  constructor(operation: string, issue: string, options: AppErrorOptions = {}) {
+    super('INVALID_PRODUCT_MEDIA_OPERATION', 'This action is not permitted for this media item.', {
+      ...options,
+      details: [{ field: operation, issue }],
+    });
+  }
+}
+
+/**
+ * No media item exists with the requested id under the requested product, as
+ * far as this caller is concerned.
+ *
+ * Mirrors `ProductVariantNotFoundError` exactly, including why it draws no
+ * distinction between "never existed", "was deleted" and "belongs to a
+ * different product (even one of the same vendor's)" — the same
+ * cross-tenant-existence-leak reasoning `ProductNotFoundError` gives, one
+ * level deeper.
+ */
+export class ProductMediaNotFoundError extends NotFoundError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This product media item does not exist.', {
+      ...options,
+      code: 'PRODUCT_MEDIA_NOT_FOUND',
+    });
+  }
+}
+
+/**
+ * The product already has `MAX_IMAGES_PER_PRODUCT` live media items.
+ *
+ * Arbitrated under `ProductRepository.lockForMediaChange`'s exclusive row
+ * lock, never by a read-then-write count check on its own — the same
+ * "the parent row is the serialisation point" reasoning
+ * `ProductLastVariantError`/`lockForVariantChange` already establish, one
+ * invariant over: two concurrent uploads that each count seven live items
+ * and each proceed would leave nine.
+ */
+export class ProductMediaLimitExceededError extends ConflictError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This product already has the maximum number of media items allowed.', {
+      ...options,
+      code: 'PRODUCT_MEDIA_LIMIT_EXCEEDED',
+    });
+  }
+}
+
+/**
+ * The media item's upload could not be completed because its status changed
+ * underneath this call, between the read and the conditional write.
+ *
+ * Distinct from `InvalidProductMediaOperationError`, which
+ * `ProductMedia.completeUpload` raises when the *loaded* status already
+ * forbids completion — this is the race the aggregate cannot see, arbitrated
+ * by `ProductMediaRepository.completeIfAwaitingUpload`'s conditional write.
+ * Mirrors `ProductSubmissionConflictError`'s reasoning exactly, one aggregate
+ * over.
+ */
+export class ProductMediaUploadConflictError extends ConflictError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This media item cannot be completed right now. Please reload and try again.', {
+      ...options,
+      code: 'PRODUCT_MEDIA_UPLOAD_CONFLICT',
+    });
+  }
+}
+
+/**
+ * The object this media row names is not there, or is not what the presigned
+ * URL promised — the file was never uploaded, or a different one landed.
+ *
+ * Mirrors `IncompleteKycSubmissionError`/`SubmitVendorKycUseCase`'s own
+ * `documentSetError` exactly: `CompleteProductMediaUploadUseCase` never
+ * trusts a client's claim that an upload succeeded — it verifies with
+ * `ObjectStore.head()` and compares the answer to what this row already
+ * records, the same discipline that use case applies to each KYC document.
+ */
+export class IncompleteProductMediaUploadError extends DomainRuleError {
+  constructor(issue: string, options: AppErrorOptions = {}) {
+    super('INCOMPLETE_PRODUCT_MEDIA_UPLOAD', 'This media upload is not complete.', {
+      ...options,
+      details: [{ field: 'upload', issue }],
+    });
+  }
+}

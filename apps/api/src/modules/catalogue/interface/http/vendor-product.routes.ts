@@ -2,6 +2,7 @@ import { Router, type RequestHandler } from 'express';
 import { z } from 'zod';
 import {
   addProductVariantRequestSchema,
+  createProductMediaUploadIntentRequestSchema,
   createProductRequestSchema,
   updateProductRequestSchema,
   setInventoryRequestSchema,
@@ -19,12 +20,17 @@ import { validate } from '../../../../shared/interface/http/middleware/validate.
 import type { AccessTokenService, SessionDenylist } from '../../../identity/index.js';
 import type { VendorProductController } from './vendor-product.controller.js';
 import type { VendorProductVariantController } from './vendor-product-variant.controller.js';
+import type { VendorProductMediaController } from './vendor-product-media.controller.js';
 import type { VendorInventoryController } from './vendor-inventory.controller.js';
 
 const productParamsSchema = z.object({ productId: z.string().uuid() }).strict();
 
 const variantParamsSchema = z
   .object({ productId: z.string().uuid(), variantId: z.string().uuid() })
+  .strict();
+
+const mediaParamsSchema = z
+  .object({ productId: z.string().uuid(), mediaId: z.string().uuid() })
   .strict();
 
 /**
@@ -56,6 +62,7 @@ const variantParamsSchema = z
 export interface VendorProductRouterDeps {
   readonly controller: VendorProductController;
   readonly variants: VendorProductVariantController;
+  readonly media: VendorProductMediaController;
   readonly inventory: VendorInventoryController;
   readonly accessTokenService: AccessTokenService;
   readonly sessionDenylist: SessionDenylist;
@@ -137,10 +144,52 @@ const mountVariantRoutes = (
   );
 };
 
+/**
+ * The four media routes (S2-6a). Same permission and tenant scoping as
+ * variants — `CREATE_OR_EDIT_PRODUCT`, not a permission of their own: SDD
+ * 8.2's grant is for the product as a whole, and SDD 15.2's ASM-14 table
+ * names "images" alongside title/category/brand as one of the same edit
+ * surface, not a separate one.
+ */
+const mountMediaRoutes = (
+  router: Router,
+  media: VendorProductMediaController,
+  scoped: RequestHandler[],
+): void => {
+  router.post(
+    '/:productId/media',
+    ...scoped,
+    validate({ params: productParamsSchema, body: createProductMediaUploadIntentRequestSchema }),
+    asyncHandler(media.createUploadIntent),
+  );
+
+  router.get(
+    '/:productId/media',
+    ...scoped,
+    validate({ params: productParamsSchema }),
+    asyncHandler(media.list),
+  );
+
+  router.post(
+    '/:productId/media/:mediaId/complete',
+    ...scoped,
+    validate({ params: mediaParamsSchema }),
+    asyncHandler(media.complete),
+  );
+
+  router.delete(
+    '/:productId/media/:mediaId',
+    ...scoped,
+    validate({ params: mediaParamsSchema }),
+    asyncHandler(media.remove),
+  );
+};
+
 export const createVendorProductRouter = (deps: VendorProductRouterDeps): Router => {
   const {
     controller,
     variants,
+    media,
     inventory,
     accessTokenService,
     sessionDenylist,
@@ -201,6 +250,7 @@ export const createVendorProductRouter = (deps: VendorProductRouterDeps): Router
   );
 
   mountVariantRoutes(router, variants, scoped);
+  mountMediaRoutes(router, media, scoped);
   mountInventoryRoutes(router, inventory, authenticated);
 
   return router;

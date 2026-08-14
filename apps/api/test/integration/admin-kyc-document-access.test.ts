@@ -11,7 +11,11 @@ import type { AuditWriter } from '../../src/modules/audit/index.js';
 import { VENDOR_AUDIT_ACTIONS } from '../../src/modules/vendor/domain/audit-actions.js';
 import { AccessKycDocumentUseCase } from '../../src/modules/vendor/application/use-cases/access-kyc-document.use-case.js';
 import { PrismaKycDocumentAccessQuery } from '../../src/modules/vendor/infrastructure/persistence/prisma-kyc-document-access-query.js';
-import { S3ObjectStore } from '../../src/modules/media/index.js';
+import {
+  KYC_ALLOWED_CONTENT_TYPES,
+  KYC_MAX_OBJECT_BYTES,
+  S3ObjectStore,
+} from '../../src/modules/media/index.js';
 import { DevDataKeyCipher } from '../../src/modules/vendor/infrastructure/crypto/dev-data-key-cipher.js';
 import { AesGcmDocumentCipher } from '../../src/modules/vendor/infrastructure/crypto/aes-gcm-document-cipher.js';
 import { toKycId } from '../../src/modules/vendor/domain/value-objects/kyc-id.value-object.js';
@@ -305,7 +309,11 @@ describe('GET /api/v1/admin/kyc/submissions/:kycId/documents/:documentId', () =>
   const buildUseCase = (auditWriter: AuditWriter): AccessKycDocumentUseCase =>
     new AccessKycDocumentUseCase({
       documentAccessQuery: new PrismaKycDocumentAccessQuery(container.adminPrisma),
-      objectStore: new S3ObjectStore(s3, { bucket: container.env.KYC_S3_BUCKET }),
+      objectStore: new S3ObjectStore(s3, {
+        bucket: container.env.KYC_S3_BUCKET,
+        allowedContentTypes: KYC_ALLOWED_CONTENT_TYPES,
+        maxObjectBytes: KYC_MAX_OBJECT_BYTES,
+      }),
       dataKeyCipher: new DevDataKeyCipher(
         Buffer.from(container.env.KYC_DEV_WRAPPING_KEY, 'hex'),
         'test',
@@ -342,7 +350,11 @@ describe('GET /api/v1/admin/kyc/submissions/:kycId/documents/:documentId', () =>
   afterAll(async () => {
     await Promise.all(
       writtenObjectKeys.map((key) =>
-        new S3ObjectStore(s3, { bucket: container.env.KYC_S3_BUCKET }).delete(key),
+        new S3ObjectStore(s3, {
+          bucket: container.env.KYC_S3_BUCKET,
+          allowedContentTypes: KYC_ALLOWED_CONTENT_TYPES,
+          maxObjectBytes: KYC_MAX_OBJECT_BYTES,
+        }).delete(key),
       ),
     );
     await db.kycDocument.deleteMany({ where: { vendorId: { in: seededVendorIds } } });
