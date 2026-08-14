@@ -29,6 +29,7 @@ import { loadEnv } from '../shared/config/env.js';
 const MANAGED_ROLES = {
   APP_DATABASE_URL: 'leenmart_app',
   ADMIN_DATABASE_URL: 'leenmart_admin',
+  PUBLIC_DATABASE_URL: 'leenmart_public',
 } as const;
 
 interface RoleCredential {
@@ -74,7 +75,7 @@ const run = async (): Promise<void> => {
 
   if (configured.length === 0) {
     process.stdout.write(
-      'Neither APP_DATABASE_URL nor ADMIN_DATABASE_URL is set — nothing to provision.\n',
+      'None of APP_DATABASE_URL, ADMIN_DATABASE_URL, PUBLIC_DATABASE_URL is set — nothing to provision.\n',
     );
     return;
   }

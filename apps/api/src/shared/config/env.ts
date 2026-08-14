@@ -138,10 +138,11 @@ const assertProductionDatabaseRoles = (
     DATABASE_URL: string;
     APP_DATABASE_URL?: string | undefined;
     ADMIN_DATABASE_URL?: string | undefined;
+    PUBLIC_DATABASE_URL?: string | undefined;
   },
   ctx: z.RefinementCtx,
 ): void => {
-  for (const key of ['APP_DATABASE_URL', 'ADMIN_DATABASE_URL'] as const) {
+  for (const key of ['APP_DATABASE_URL', 'ADMIN_DATABASE_URL', 'PUBLIC_DATABASE_URL'] as const) {
     const value = env[key];
     if (!value) {
       ctx.addIssue({
@@ -205,6 +206,14 @@ const envSchema = z
      * for itself.
      */
     ADMIN_DATABASE_URL: z.string().url().startsWith('postgres').optional(),
+    /**
+     * The unauthenticated public search/read connection (`leenmart_public`,
+     * S2-7). SELECT-only, and structurally narrower than either runtime role
+     * above: RLS restricts it to `APPROVED`/`READY`, non-deleted rows,
+     * regardless of what a query asks for — the same separate-credential
+     * trust boundary `ADMIN_DATABASE_URL` draws, one more role over.
+     */
+    PUBLIC_DATABASE_URL: z.string().url().startsWith('postgres').optional(),
     DATABASE_POOL_SIZE: z.coerce.number().int().positive().max(100).default(10),
     REDIS_URL: z.string().url().startsWith('redis'),
 

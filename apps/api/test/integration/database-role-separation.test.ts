@@ -21,7 +21,9 @@ import { PrismaClient } from '@prisma/client';
  * this suite refuses to run rather than passing against the owner role and
  * proving nothing.
  */
-const requireUrl = (name: 'DATABASE_URL' | 'APP_DATABASE_URL' | 'ADMIN_DATABASE_URL'): string => {
+const requireUrl = (
+  name: 'DATABASE_URL' | 'APP_DATABASE_URL' | 'ADMIN_DATABASE_URL' | 'PUBLIC_DATABASE_URL',
+): string => {
   const value = process.env[name];
   if (!value) {
     throw new Error(
@@ -36,9 +38,12 @@ describe('database role separation', () => {
   const appUrl = requireUrl('APP_DATABASE_URL');
   const adminUrl = requireUrl('ADMIN_DATABASE_URL');
 
+  const publicUrl = requireUrl('PUBLIC_DATABASE_URL');
+
   const owner = new PrismaClient({ datasources: { db: { url: ownerUrl } } });
   const app = new PrismaClient({ datasources: { db: { url: appUrl } } });
   const admin = new PrismaClient({ datasources: { db: { url: adminUrl } } });
+  const anon = new PrismaClient({ datasources: { db: { url: publicUrl } } });
 
   interface RoleAttributes {
     readonly rolname: string;
@@ -67,10 +72,18 @@ describe('database role separation', () => {
     expect(appUrl).not.toBe(ownerUrl);
     expect(adminUrl).not.toBe(ownerUrl);
     expect(appUrl).not.toBe(adminUrl);
+    expect(publicUrl).not.toBe(ownerUrl);
+    expect(publicUrl).not.toBe(appUrl);
+    expect(publicUrl).not.toBe(adminUrl);
   });
 
   afterAll(async () => {
-    await Promise.all([owner.$disconnect(), app.$disconnect(), admin.$disconnect()]);
+    await Promise.all([
+      owner.$disconnect(),
+      app.$disconnect(),
+      admin.$disconnect(),
+      anon.$disconnect(),
+    ]);
   });
 
   describe('security attributes (the precondition for RLS)', () => {
@@ -228,6 +241,84 @@ describe('database role separation', () => {
       // role only in which credential it presents. That is intentional: this
       // chunk proves the connection, the next one gives it different rows.
       await expect(admin.vendorKycSubmission.count()).resolves.toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  describe('leenmart_public — a fourth, SELECT-only role (S2-7)', () => {
+    // A dedicated block rather than folding into `clients()`/`ordinary
+    // application access still works` above: those assert *DML* capability,
+    // which this role deliberately has none of. Read-visibility (which rows
+    // it sees) is the separate concern `product-search-rls-isolation.test.ts`
+    // proves in depth; this block is the same role/schema-attribute parity
+    // check the app/admin roles get above, plus the one fact that makes this
+    // role different in kind rather than degree: it was never given DML.
+    it('exists', async () => {
+      expect(await attributesOf('leenmart_public')).toBeDefined();
+    });
+
+    it('is not SUPERUSER', async () => {
+      expect((await attributesOf('leenmart_public'))?.rolsuper).toBe(false);
+    });
+
+    it('does not have BYPASSRLS', async () => {
+      expect((await attributesOf('leenmart_public'))?.rolbypassrls).toBe(false);
+    });
+
+    it('cannot create roles or databases', async () => {
+      const attributes = await attributesOf('leenmart_public');
+
+      expect(attributes?.rolcreaterole).toBe(false);
+      expect(attributes?.rolcreatedb).toBe(false);
+    });
+
+    it('connects as leenmart_public', async () => {
+      expect(await currentUserOf(anon)).toBe('leenmart_public');
+    });
+
+    it('is a genuinely different credential from both runtime roles', async () => {
+      expect(await currentUserOf(anon)).not.toBe(await currentUserOf(app));
+      expect(await currentUserOf(anon)).not.toBe(await currentUserOf(admin));
+    });
+
+    it('cannot CREATE TABLE', async () => {
+      await expect(
+        anon.$executeRawUnsafe('CREATE TABLE role_separation_public_probe (id integer)'),
+      ).rejects.toThrow(/permission denied for schema public/);
+    });
+
+    it('cannot ALTER an application table', async () => {
+      await expect(
+        anon.$executeRawUnsafe('ALTER TABLE products ADD COLUMN probe integer'),
+      ).rejects.toThrow(/must be owner of table products/);
+    });
+
+    it('cannot read migration history', async () => {
+      await expect(
+        anon.$executeRawUnsafe('SELECT count(*) FROM _prisma_migrations'),
+      ).rejects.toThrow(/permission denied for table _prisma_migrations/);
+    });
+
+    it('can read products, but was never granted any DML on it', async () => {
+      // The read side is proven in depth in product-search-rls-isolation.test.ts;
+      // this is the narrow "SELECT works, everything else was never granted"
+      // symmetry check the app/admin roles get in "ordinary application
+      // access still works" above.
+      await expect(anon.product.count()).resolves.toBeGreaterThanOrEqual(0);
+      await expect(
+        anon.$executeRawUnsafe("UPDATE products SET name = 'tampered' WHERE false"),
+      ).rejects.toThrow(/permission denied for table products/);
+    });
+
+    it('has no table grants beyond the two SELECT-only ones the S2-7 migration issues', async () => {
+      const rows = await owner.$queryRaw<{ count: bigint }[]>`
+        SELECT count(*) AS count
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
+        JOIN pg_roles r ON r.oid = acl.grantee
+        WHERE n.nspname = 'public' AND r.rolname = 'leenmart_public'`;
+
+      expect(Number(rows[0]?.count)).toBe(2);
     });
   });
 

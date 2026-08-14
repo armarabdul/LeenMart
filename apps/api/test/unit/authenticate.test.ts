@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { NextFunction, Request, Response } from 'express';
+import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { UnauthenticatedError } from '@leen-mart/domain-kit';
-import { authenticate } from '../../src/shared/interface/http/middleware/authenticate.js';
+import {
+  authenticate,
+  optionalAuthenticate,
+} from '../../src/shared/interface/http/middleware/authenticate.js';
 import type {
   AccessTokenClaims,
   AccessTokenService,
@@ -56,10 +59,15 @@ const claimsFor = (overrides: Partial<AccessTokenClaims> = {}): AccessTokenClaim
  * The middleware is now asynchronous (the denylist lookup is I/O), so this
  * awaits `next` being called rather than reading the result synchronously.
  */
+/** Defaults to `authenticate` — every pre-existing call site below exercises that middleware unless it names `optionalAuthenticate` explicitly. */
 const run = async (
   service: AccessTokenService,
   headers: Record<string, string> = {},
   denylist: SessionDenylist = new FakeSessionDenylist(),
+  middleware: (
+    service: AccessTokenService,
+    denylist: SessionDenylist,
+  ) => RequestHandler = authenticate,
 ): Promise<{ req: Request; error: unknown; nextCalledWithNoError: boolean }> => {
   const req = {
     header: (name: string) => headers[name.toLowerCase()],
@@ -81,7 +89,7 @@ const run = async (
     settle();
   }) as unknown as NextFunction;
 
-  authenticate(service, denylist)(req, {} as Response, next);
+  middleware(service, denylist)(req, {} as Response, next);
   await called;
 
   return { req, error, nextCalledWithNoError };
@@ -260,5 +268,143 @@ describe('authenticate middleware', () => {
       expect(error).toBeInstanceOf(Error);
       expect(req.principal).toBeUndefined();
     });
+  });
+});
+
+/**
+ * S2-7's "auth optional" variant. Every case here mirrors an `authenticate`
+ * case above with one deliberate difference: no header is anonymous, never a
+ * rejection — everything else (a header naming a malformed/expired/denied
+ * credential) still 401s exactly like `authenticate` does, which is the
+ * behaviour the S2-7 final approval's correction 1 requires and this suite
+ * exists to pin down.
+ */
+describe('optionalAuthenticate middleware', () => {
+  it('missing Authorization header: proceeds anonymously, no principal, no error', async () => {
+    const service = new FakeAccessTokenService(() => claimsFor());
+
+    const { req, error, nextCalledWithNoError } = await run(
+      service,
+      {},
+      new FakeSessionDenylist(),
+      optionalAuthenticate,
+    );
+
+    expect(error).toBeUndefined();
+    expect(nextCalledWithNoError).toBe(true);
+    expect(req.principal).toBeUndefined();
+  });
+
+  it('valid Bearer token on a live session: attaches a Principal, same as authenticate', async () => {
+    const service = new FakeAccessTokenService(() => claimsFor());
+
+    const { req, error, nextCalledWithNoError } = await run(
+      service,
+      { authorization: 'Bearer valid-token' },
+      new FakeSessionDenylist(),
+      optionalAuthenticate,
+    );
+
+    expect(error).toBeUndefined();
+    expect(nextCalledWithNoError).toBe(true);
+    expect(req.principal).toEqual({ userId, sessionId, role: 'CUSTOMER' });
+  });
+
+  it('present but malformed Authorization header (no recognisable scheme): 401, not anonymous', async () => {
+    const service = new FakeAccessTokenService(() => claimsFor());
+
+    const { error } = await run(
+      service,
+      { authorization: 'garbage-not-a-scheme' },
+      new FakeSessionDenylist(),
+      optionalAuthenticate,
+    );
+
+    expect(error).toBeInstanceOf(UnauthenticatedError);
+    expect((error as UnauthenticatedError).code).toBe('INVALID_ACCESS_TOKEN');
+  });
+
+  it('Bearer scheme with an empty token: 401, not anonymous, and verify() is never called', async () => {
+    const verifySpy = vi.fn<(token: string) => AccessTokenClaims>();
+    const service = new FakeAccessTokenService(verifySpy);
+
+    const { error } = await run(
+      service,
+      { authorization: 'Bearer ' },
+      new FakeSessionDenylist(),
+      optionalAuthenticate,
+    );
+
+    expect(error).toBeInstanceOf(UnauthenticatedError);
+    expect(verifySpy).not.toHaveBeenCalled();
+  });
+
+  it('present but invalid (rejected by verify()) token: 401, never silently downgraded to anonymous', async () => {
+    const service = new FakeAccessTokenService(() => {
+      throw new UnauthenticatedError('Invalid or expired access token.', {
+        code: 'INVALID_ACCESS_TOKEN',
+      });
+    });
+
+    const { req, error } = await run(
+      service,
+      { authorization: 'Bearer not-a-real-token' },
+      new FakeSessionDenylist(),
+      optionalAuthenticate,
+    );
+
+    expect(error).toBeInstanceOf(UnauthenticatedError);
+    expect((error as UnauthenticatedError).code).toBe('INVALID_ACCESS_TOKEN');
+    expect(req.principal).toBeUndefined();
+  });
+
+  it('present but expired token: 401, never silently downgraded to anonymous', async () => {
+    const service = new FakeAccessTokenService(() => {
+      throw new UnauthenticatedError('Invalid or expired access token.', {
+        code: 'INVALID_ACCESS_TOKEN',
+      });
+    });
+
+    const { req, error } = await run(
+      service,
+      { authorization: 'Bearer expired-token' },
+      new FakeSessionDenylist(),
+      optionalAuthenticate,
+    );
+
+    expect(error).toBeInstanceOf(UnauthenticatedError);
+    expect((error as UnauthenticatedError).code).toBe('INVALID_ACCESS_TOKEN');
+    expect(req.principal).toBeUndefined();
+  });
+
+  it('present token on a denied session: 401, never silently downgraded to anonymous', async () => {
+    const service = new FakeAccessTokenService(() => claimsFor());
+
+    const { req, error } = await run(
+      service,
+      { authorization: 'Bearer still-well-signed' },
+      new FakeSessionDenylist([sessionId]),
+      optionalAuthenticate,
+    );
+
+    expect(error).toBeInstanceOf(UnauthenticatedError);
+    expect((error as UnauthenticatedError).code).toBe('INVALID_ACCESS_TOKEN');
+    expect(req.principal).toBeUndefined();
+  });
+
+  it('a denied credential and a missing one are still distinguishable outcomes here (anonymous succeeds, denied 401s)', async () => {
+    const service = new FakeAccessTokenService(() => claimsFor());
+
+    const denied = await run(
+      service,
+      { authorization: 'Bearer valid' },
+      new FakeSessionDenylist([sessionId]),
+      optionalAuthenticate,
+    );
+    const missingHeader = await run(service, {}, new FakeSessionDenylist(), optionalAuthenticate);
+
+    expect(denied.error).toBeInstanceOf(UnauthenticatedError);
+    expect(missingHeader.error).toBeUndefined();
+    expect(missingHeader.nextCalledWithNoError).toBe(true);
   });
 });

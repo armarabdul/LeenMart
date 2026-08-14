@@ -8,7 +8,7 @@ import type {
 
 declare module 'express-serve-static-core' {
   interface Request {
-    /** Populated by `authenticate()`. Handlers read this, never re-verify the token. */
+    /** Populated by `authenticate()`/`optionalAuthenticate()`. Handlers read this, never re-verify the token. */
     principal?: Principal;
   }
 }
@@ -17,6 +17,33 @@ const BEARER_PREFIX = 'Bearer ';
 
 const authenticationRequired = (): UnauthenticatedError =>
   new UnauthenticatedError('Authentication is required.', { code: 'INVALID_ACCESS_TOKEN' });
+
+/**
+ * The shared verify step both `authenticate` and `optionalAuthenticate` run
+ * once a `Bearer` token is on the table — token signature/issuer/audience/
+ * expiry, then the denylist. Factored out so the two middlewares cannot drift
+ * on what "invalid" means; they differ only in what happens when there is no
+ * token to verify at all.
+ */
+const verifyBearerToken = async (
+  token: string,
+  accessTokenService: AccessTokenService,
+  sessionDenylist: SessionDenylist,
+): Promise<Principal> => {
+  const claims = accessTokenService.verify(token);
+  if (await sessionDenylist.isDenied(claims.sid)) {
+    throw authenticationRequired();
+  }
+  return { userId: claims.sub, sessionId: claims.sid, role: claims.role };
+};
+
+/** `header`'s token, or `undefined` if the header itself is absent — distinct from a present-but-invalid one. */
+const bearerTokenFrom = (header: string | undefined): string | null | undefined => {
+  if (header === undefined) return undefined;
+  if (!header.startsWith(BEARER_PREFIX)) return null;
+  const token = header.slice(BEARER_PREFIX.length).trim();
+  return token ? token : null;
+};
 
 /**
  * Authentication middleware (SDD 7.4 step 1: "who is this?").
@@ -43,13 +70,7 @@ const authenticationRequired = (): UnauthenticatedError =>
 export const authenticate =
   (accessTokenService: AccessTokenService, sessionDenylist: SessionDenylist): RequestHandler =>
   (req: Request, _res: Response, next: NextFunction): void => {
-    const header = req.header('authorization');
-    if (!header?.startsWith(BEARER_PREFIX)) {
-      next(authenticationRequired());
-      return;
-    }
-
-    const token = header.slice(BEARER_PREFIX.length).trim();
+    const token = bearerTokenFrom(req.header('authorization'));
     if (!token) {
       next(authenticationRequired());
       return;
@@ -59,11 +80,45 @@ export const authenticate =
     // whole check runs in a promise chain and every rejection is handed to
     // `next` — an unhandled rejection here would fail open, admitting the
     // request instead of refusing it.
-    void (async (): Promise<void> => {
-      const claims = accessTokenService.verify(token);
-      if (await sessionDenylist.isDenied(claims.sid)) {
-        throw authenticationRequired();
-      }
-      req.principal = { userId: claims.sub, sessionId: claims.sid, role: claims.role };
-    })().then(next, next);
+    void verifyBearerToken(token, accessTokenService, sessionDenylist)
+      .then((principal) => {
+        req.principal = principal;
+      })
+      .then(next, next);
+  };
+
+/**
+ * Optional-authentication variant (S2-7, SDD 9.4's "auth optional" surfaces
+ * — today, `GET /api/v1/search`).
+ *
+ * **Absence and invalidity are not the same thing, and this middleware exists
+ * to keep them that way.** No `Authorization` header at all means the caller
+ * is not claiming to be anyone — `req.principal` stays unset and the request
+ * proceeds as anonymous. A header that *is* present but names a malformed,
+ * expired, or denied credential is a caller who tried to authenticate and
+ * failed; that is a 401, identical to `authenticate()`'s own, **never**
+ * silently downgraded to anonymous. Treating a bad credential as no
+ * credential would let a caller probe whether a token is merely expired
+ * versus outright invalid by comparing an "anonymous but succeeded" response
+ * against a hard failure — the same distinguishability `authenticate()`'s own
+ * single error shape (SEC-15) already refuses to leak on the mandatory path.
+ */
+export const optionalAuthenticate =
+  (accessTokenService: AccessTokenService, sessionDenylist: SessionDenylist): RequestHandler =>
+  (req: Request, _res: Response, next: NextFunction): void => {
+    const token = bearerTokenFrom(req.header('authorization'));
+    if (token === undefined) {
+      next();
+      return;
+    }
+    if (token === null) {
+      next(authenticationRequired());
+      return;
+    }
+
+    void verifyBearerToken(token, accessTokenService, sessionDenylist)
+      .then((principal) => {
+        req.principal = principal;
+      })
+      .then(next, next);
   };

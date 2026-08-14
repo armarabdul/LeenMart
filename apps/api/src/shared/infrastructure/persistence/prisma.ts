@@ -19,11 +19,16 @@ import type { Env } from '../../config/env.js';
  * only correct for schema work; it is SUPERUSER with BYPASSRLS, so a request
  * served on it skips every policy KYC-2B-3 will add.
  *
- * Both runtime roles fall back to the owner URL when unset, which keeps
+ * `public` (S2-7) is a fourth, SELECT-only role for the unauthenticated
+ * search surface — narrower than either runtime role above, since RLS
+ * restricts it to `APPROVED`/`READY`, non-deleted rows regardless of what a
+ * query asks for.
+ *
+ * All three runtime roles fall back to the owner URL when unset, which keeps
  * development working before the roles are provisioned. `env.ts` refuses that
  * fallback in production, where it would silently disable RLS.
  */
-export type DatabaseRole = 'owner' | 'app' | 'admin';
+export type DatabaseRole = 'owner' | 'app' | 'admin' | 'public';
 
 export const databaseUrlFor = (env: Env, role: DatabaseRole): string => {
   if (role === 'app') {
@@ -31,6 +36,9 @@ export const databaseUrlFor = (env: Env, role: DatabaseRole): string => {
   }
   if (role === 'admin') {
     return env.ADMIN_DATABASE_URL ?? env.DATABASE_URL;
+  }
+  if (role === 'public') {
+    return env.PUBLIC_DATABASE_URL ?? env.DATABASE_URL;
   }
   return env.DATABASE_URL;
 };

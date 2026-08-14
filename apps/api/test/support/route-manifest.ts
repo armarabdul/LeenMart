@@ -800,6 +800,20 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
       authed(request(ctx.app).post(`/api/v1/me/addresses/${resourceId}/default`), actor),
     snapshot: snapshotAddress,
   },
+
+  // --- public search: /api/v1/search (S2-7) ---
+  // Unauthenticated (auth optional) and tenant-free, the same underlying
+  // reason `/api/v1/catalogue/*` above is PUBLIC: `products_public_read`'s
+  // RLS policy is what confines this surface to `APPROVED`, non-deleted
+  // rows, on its own `leenmart_public` credential — there is no tenant
+  // context to establish and nothing here reads across one.
+  {
+    method: 'GET',
+    prefix: '/api/v1/search',
+    path: '/',
+    classification: 'PUBLIC',
+    why: 'Unauthenticated (auth-optional) product search; RLS on leenmart_public confines results to APPROVED, non-deleted rows regardless of tenant.',
+  },
 ];
 
 export const isTenantOwned = (route: ManifestRoute): route is TenantOwnedRoute =>

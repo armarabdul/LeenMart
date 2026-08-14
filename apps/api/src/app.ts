@@ -53,8 +53,10 @@ const mountBusinessModules = (
   params: {
     prisma: Container['prisma'];
     adminPrisma: Container['adminPrisma'];
+    publicPrisma: Container['publicPrisma'];
     env: Container['env'];
     bullRedis: Container['bullRedis'];
+    redis: Container['redis'];
     accessTokenService: AccessTokenService;
     sessionDenylist: SessionDenylist;
     accessTokenTtlSeconds: number;
@@ -96,40 +98,19 @@ const mountBusinessModules = (
   // The admin product moderation surface (SDD 9.4, S2-5): cross-tenant on the
   // elevated credential, no tenant context — mirrors adminKycRouter above.
   app.use('/api/v1/admin/products', catalogueModule.adminProductRouter);
+  // The public search surface (SDD 9.4/9.5, S2-7): a standalone path, sibling
+  // to `/api/v1/catalogue/*` rather than nested under it, auth optional.
+  app.use('/api/v1/search', catalogueModule.publicSearchRouter);
 
   // Further business modules mount here as they are built.
 };
 
 /**
- * Builds the Express application.
- *
- * Kept separate from `server.ts` so integration tests can exercise the full
- * middleware stack with Supertest without binding a port.
- *
- * Middleware order is load-bearing:
- *   1. request context   — every later line needs the correlation id
- *   2. http logger       — must see the whole request, including failures
- *   3. security headers  — before anything can produce a response
- *   4. body parsing      — with an explicit size cap
- *   5. rate limiting     — after parsing so the limiter can key on identity,
- *                          before routing so handlers are protected
- *   6. routes
- *   7. 404 handler
- *   8. error handler     — always last; Express identifies it by arity
+ * Security headers and CORS. Split out of `createApp` purely to stay under
+ * this file's max-lines-per-function budget, the same reason
+ * `mountBusinessModules` was.
  */
-export const createApp = (container: Container): Express => {
-  const { env, rootLogger, idGenerator, prisma, adminPrisma, redis, bullRedis, clock, logger } =
-    container;
-  const app = express();
-
-  // Behind an ALB/Cloudflare: trust exactly as many proxies as we actually run,
-  // never `true`, which would let a client spoof its own IP for rate limiting.
-  app.set('trust proxy', env.TRUST_PROXY);
-  app.disable('x-powered-by');
-
-  app.use(requestContextMiddleware(idGenerator));
-  app.use(createHttpLogger(rootLogger));
-
+const applySecurityMiddleware = (app: Express, env: Container['env']): void => {
   app.use(
     helmet({
       contentSecurityPolicy: {
@@ -159,6 +140,49 @@ export const createApp = (container: Container): Express => {
       maxAge: 86_400,
     }),
   );
+};
+
+/**
+ * Builds the Express application.
+ *
+ * Kept separate from `server.ts` so integration tests can exercise the full
+ * middleware stack with Supertest without binding a port.
+ *
+ * Middleware order is load-bearing:
+ *   1. request context   — every later line needs the correlation id
+ *   2. http logger       — must see the whole request, including failures
+ *   3. security headers  — before anything can produce a response
+ *   4. body parsing      — with an explicit size cap
+ *   5. rate limiting     — after parsing so the limiter can key on identity,
+ *                          before routing so handlers are protected
+ *   6. routes
+ *   7. 404 handler
+ *   8. error handler     — always last; Express identifies it by arity
+ */
+export const createApp = (container: Container): Express => {
+  const {
+    env,
+    rootLogger,
+    idGenerator,
+    prisma,
+    adminPrisma,
+    publicPrisma,
+    redis,
+    bullRedis,
+    clock,
+    logger,
+  } = container;
+  const app = express();
+
+  // Behind an ALB/Cloudflare: trust exactly as many proxies as we actually run,
+  // never `true`, which would let a client spoof its own IP for rate limiting.
+  app.set('trust proxy', env.TRUST_PROXY);
+  app.disable('x-powered-by');
+
+  app.use(requestContextMiddleware(idGenerator));
+  app.use(createHttpLogger(rootLogger));
+
+  applySecurityMiddleware(app, env);
 
   app.use(compression());
   app.use(json({ limit: env.BODY_LIMIT }));
@@ -176,8 +200,10 @@ export const createApp = (container: Container): Express => {
   mountBusinessModules(app, {
     prisma,
     adminPrisma,
+    publicPrisma,
     env,
     bullRedis,
+    redis,
     accessTokenService: identityModule.accessTokenService,
     sessionDenylist: identityModule.sessionDenylist,
     accessTokenTtlSeconds: env.JWT_ACCESS_TTL_SECONDS,

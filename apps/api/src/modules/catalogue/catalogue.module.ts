@@ -73,6 +73,10 @@ import { createVendorProductMediaController } from './interface/http/vendor-prod
 import { createVendorProductRouter } from './interface/http/vendor-product.routes.js';
 import { createAdminProductController } from './interface/http/admin-product.controller.js';
 import { createAdminProductRouter } from './interface/http/admin-product.routes.js';
+import { SearchProductsUseCase } from './application/use-cases/search-products.use-case.js';
+import { PrismaProductSearchQuery } from './infrastructure/persistence/prisma-product-search-query.js';
+import { createPublicSearchController } from './interface/http/public-search.controller.js';
+import { createPublicSearchRouter } from './interface/http/public-search.routes.js';
 
 export interface CatalogueModuleDeps {
   /**
@@ -92,6 +96,15 @@ export interface CatalogueModuleDeps {
    * `adminPrisma` above is for.
    */
   readonly prisma: PrismaClient;
+  /**
+   * The unauthenticated public search credential (`leenmart_public`, S2-7).
+   * Never `prisma` or `adminPrisma`: `products_public_read`'s RLS policy is
+   * what structurally confines this surface to `APPROVED`, non-deleted rows
+   * regardless of what a caller asks for — a query issued on either other
+   * client would either see nothing (no tenant context) or every vendor's
+   * full lifecycle (the admin grant), neither of which is "public".
+   */
+  readonly publicPrisma: PrismaClient;
   /** `PRODUCT_MEDIA_S3_*` (S2-6a) lives here, the same source `vendor.module.ts` reads its own `KYC_S3_*` block from. */
   readonly env: Env;
   /**
@@ -101,6 +114,8 @@ export interface CatalogueModuleDeps {
    * share a client.
    */
   readonly bullRedis: Redis;
+  /** The general-purpose connection (S2-7) — `createSearchRateLimiter`'s two budgets are counted here, the same client the global limiter in `app.ts` already uses. */
+  readonly redis: Redis;
   readonly accessTokenService: AccessTokenService;
   readonly sessionDenylist: SessionDenylist;
   /**
@@ -123,6 +138,8 @@ export interface CatalogueModule {
   readonly vendorProductRouter: Router;
   /** Mounted at `/api/v1/admin/products` — cross-tenant on `adminPrisma`, no tenant context (S2-5). */
   readonly adminProductRouter: Router;
+  /** Mounted at `/api/v1/search` — unauthenticated (auth optional), on `publicPrisma`, no tenant context (S2-7). */
+  readonly publicSearchRouter: Router;
 }
 
 /** Split out purely to keep `createCatalogueModule` under this file's line budget. */
@@ -431,12 +448,42 @@ const buildAdminProductRouter = (params: {
 };
 
 /**
+ * The public search surface (S2-7), built on `publicPrisma`. `optionalAuthenticate`
+ * and the two-tier limiter both need the identity module's token verifier
+ * and denylist, the exact pair `vendorProductRouter`'s `authenticate` already
+ * threads through — reused here, not re-derived.
+ */
+const buildPublicSearchRouter = (params: {
+  publicPrisma: PrismaClient;
+  redis: Redis;
+  env: Env;
+  accessTokenService: AccessTokenService;
+  sessionDenylist: SessionDenylist;
+  logger: Logger;
+}): Router => {
+  const productSearchQuery = new PrismaProductSearchQuery(params.publicPrisma);
+  return createPublicSearchRouter({
+    controller: createPublicSearchController({
+      searchProductsUseCase: new SearchProductsUseCase({
+        productSearchQuery,
+        logger: params.logger,
+      }),
+    }),
+    accessTokenService: params.accessTokenService,
+    sessionDenylist: params.sessionDenylist,
+    redis: params.redis,
+    env: params.env,
+  });
+};
+
+/**
  * The catalogue module (SDD 5, module 4): taxonomy, vendor products, the
- * moderation core (S2-5) and the product media data model/upload flow
- * (S2-6a). Search, the async processing worker (S2-6b) and public media
- * delivery (S2-6c) are still later chunks; nothing here anticipates them.
+ * moderation core (S2-5), the product media data model/upload flow (S2-6a)
+ * and the public search surface (S2-7). The async processing worker (S2-6b)
+ * lives in its own process; public media delivery (S2-6c) is still a later
+ * chunk, and nothing here anticipates it.
  *
- * Four routers, and the credential each runs on is the whole security story.
+ * Five routers, and the credential each runs on is the whole security story.
  * `adminCategoryRouter` uses `adminPrisma` for the admin-owned taxonomy.
  * `publicCategoryRouter` (S2-2c) uses the ordinary `prisma` for the
  * unauthenticated public tree — same tables, same `CategoryRepository` port
@@ -447,12 +494,17 @@ const buildAdminProductRouter = (params: {
  * `adminProductRouter` (S2-5) uses `adminPrisma` again, this time for the
  * cross-tenant moderation queue and decision, the same split
  * `adminKycRouter`/vendor-facing `router` draw in `vendor.module.ts`.
+ * `publicSearchRouter` (S2-7) uses neither — its own fourth credential,
+ * `publicPrisma`, whose RLS policy is what makes it safe for an anonymous
+ * caller to read a tenant-scoped table at all.
  */
 export const createCatalogueModule = (deps: CatalogueModuleDeps): CatalogueModule => {
   const {
     adminPrisma,
     prisma,
+    publicPrisma,
     env,
+    redis,
     accessTokenService,
     sessionDenylist,
     resolveVendorTenant,
@@ -480,6 +532,14 @@ export const createCatalogueModule = (deps: CatalogueModuleDeps): CatalogueModul
   });
 
   return {
+    publicSearchRouter: buildPublicSearchRouter({
+      publicPrisma,
+      redis,
+      env,
+      accessTokenService,
+      sessionDenylist,
+      logger: moduleLogger,
+    }),
     adminCategoryRouter: buildAdminCategoryRouter({
       adminPrisma,
       accessTokenService,

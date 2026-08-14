@@ -49,6 +49,16 @@ export interface Container {
    * constructed now so the connection is proven, not assumed.
    */
   readonly adminPrisma: PrismaClient;
+  /**
+   * The unauthenticated public search/read client (`leenmart_public`, S2-7),
+   * on its own credential. Unwrapped by `withTenantBoundary`, the same as
+   * `adminPrisma` — `Product`/`ProductMedia` are tenant-scoped models, but
+   * this client never carries a tenant context at all; RLS restricts what it
+   * can see to `APPROVED`/`READY`, non-deleted rows structurally, regardless
+   * of the query, which is what makes wrapping it in the app-level
+   * tenant-context check unnecessary rather than merely skipped.
+   */
+  readonly publicPrisma: PrismaClient;
   readonly redis: Redis;
   /**
    * A second connection, dedicated to BullMQ (S2-6b) — see
@@ -71,6 +81,9 @@ export const createContainer = (): Container => {
   // different role, never the same client pretending.
   const prisma = withTenantBoundary(createPrismaClient(env, rootLogger, 'app'));
   const adminPrisma = createPrismaClient(env, rootLogger, 'admin');
+  // Same reasoning as adminPrisma: leenmart_public's RLS policies are static
+  // (no session GUCs), so there is no tenant context to wrap.
+  const publicPrisma = createPrismaClient(env, rootLogger, 'public');
   const redis = createRedisClient(env, rootLogger);
   const bullRedis = createBullMqRedisClient(env, rootLogger);
   const clock = new SystemClock();
@@ -78,7 +91,11 @@ export const createContainer = (): Container => {
 
   const dispose = async (): Promise<void> => {
     // Ordered deliberately: stop accepting work, then release connections.
-    await Promise.all([prisma.$disconnect(), adminPrisma.$disconnect()]);
+    await Promise.all([
+      prisma.$disconnect(),
+      adminPrisma.$disconnect(),
+      publicPrisma.$disconnect(),
+    ]);
     redis.disconnect();
     bullRedis.disconnect();
   };
@@ -89,6 +106,7 @@ export const createContainer = (): Container => {
     logger,
     prisma,
     adminPrisma,
+    publicPrisma,
     redis,
     bullRedis,
     clock,

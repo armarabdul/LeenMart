@@ -24,6 +24,7 @@ const productionEnv = {
   PRODUCT_MEDIA_S3_SECRET_ACCESS_KEY: 'a-real-product-media-secret',
   APP_DATABASE_URL: 'postgresql://leenmart_app:secret@db:5432/leenmart?schema=public',
   ADMIN_DATABASE_URL: 'postgresql://leenmart_admin:secret@db:5432/leenmart?schema=public',
+  PUBLIC_DATABASE_URL: 'postgresql://leenmart_public:secret@db:5432/leenmart?schema=public',
 };
 
 describe('environment configuration', () => {
@@ -199,9 +200,10 @@ describe('environment configuration', () => {
 
       expect(env.APP_DATABASE_URL).toBeUndefined();
       expect(env.ADMIN_DATABASE_URL).toBeUndefined();
+      expect(env.PUBLIC_DATABASE_URL).toBeUndefined();
     });
 
-    it.each(['APP_DATABASE_URL', 'ADMIN_DATABASE_URL'] as const)(
+    it.each(['APP_DATABASE_URL', 'ADMIN_DATABASE_URL', 'PUBLIC_DATABASE_URL'] as const)(
       'requires %s in production',
       (variable) => {
         // In production that fallback is the whole vulnerability: the owner
@@ -214,7 +216,7 @@ describe('environment configuration', () => {
       },
     );
 
-    it.each(['APP_DATABASE_URL', 'ADMIN_DATABASE_URL'])(
+    it.each(['APP_DATABASE_URL', 'ADMIN_DATABASE_URL', 'PUBLIC_DATABASE_URL'])(
       'refuses %s when it is merely a copy of the owner connection',
       (variable) => {
         // The likeliest way to satisfy the check above without separating
@@ -230,6 +232,7 @@ describe('environment configuration', () => {
 
       expect(env.APP_DATABASE_URL).not.toBe(env.DATABASE_URL);
       expect(env.ADMIN_DATABASE_URL).not.toBe(env.APP_DATABASE_URL);
+      expect(env.PUBLIC_DATABASE_URL).not.toBe(env.DATABASE_URL);
     });
   });
 
