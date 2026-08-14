@@ -15,7 +15,7 @@ import {
 } from './shared/infrastructure/observability/logger.js';
 import { createPrismaClient } from './shared/infrastructure/persistence/prisma.js';
 import { withTenantBoundary } from './shared/infrastructure/persistence/tenant-prisma.js';
-import { createRedisClient } from './shared/infrastructure/cache/redis.js';
+import { createBullMqRedisClient, createRedisClient } from './shared/infrastructure/cache/redis.js';
 
 /**
  * Composition root (SDD 2.3).
@@ -50,6 +50,13 @@ export interface Container {
    */
   readonly adminPrisma: PrismaClient;
   readonly redis: Redis;
+  /**
+   * A second connection, dedicated to BullMQ (S2-6b) — see
+   * `createBullMqRedisClient`'s own comment for why this cannot be `redis`
+   * above. Both `app.ts` (enqueueing) and `worker.ts` (processing) need one;
+   * built once here so neither reimplements the connection settings.
+   */
+  readonly bullRedis: Redis;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
   dispose(): Promise<void>;
@@ -65,6 +72,7 @@ export const createContainer = (): Container => {
   const prisma = withTenantBoundary(createPrismaClient(env, rootLogger, 'app'));
   const adminPrisma = createPrismaClient(env, rootLogger, 'admin');
   const redis = createRedisClient(env, rootLogger);
+  const bullRedis = createBullMqRedisClient(env, rootLogger);
   const clock = new SystemClock();
   const idGenerator = new UuidV7Generator();
 
@@ -72,7 +80,19 @@ export const createContainer = (): Container => {
     // Ordered deliberately: stop accepting work, then release connections.
     await Promise.all([prisma.$disconnect(), adminPrisma.$disconnect()]);
     redis.disconnect();
+    bullRedis.disconnect();
   };
 
-  return { env, rootLogger, logger, prisma, adminPrisma, redis, clock, idGenerator, dispose };
+  return {
+    env,
+    rootLogger,
+    logger,
+    prisma,
+    adminPrisma,
+    redis,
+    bullRedis,
+    clock,
+    idGenerator,
+    dispose,
+  };
 };

@@ -670,13 +670,35 @@ enum ProductRejectionReason {
 /// discipline `ProductStatus` already applies: a member nothing can produce
 /// would be a guess about a feature that does not exist yet.
 ///
-/// `READY` and `FAILED` are S2-6b's (the async worker, D-S2-6-A/K): they
-/// arrive in their own migration when the code that produces them exists,
+/// `READY` and `FAILED` arrive with S2-6b (the async worker, D-S2-6-A/K) —
 /// exactly as `ProductStatus` grew `PENDING_REVIEW`/`APPROVED`/`REJECTED` in
 /// S2-5 rather than being declared upfront in S2-3a.
+///
+/// Only `AWAITING_UPLOAD` and `READY` are named by the SDD (12.2's own
+/// pipeline: a pending row, then `status = READY`). `PROCESSING` and `FAILED`
+/// are implementation states this milestone adds to represent asynchronous
+/// processing honestly — the SDD's pipeline is not instantaneous, and a
+/// status column that could only ever say "pending" or "done" would be lying
+/// about every upload while its worker job is actually running or has
+/// genuinely failed.
 enum ProductMediaStatus {
   AWAITING_UPLOAD
   PROCESSING
+  /// SDD-named terminal state: re-encoded, EXIF/GPS-stripped, all 8 variants
+  /// generated and stored.
+  READY
+  /// Implementation state (S2-6b): processing could not complete. Carries a
+  /// closed-vocabulary `failureReason` code, never the raw exception —
+  /// `ProductMedia.markFailed` is the only writer.
+  FAILED
+}
+
+/// The two output encodings SDD 12.2's variant matrix requires (200/400/800/
+/// 1600 px × WebP/AVIF, D-S2-6-F) — a closed, fixed set, so a native enum
+/// rather than free text.
+enum ProductMediaVariantFormat {
+  WEBP
+  AVIF
 }
 
 /// The marketing entity (SDD 5 module 4, SDD 6.3 "Product ↔ Variant").
@@ -816,6 +838,13 @@ model ProductMedia {
   sizeBytes   Int                @map("size_bytes")
   status      ProductMediaStatus @default(AWAITING_UPLOAD)
 
+  /// S2-6b. A closed, internal vocabulary of short codes this module itself
+  /// defines (e.g. `SVG_REJECTED`, `CONTENT_TYPE_MISMATCH`) — never a raw
+  /// exception message or stack trace, so this is safe to eventually surface
+  /// to the vendor who owns the row. `NULL` unless `status = FAILED`;
+  /// `ProductMedia.markFailed`/`retryProcessing` are the only writers.
+  failureReason String? @map("failure_reason") @db.VarChar(64)
+
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
@@ -824,11 +853,59 @@ model ProductMedia {
   /// identical technique to `ProductVariant.product` above.
   product Product @relation(fields: [productId, vendorId], references: [id, vendorId], onDelete: Restrict)
 
+  /// S2-6b's 8 derived variants, one row each. Independent of `objectKey`
+  /// above, which stays the original upload — never republished as-is (SDD
+  /// 12.2: every served file is freshly re-encoded).
+  variants ProductMediaVariant[]
+
+  /// The composite-foreign-key target `ProductMediaVariant` pins its own
+  /// denormalised `vendor_id` against (S2-6b) — the same technique
+  /// `uq_products_id_vendor`/`uq_product_variants_id_vendor` already
+  /// establish one level up. Additive: `id` is already unique, so this
+  /// constrains nothing S2-6a previously allowed.
+  @@unique([id, vendorId], map: "uq_product_media_id_vendor")
   /// One row per uploaded object; a vendor may re-upload under a fresh
   /// `ProductMedia` row freely, so there is no uniqueness constraint on the
   /// key beyond the primary key itself.
   @@index([productId], map: "idx_product_media_product")
   @@map("product_media")
+}
+
+/// One generated variant of a `ProductMedia` (S2-6b, SDD 12.2 step 5f: "200/
+/// 400/800/1600 px, WebP + AVIF" — 8 rows per ready media item, one per
+/// `(width, format)` pair).
+///
+/// A row of its own rather than columns on `ProductMedia` — the matrix is
+/// fixed-shape but each variant is independently produced, independently
+/// retryable mid-pipeline (a worker resuming a partially-processed item skips
+/// only the pairs that already have a row) and independently addressable for
+/// S2-6c's later public delivery, the same "structured child gets its own
+/// table" convention `ProductVariant`/`KycDocument`/`CategoryAttribute`
+/// already establish in this codebase — never a JSON blob for a shape this
+/// fixed.
+///
+/// `vendorId` is denormalised from `ProductMedia.vendorId`, the same
+/// composite-FK technique every other child table here uses.
+model ProductMediaVariant {
+  id        String                    @id @db.Uuid
+  mediaId   String                    @map("media_id") @db.Uuid
+  vendorId  String                    @map("vendor_id") @db.Uuid
+  width     Int
+  format    ProductMediaVariantFormat
+  objectKey String                    @map("object_key")
+  sizeBytes Int                       @map("size_bytes")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  /// The composite FK: both halves must match the same `ProductMedia` row.
+  media ProductMedia @relation(fields: [mediaId, vendorId], references: [id, vendorId], onDelete: Restrict)
+
+  /// The worker's idempotency key: a redelivered or retried job that has
+  /// already written this pair does nothing the second time — the unique
+  /// index is the arbiter, never a read-then-write existence check.
+  @@unique([mediaId, width, format], map: "uq_product_media_variants_media_width_format")
+  @@index([mediaId], map: "idx_product_media_variants_media")
+  @@map("product_media_variants")
 }
 
 /// Per-variant stock (SDD 6.3 "Stock", SDD 6.4, FR-12).

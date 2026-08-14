@@ -40,6 +40,32 @@ export interface ProductMediaRepository {
    */
   completeIfAwaitingUpload(media: ProductMedia): Promise<boolean>;
 
+  /**
+   * Moves a media item into `READY`, but only if it is still `PROCESSING`
+   * (S2-6b). The arbiter when two workers race to finish the same item —
+   * whichever `UPDATE` reaches PostgreSQL first wins; the other's `false`
+   * means its own work was redundant, not that anything is wrong. Also what
+   * makes a late, redelivered completion of an already-`READY` item a safe
+   * no-op rather than a corruption: the `WHERE status = 'PROCESSING'` simply
+   * matches nothing.
+   */
+  markReadyIfProcessing(media: ProductMedia): Promise<boolean>;
+
+  /**
+   * Moves a media item into `FAILED` with its reason, but only if it is
+   * still `PROCESSING` (S2-6b). Same arbitration shape as
+   * `markReadyIfProcessing`, one outcome over.
+   */
+  markFailedIfProcessing(media: ProductMedia): Promise<boolean>;
+
+  /**
+   * Re-enters `PROCESSING` from `FAILED` (S2-6b D-S2-6-K's retry arrow), but
+   * only if it is still `FAILED` — guards a retry racing a second retry of
+   * the same item the same way every other transition here guards its own
+   * precondition against the database, not just the in-memory entity.
+   */
+  markProcessingIfFailed(media: ProductMedia): Promise<boolean>;
+
   /** `false` when the row is gone — a caller turns that into the same 404 a missing id gets. */
   softDelete(media: ProductMedia): Promise<boolean>;
 }

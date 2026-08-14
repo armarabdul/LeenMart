@@ -1,14 +1,13 @@
-import { S3Client } from '@aws-sdk/client-s3';
 import type { PrismaClient } from '@prisma/client';
 import type { Router } from 'express';
+import type { Redis } from 'ioredis';
 import type { Clock, IdGenerator, Logger, TransactionRunner } from '@leen-mart/domain-kit';
-import { PRODUCT_MEDIA_MAX_BYTES, productMediaContentTypeSchema } from '@leen-mart/contracts';
 import { AmbientAuditWriter, type AuditWriter } from '../audit/index.js';
 import { PrismaAuditLogRepository } from '../audit/infrastructure/persistence/prisma-audit-log.repository.js';
 import type { AccessTokenService, SessionDenylist } from '../identity/index.js';
 import type { Env } from '../../shared/config/env.js';
 import { AdminTransactionRunner } from '../../shared/infrastructure/persistence/tenant-prisma.js';
-import { S3ObjectStore, type ObjectStore } from '../media/index.js';
+import type { ObjectStore } from '../media/index.js';
 import { CreateCategoryUseCase } from './application/use-cases/create-category.use-case.js';
 import { DeleteCategoryUseCase } from './application/use-cases/delete-category.use-case.js';
 import { GetCategoryUseCase } from './application/use-cases/get-category.use-case.js';
@@ -53,9 +52,12 @@ import { CreateProductMediaUploadIntentUseCase } from './application/use-cases/c
 import { CompleteProductMediaUploadUseCase } from './application/use-cases/complete-product-media-upload.use-case.js';
 import { ListProductMediaUseCase } from './application/use-cases/list-product-media.use-case.js';
 import { RemoveProductMediaUseCase } from './application/use-cases/remove-product-media.use-case.js';
+import type { ProductMediaProcessingQueue } from './application/ports/product-media-processing-queue.port.js';
 import { PrismaProductRepository } from './infrastructure/persistence/prisma-product.repository.js';
 import { PrismaProductVariantRepository } from './infrastructure/persistence/prisma-product-variant.repository.js';
 import { PrismaProductMediaRepository } from './infrastructure/persistence/prisma-product-media.repository.js';
+import { BullMqProductMediaProcessingQueue } from './infrastructure/jobs/product-media-queue.js';
+import { buildProductMediaObjectStore } from './infrastructure/storage/product-media-object-store.js';
 import { PrismaInventoryRepository } from './infrastructure/persistence/prisma-inventory.repository.js';
 import { PrismaProductReviewQuery } from './infrastructure/persistence/prisma-product-review-query.js';
 import type { InventoryRepository } from './domain/repositories/inventory.repository.js';
@@ -92,6 +94,13 @@ export interface CatalogueModuleDeps {
   readonly prisma: PrismaClient;
   /** `PRODUCT_MEDIA_S3_*` (S2-6a) lives here, the same source `vendor.module.ts` reads its own `KYC_S3_*` block from. */
   readonly env: Env;
+  /**
+   * The BullMQ-dedicated Redis connection (S2-6b) — used here only to
+   * *enqueue*; the consumer lives in its own process. Never
+   * `container.redis`: see `createBullMqRedisClient` for why the two cannot
+   * share a client.
+   */
+  readonly bullRedis: Redis;
   readonly accessTokenService: AccessTokenService;
   readonly sessionDenylist: SessionDenylist;
   /**
@@ -165,36 +174,6 @@ interface VendorProductShared {
   readonly logger: Logger;
 }
 
-/**
- * The `leenmart-public-media` bucket's client (S2-6a, SDD 12.1), built the
- * same way `createKycS3Client` builds `vendor.module.ts`'s: the endpoint and
- * credentials are the entire difference between MinIO locally and R2 in
- * production, and `S3ObjectStore` itself never branches on environment.
- */
-const createProductMediaS3Client = (env: Env): S3Client =>
-  new S3Client({
-    region: env.PRODUCT_MEDIA_S3_REGION,
-    endpoint: env.PRODUCT_MEDIA_S3_ENDPOINT,
-    forcePathStyle: env.PRODUCT_MEDIA_S3_FORCE_PATH_STYLE,
-    credentials: {
-      accessKeyId: env.PRODUCT_MEDIA_S3_ACCESS_KEY_ID,
-      secretAccessKey: env.PRODUCT_MEDIA_S3_SECRET_ACCESS_KEY,
-    },
-  });
-
-/**
- * The allowlist/cap come from the contracts package (D-S2-6-I) — the same
- * values `createProductMediaUploadIntentRequestSchema` validates against on
- * the wire, passed here explicitly rather than duplicated as a second set of
- * literals the way `KYC_ALLOWED_CONTENT_TYPES`/`KYC_MAX_OBJECT_BYTES` are.
- */
-const buildProductMediaObjectStore = (env: Env): ObjectStore =>
-  new S3ObjectStore(createProductMediaS3Client(env), {
-    bucket: env.PRODUCT_MEDIA_S3_BUCKET,
-    allowedContentTypes: productMediaContentTypeSchema.options,
-    maxObjectBytes: PRODUCT_MEDIA_MAX_BYTES,
-  });
-
 /** The repositories and cross-cutting deps every product/variant/media/inventory use case shares. */
 const buildVendorProductShared = (params: {
   prisma: PrismaClient;
@@ -224,6 +203,7 @@ const buildVendorProductMediaController = (
   shared: VendorProductShared,
   objectStore: ObjectStore,
   idGenerator: IdGenerator,
+  productMediaProcessingQueue: ProductMediaProcessingQueue,
 ): ReturnType<typeof createVendorProductMediaController> => {
   const {
     productRepository,
@@ -249,6 +229,8 @@ const buildVendorProductMediaController = (
       objectStore,
       transactionRunner,
       auditWriter,
+      // S2-6b: enqueued *after* the transaction commits, never inside it.
+      productMediaProcessingQueue,
       clock,
       logger,
     }),
@@ -270,6 +252,7 @@ const buildVendorProductMediaController = (
 const buildVendorProductRouter = (params: {
   prisma: PrismaClient;
   env: Env;
+  bullRedis: Redis;
   categoryRepository: CategoryRepository;
   accessTokenService: AccessTokenService;
   sessionDenylist: SessionDenylist;
@@ -311,7 +294,12 @@ const buildVendorProductRouter = (params: {
       }),
       removeProductVariantUseCase: new RemoveProductVariantUseCase(shared),
     }),
-    media: buildVendorProductMediaController(shared, productMediaObjectStore, idGenerator),
+    media: buildVendorProductMediaController(
+      shared,
+      productMediaObjectStore,
+      idGenerator,
+      new BullMqProductMediaProcessingQueue(params.bullRedis),
+    ),
     inventory: buildVendorInventoryController({
       inventoryRepository,
       transactionRunner: shared.transactionRunner,
@@ -481,6 +469,7 @@ export const createCatalogueModule = (deps: CatalogueModuleDeps): CatalogueModul
   const vendorProductRouter = buildVendorProductRouter({
     prisma,
     env,
+    bullRedis: deps.bullRedis,
     categoryRepository: publicCategoryRepository,
     accessTokenService,
     sessionDenylist,

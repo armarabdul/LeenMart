@@ -54,6 +54,7 @@ const mountBusinessModules = (
     prisma: Container['prisma'];
     adminPrisma: Container['adminPrisma'];
     env: Container['env'];
+    bullRedis: Container['bullRedis'];
     accessTokenService: AccessTokenService;
     sessionDenylist: SessionDenylist;
     accessTokenTtlSeconds: number;
@@ -117,7 +118,8 @@ const mountBusinessModules = (
  *   8. error handler     — always last; Express identifies it by arity
  */
 export const createApp = (container: Container): Express => {
-  const { env, rootLogger, idGenerator, prisma, adminPrisma, redis, clock, logger } = container;
+  const { env, rootLogger, idGenerator, prisma, adminPrisma, redis, bullRedis, clock, logger } =
+    container;
   const app = express();
 
   // Behind an ALB/Cloudflare: trust exactly as many proxies as we actually run,
@@ -175,6 +177,7 @@ export const createApp = (container: Container): Express => {
     prisma,
     adminPrisma,
     env,
+    bullRedis,
     accessTokenService: identityModule.accessTokenService,
     sessionDenylist: identityModule.sessionDenylist,
     accessTokenTtlSeconds: env.JWT_ACCESS_TTL_SECONDS,

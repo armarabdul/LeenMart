@@ -17,11 +17,22 @@ export const productMediaContentTypeSchema = z.enum(['image/jpeg', 'image/png', 
 export const MAX_IMAGES_PER_PRODUCT = 8;
 
 /**
- * The upload/processing lifecycle (S2-6a, SDD 12.2), as far as this
- * milestone builds it. `READY`/`FAILED` arrive with S2-6b (the async
- * worker).
+ * The upload/processing lifecycle (S2-6a/S2-6b, SDD 12.2). Only
+ * `AWAITING_UPLOAD` and `READY` are named by the SDD; `PROCESSING`/`FAILED`
+ * are implementation states this codebase adds to represent asynchronous
+ * processing honestly — see `ProductMediaStatusName`'s own comment in the
+ * API for the full reasoning.
+ *
+ * `failureReason` (S2-6b) is deliberately **not** on `vendorProductMediaSchema`
+ * below — no vendor-facing surface for it was requested this milestone, so
+ * it stays internal to the domain layer and the database.
  */
-export const productMediaStatusSchema = z.enum(['AWAITING_UPLOAD', 'PROCESSING']);
+export const productMediaStatusSchema = z.enum([
+  'AWAITING_UPLOAD',
+  'PROCESSING',
+  'READY',
+  'FAILED',
+]);
 
 /**
  * Requests a presigned upload URL for one product image (SDD 12.2 steps 1–2).

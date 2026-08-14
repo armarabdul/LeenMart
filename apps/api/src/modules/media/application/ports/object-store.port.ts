@@ -50,7 +50,7 @@ export interface TemporaryObject {
  * application only ever minted time-limited, condition-bound URLs and
  * inspected metadata.
  *
- * **KYC-7 narrows that boundary, deliberately and by exactly two methods.**
+ * **KYC-7 narrowed that boundary, deliberately and by exactly two methods.**
  * Document access (SDD 12.3) requires the server itself to read one
  * ciphertext object, decrypt it, and stage the plaintext somewhere a
  * presigned URL can reach — none of which is possible through metadata and
@@ -62,6 +62,18 @@ export interface TemporaryObject {
  * unauthenticated caller), and `writeTemporaryObject` accepts no key at all,
  * so the one write this port allows can never land on a caller-chosen path,
  * permanent or otherwise.
+ *
+ * **S2-6b narrows it once more, by one method.** The async media-processing
+ * worker (SDD 12.2 step 5) reads one uploaded object, generates 8 derived
+ * variants, and must write each one to a *permanent* key of its own — a case
+ * `writeTemporaryObject` cannot serve (its whole point is refusing a
+ * permanent address) and that streaming through the API tier would violate
+ * outright. `putObject` is that write, held to the same restraint as every
+ * caller-named key this port accepts elsewhere (`getObject`): the key must
+ * already be server-derived from ids the caller does not control, never
+ * client input — `ProcessProductMediaUseCase` computes it the same way
+ * `CreateProductMediaUploadIntentUseCase.objectKeyFor` computes the
+ * original's.
  *
  * It also performs **no encryption**. KYC objects are encrypted client-side
  * before upload (SDD 12.3), so as far as this port is concerned every payload
@@ -115,6 +127,14 @@ export interface ObjectStore {
    * separate temporary-object deletion method is needed.
    */
   writeTemporaryObject(bytes: Buffer, contentType: string): Promise<TemporaryObject>;
+
+  /**
+   * Writes `bytes` to a permanent object at a server-derived `key` (S2-6b).
+   * The caller is responsible for `key` never having come from a client —
+   * this method itself enforces nothing about the key's shape, the same
+   * trust boundary `getObject` already draws.
+   */
+  putObject(key: string, bytes: Buffer, contentType: string): Promise<void>;
 
   /** Idempotent: deleting an absent object is not an error. */
   delete(key: string): Promise<void>;

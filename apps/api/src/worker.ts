@@ -1,0 +1,114 @@
+import { type Container, createContainer } from './container.js';
+import { createCatalogueMediaWorker } from './modules/catalogue/index.js';
+
+/**
+ * The background worker process (S2-6b, SDD 12.2 step 5).
+ *
+ * **A separate process from `server.ts`, deliberately.** Media processing is
+ * seconds of CPU-bound libvips work per upload; running it on the API's event
+ * loop would stall request handling, and running it as an in-process
+ * scheduler beside Express would tie worker capacity to HTTP replica count.
+ * The two scale independently because they are two entry points over one
+ * container.
+ *
+ * Shares `createContainer` with the API for exactly that reason: the database
+ * credential, the Redis connections, the clock and the id generator are the
+ * same objects configured the same way, so there is no second, drifting
+ * definition of "how this service connects to anything". What differs is what
+ * is built on top — no Express, no routers, no HTTP server.
+ *
+ * Shutdown mirrors `server.ts`'s: stop accepting new jobs, let in-flight ones
+ * finish, then release connections. `worker.close()` is BullMQ's own drain —
+ * it waits for active jobs rather than abandoning them, which is what keeps a
+ * half-processed media item from being left in `PROCESSING` with no job to
+ * resume it.
+ */
+let shuttingDown = false;
+
+const startWorker = async (): Promise<void> => {
+  const container = createContainer();
+  const { env, rootLogger, prisma, bullRedis, idGenerator, clock, logger } = container;
+
+  const worker = createCatalogueMediaWorker({
+    prisma,
+    bullRedis,
+    env,
+    idGenerator,
+    clock,
+    logger,
+  });
+
+  await worker.waitUntilReady();
+
+  rootLogger.info(
+    { env: env.NODE_ENV, version: env.APP_VERSION, queue: worker.name },
+    'Leen Mart media worker started',
+  );
+
+  registerShutdownHandlers(worker, container);
+  registerCrashHandlers(container);
+};
+
+type MediaWorker = ReturnType<typeof createCatalogueMediaWorker>;
+
+const registerShutdownHandlers = (worker: MediaWorker, container: Container): void => {
+  const { env, rootLogger } = container;
+
+  const shutdown = (signal: string): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    rootLogger.info({ signal }, 'Shutdown signal received, draining in-flight jobs');
+
+    const forceExit = setTimeout(() => {
+      rootLogger.error(
+        { timeoutMs: env.SHUTDOWN_TIMEOUT_MS },
+        'Graceful shutdown timed out, forcing exit',
+      );
+      process.exit(1);
+    }, env.SHUTDOWN_TIMEOUT_MS);
+    forceExit.unref();
+
+    void (async (): Promise<void> => {
+      try {
+        await worker.close();
+        await container.dispose();
+        rootLogger.info({}, 'Shutdown complete');
+        process.exit(0);
+      } catch (error) {
+        rootLogger.error({ err: error }, 'Error while shutting the worker down');
+        process.exit(1);
+      }
+    })();
+  };
+
+  process.on('SIGTERM', () => {
+    shutdown('SIGTERM');
+  });
+  process.on('SIGINT', () => {
+    shutdown('SIGINT');
+  });
+};
+
+const registerCrashHandlers = (container: Container): void => {
+  const { rootLogger } = container;
+
+  // Same reasoning as `server.ts`: an unhandled rejection leaves the process
+  // in an unknown state, and a worker in an unknown state is one that may be
+  // silently dropping jobs. Let the orchestrator replace it.
+  process.on('unhandledRejection', (reason) => {
+    rootLogger.fatal({ err: reason }, 'Unhandled promise rejection');
+    process.exit(1);
+  });
+
+  process.on('uncaughtException', (error) => {
+    rootLogger.fatal({ err: error }, 'Uncaught exception');
+    process.exit(1);
+  });
+};
+
+startWorker().catch((error: unknown) => {
+  process.stderr.write(
+    `Failed to start Leen Mart media worker: ${error instanceof Error ? error.stack : String(error)}\n`,
+  );
+  process.exit(1);
+});

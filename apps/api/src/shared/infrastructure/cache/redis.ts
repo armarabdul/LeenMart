@@ -34,6 +34,31 @@ export const createRedisClient = (env: Env, logger: PinoLogger): Redis => {
   return client;
 };
 
+/**
+ * A second, dedicated connection for BullMQ (S2-6b, D-S2-6-A).
+ *
+ * Not the same instance `createRedisClient` returns: BullMQ's `Worker` and
+ * `QueueEvents` block on the connection while waiting for jobs, which
+ * requires `maxRetriesPerRequest: null` — a setting that would be wrong for
+ * `createRedisClient`'s own callers (rate limiting, session denylist), which
+ * need bounded retries on an ordinary request/response connection. Same
+ * server, same `REDIS_URL`, deliberately separate client — the same
+ * per-purpose credential separation `prisma`/`adminPrisma` already practise,
+ * one level down from Postgres.
+ */
+export const createBullMqRedisClient = (env: Env, logger: PinoLogger): Redis => {
+  const client = new Redis(env.REDIS_URL, {
+    maxRetriesPerRequest: null,
+    enableReadyCheck: true,
+  });
+
+  client.on('error', (error: Error) => {
+    logger.error({ err: error }, 'BullMQ Redis connection error');
+  });
+
+  return client;
+};
+
 export interface CacheHealth {
   readonly healthy: boolean;
   readonly latencyMs: number;

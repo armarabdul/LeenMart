@@ -14,7 +14,9 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'lcov'],
       include: ['src/**/*.ts'],
-      exclude: ['src/server.ts', 'src/**/*.d.ts'],
+      // Both process entry points: bootstrap and signal handling, exercised by
+      // running the process rather than by a test (S2-6b adds `worker.ts`).
+      exclude: ['src/server.ts', 'src/worker.ts', 'src/**/*.d.ts'],
     },
   },
 });

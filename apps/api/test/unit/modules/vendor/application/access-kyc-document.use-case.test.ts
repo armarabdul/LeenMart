@@ -190,6 +190,10 @@ class RecordingObjectStore implements ObjectStore {
     return Promise.resolve({ key });
   }
 
+  putObject(): Promise<void> {
+    throw new Error('not used by this use case');
+  }
+
   delete(key: string): Promise<void> {
     this.deletedKeys.push(key);
     if (this.deleteError) {

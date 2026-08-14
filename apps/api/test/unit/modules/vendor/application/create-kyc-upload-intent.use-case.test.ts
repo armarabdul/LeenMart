@@ -96,6 +96,10 @@ class RecordingObjectStore implements ObjectStore {
     throw new Error('not used by this use case');
   }
 
+  putObject(): Promise<void> {
+    throw new Error('not used by this use case');
+  }
+
   delete(): Promise<void> {
     throw new Error('not used by this use case');
   }

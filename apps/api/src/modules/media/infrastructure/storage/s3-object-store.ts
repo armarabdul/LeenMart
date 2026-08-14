@@ -198,6 +198,22 @@ export class S3ObjectStore implements ObjectStore {
     }
   }
 
+  async putObject(key: string, bytes: Buffer, contentType: string): Promise<void> {
+    try {
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.config.bucket,
+          Key: key,
+          Body: bytes,
+          ContentType: contentType,
+          ContentLength: bytes.length,
+        }),
+      );
+    } catch (error) {
+      throw new IntegrationError('object-storage', 'Could not write object.', { cause: error });
+    }
+  }
+
   async delete(key: string): Promise<void> {
     try {
       await this.client.send(new DeleteObjectCommand({ Bucket: this.config.bucket, Key: key }));

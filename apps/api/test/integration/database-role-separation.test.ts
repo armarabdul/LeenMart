@@ -236,7 +236,9 @@ describe('database role separation', () => {
       // The role separation above is what gives these policies teeth; asserted
       // here too so a change to either half is caught from both sides.
       // `products`/`product_variants` joined this list in S2-3a; `inventory`
-      // in S2-4; `product_media` in S2-6a.
+      // in S2-4; `product_media` in S2-6a; `product_media_variants` in S2-6b —
+      // written by the background worker, and therefore exactly the kind of
+      // table that must not be exempt from the boundary.
       const rows = await owner.$queryRawUnsafe<{ tablename: string }[]>(
         'SELECT tablename FROM pg_tables WHERE schemaname = $1 AND rowsecurity ORDER BY tablename',
         'public',
@@ -246,6 +248,7 @@ describe('database role separation', () => {
         'inventory',
         'kyc_documents',
         'product_media',
+        'product_media_variants',
         'product_variants',
         'products',
         'vendor_kyc_submissions',

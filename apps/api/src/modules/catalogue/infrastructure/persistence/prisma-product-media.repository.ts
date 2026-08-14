@@ -20,6 +20,7 @@ interface ProductMediaRow {
   readonly contentType: string;
   readonly sizeBytes: number;
   readonly status: string;
+  readonly failureReason: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly deletedAt: Date | null;
@@ -34,6 +35,7 @@ const toDomain = (row: ProductMediaRow): ProductMedia =>
     contentType: row.contentType,
     sizeBytes: row.sizeBytes,
     status: row.status as ProductMediaStatusName,
+    failureReason: row.failureReason,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     deletedAt: row.deletedAt,
@@ -109,6 +111,43 @@ export class PrismaProductMediaRepository implements ProductMediaRepository {
     const result = await this.prisma.productMedia.updateMany({
       where: { id: media.id, deletedAt: null, status: 'AWAITING_UPLOAD' },
       data: { status: media.status, updatedAt: media.updatedAt },
+    });
+    return result.count === 1;
+  }
+
+  /** The conditional `WHERE status = 'PROCESSING'` is the whole arbitration — see the port's own doc comment. */
+  async markReadyIfProcessing(media: ProductMedia): Promise<boolean> {
+    const result = await this.prisma.productMedia.updateMany({
+      where: { id: media.id, deletedAt: null, status: 'PROCESSING' },
+      data: {
+        status: media.status,
+        failureReason: media.failureReason,
+        updatedAt: media.updatedAt,
+      },
+    });
+    return result.count === 1;
+  }
+
+  async markFailedIfProcessing(media: ProductMedia): Promise<boolean> {
+    const result = await this.prisma.productMedia.updateMany({
+      where: { id: media.id, deletedAt: null, status: 'PROCESSING' },
+      data: {
+        status: media.status,
+        failureReason: media.failureReason,
+        updatedAt: media.updatedAt,
+      },
+    });
+    return result.count === 1;
+  }
+
+  async markProcessingIfFailed(media: ProductMedia): Promise<boolean> {
+    const result = await this.prisma.productMedia.updateMany({
+      where: { id: media.id, deletedAt: null, status: 'FAILED' },
+      data: {
+        status: media.status,
+        failureReason: media.failureReason,
+        updatedAt: media.updatedAt,
+      },
     });
     return result.count === 1;
   }

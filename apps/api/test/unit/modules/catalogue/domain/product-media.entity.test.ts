@@ -109,6 +109,104 @@ describe('ProductMedia', () => {
     });
   });
 
+  describe('markReady (S2-6b)', () => {
+    it('moves PROCESSING to READY', () => {
+      const ready = make().completeUpload(NOW).markReady(LATER);
+      expect(ready.status).toBe('READY');
+      expect(ready.failureReason).toBeNull();
+      expect(ready.updatedAt).toEqual(LATER);
+    });
+
+    it('refuses from AWAITING_UPLOAD — a job may not skip the pipeline', () => {
+      expect(issueOf(() => make().markReady(LATER))).toMatch(/must be PROCESSING/i);
+    });
+
+    it('refuses from READY — a late duplicate cannot re-finish a finished item', () => {
+      const ready = make().completeUpload(NOW).markReady(NOW);
+      expect(issueOf(() => ready.markReady(LATER))).toMatch(/must be PROCESSING/i);
+    });
+
+    it('refuses from FAILED — the route back is retryProcessing, not straight to READY', () => {
+      const failed = make().completeUpload(NOW).markFailed('DECODE_FAILED', NOW);
+      expect(issueOf(() => failed.markReady(LATER))).toMatch(/must be PROCESSING/i);
+    });
+
+    it('refuses on a deleted media item', () => {
+      const deleted = make().completeUpload(NOW).softDelete(NOW);
+      expect(issueOf(() => deleted.markReady(LATER))).toMatch(/deleted/i);
+    });
+  });
+
+  describe('markFailed (S2-6b)', () => {
+    it('moves PROCESSING to FAILED and records the code', () => {
+      const failed = make().completeUpload(NOW).markFailed('SVG_REJECTED', LATER);
+      expect(failed.status).toBe('FAILED');
+      expect(failed.failureReason).toBe('SVG_REJECTED');
+      expect(failed.updatedAt).toEqual(LATER);
+    });
+
+    it('refuses from AWAITING_UPLOAD', () => {
+      expect(issueOf(() => make().markFailed('PROCESSING_ERROR', LATER))).toMatch(
+        /must be PROCESSING/i,
+      );
+    });
+
+    it('refuses from READY — processing never demotes a finished item', () => {
+      const ready = make().completeUpload(NOW).markReady(NOW);
+      expect(issueOf(() => ready.markFailed('PROCESSING_ERROR', LATER))).toMatch(
+        /must be PROCESSING/i,
+      );
+    });
+
+    it('refuses a reason longer than the column allows', () => {
+      const processing = make().completeUpload(NOW);
+      expect(
+        issueOf(() => processing.markFailed('x'.repeat(65) as 'PROCESSING_ERROR', LATER)),
+      ).toMatch(/at most 64/i);
+    });
+
+    it('refuses on a deleted media item', () => {
+      const deleted = make().completeUpload(NOW).softDelete(NOW);
+      expect(issueOf(() => deleted.markFailed('PROCESSING_ERROR', LATER))).toMatch(/deleted/i);
+    });
+  });
+
+  describe('retryProcessing (S2-6b)', () => {
+    it('moves FAILED back to PROCESSING and clears the prior reason', () => {
+      const retried = make()
+        .completeUpload(NOW)
+        .markFailed('PROCESSING_ERROR', NOW)
+        .retryProcessing(LATER);
+      expect(retried.status).toBe('PROCESSING');
+      expect(retried.failureReason).toBeNull();
+      expect(retried.updatedAt).toEqual(LATER);
+    });
+
+    it('can then reach READY — a retry is a genuine second chance, not a dead end', () => {
+      const ready = make()
+        .completeUpload(NOW)
+        .markFailed('PROCESSING_ERROR', NOW)
+        .retryProcessing(NOW)
+        .markReady(LATER);
+      expect(ready.status).toBe('READY');
+    });
+
+    it('refuses from PROCESSING — there is nothing to retry', () => {
+      const processing = make().completeUpload(NOW);
+      expect(issueOf(() => processing.retryProcessing(LATER))).toMatch(/must be FAILED/i);
+    });
+
+    it('refuses from READY', () => {
+      const ready = make().completeUpload(NOW).markReady(NOW);
+      expect(issueOf(() => ready.retryProcessing(LATER))).toMatch(/must be FAILED/i);
+    });
+
+    it('refuses on a deleted media item', () => {
+      const deleted = make().completeUpload(NOW).markFailed('DECODE_FAILED', NOW).softDelete(NOW);
+      expect(issueOf(() => deleted.retryProcessing(LATER))).toMatch(/deleted/i);
+    });
+  });
+
   describe('softDelete', () => {
     it('stamps deletedAt and reports itself deleted', () => {
       const deleted = make().softDelete(LATER);
@@ -139,6 +237,7 @@ describe('ProductMedia', () => {
         contentType: 'image/jpeg',
         sizeBytes: 1024,
         status: 'PROCESSING',
+        failureReason: null,
         createdAt: NOW,
         updatedAt: LATER,
         deletedAt: null,

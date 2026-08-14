@@ -26,6 +26,7 @@ import {
 } from '../../../../../src/modules/catalogue/domain/errors/catalogue-errors.js';
 import type { ProductRepository } from '../../../../../src/modules/catalogue/domain/repositories/product.repository.js';
 import type { ProductMediaRepository } from '../../../../../src/modules/catalogue/domain/repositories/product-media.repository.js';
+import type { ProductMediaProcessingQueue } from '../../../../../src/modules/catalogue/application/ports/product-media-processing-queue.port.js';
 import { toCategoryId } from '../../../../../src/modules/catalogue/domain/value-objects/category-id.value-object.js';
 import { toProductId } from '../../../../../src/modules/catalogue/domain/value-objects/product-id.value-object.js';
 import { toProductMediaId } from '../../../../../src/modules/catalogue/domain/value-objects/product-media-id.value-object.js';
@@ -109,6 +110,9 @@ const mediaRepo = (overrides: Partial<ProductMediaRepository> = {}): ProductMedi
     listByProductId: vi.fn().mockResolvedValue([]),
     countLiveForProduct: vi.fn().mockResolvedValue(0),
     completeIfAwaitingUpload: vi.fn().mockResolvedValue(true),
+    markReadyIfProcessing: vi.fn().mockResolvedValue(true),
+    markFailedIfProcessing: vi.fn().mockResolvedValue(true),
+    markProcessingIfFailed: vi.fn().mockResolvedValue(true),
     softDelete: vi.fn().mockResolvedValue(true),
     ...overrides,
   };
@@ -131,7 +135,15 @@ const objectStore = (overrides: Partial<ObjectStore> = {}): ObjectStore => ({
     .mockResolvedValue({ sizeBytes: 2048, contentType: 'image/jpeg' } satisfies StoredObject),
   getObject: vi.fn().mockResolvedValue(null),
   writeTemporaryObject: vi.fn().mockResolvedValue({ key: 'temp/x' } satisfies TemporaryObject),
+  putObject: vi.fn().mockResolvedValue(undefined),
   delete: vi.fn().mockResolvedValue(undefined),
+  ...overrides,
+});
+
+const processingQueue = (
+  overrides: Partial<ProductMediaProcessingQueue> = {},
+): ProductMediaProcessingQueue => ({
+  enqueue: vi.fn().mockResolvedValue(undefined),
   ...overrides,
 });
 
@@ -249,17 +261,21 @@ describe('CreateProductMediaUploadIntentUseCase', () => {
 });
 
 describe('CompleteProductMediaUploadUseCase', () => {
+  // The last two collaborators travel as one options object rather than as
+  // two more positional parameters — S2-6b's queue would otherwise make this
+  // a five-parameter helper.
   const build = (
     products: ProductRepository,
     mediaRepository: ProductMediaRepository,
     store: ObjectStore = objectStore(),
-    auditWriter: AuditWriter = new RecordingAuditWriter(),
+    extras: { auditWriter?: AuditWriter; queue?: ProductMediaProcessingQueue } = {},
   ): CompleteProductMediaUploadUseCase =>
     new CompleteProductMediaUploadUseCase({
       productRepository: products,
       productMediaRepository: mediaRepository,
       objectStore: store,
-      ...base(auditWriter),
+      productMediaProcessingQueue: extras.queue ?? processingQueue(),
+      ...base(extras.auditWriter ?? new RecordingAuditWriter()),
     });
 
   it('is not found when there is no such media item', async () => {
@@ -323,7 +339,9 @@ describe('CompleteProductMediaUploadUseCase', () => {
     const mediaRepository = mediaRepo({ findByProductAndId: vi.fn().mockResolvedValue(existing) });
     const auditWriter = new RecordingAuditWriter();
 
-    const result = await build(productRepo(), mediaRepository, objectStore(), auditWriter).execute({
+    const result = await build(productRepo(), mediaRepository, objectStore(), {
+      auditWriter,
+    }).execute({
       principal,
       productId: existing.productId,
       mediaId: existing.id,
@@ -350,6 +368,107 @@ describe('CompleteProductMediaUploadUseCase', () => {
     ).rejects.toBeInstanceOf(ProductMediaUploadConflictError);
   });
 
+  describe('post-commit enqueue (S2-6b)', () => {
+    it('enqueues one processing job carrying only ids', async () => {
+      const existing = media();
+      const mediaRepository = mediaRepo({
+        findByProductAndId: vi.fn().mockResolvedValue(existing),
+      });
+      const queue = processingQueue();
+
+      await build(productRepo(), mediaRepository, objectStore(), { queue }).execute({
+        principal,
+        productId: existing.productId,
+        mediaId: existing.id,
+      });
+
+      expect(queue.enqueue).toHaveBeenCalledTimes(1);
+      expect(queue.enqueue).toHaveBeenCalledWith({
+        mediaId: existing.id,
+        vendorId: existing.vendorId,
+        userId: principal.userId,
+      });
+    });
+
+    it('enqueues only after the transaction has committed', async () => {
+      const existing = media();
+      const mediaRepository = mediaRepo({
+        findByProductAndId: vi.fn().mockResolvedValue(existing),
+      });
+      const order: string[] = [];
+      const queue = processingQueue({
+        enqueue: vi.fn().mockImplementation(() => {
+          order.push('enqueue');
+          return Promise.resolve();
+        }),
+      });
+      const useCase = new CompleteProductMediaUploadUseCase({
+        productRepository: productRepo(),
+        productMediaRepository: mediaRepository,
+        objectStore: objectStore(),
+        productMediaProcessingQueue: queue,
+        ...base(),
+        transactionRunner: {
+          run: async (work) => {
+            order.push('transaction:begin');
+            const result = await work({} as TransactionScope);
+            order.push('transaction:commit');
+            return result;
+          },
+        },
+      });
+
+      await useCase.execute({
+        principal,
+        productId: existing.productId,
+        mediaId: existing.id,
+      });
+
+      // The whole point: a job enqueued before the commit could reference a
+      // write that then rolled back.
+      expect(order).toEqual(['transaction:begin', 'transaction:commit', 'enqueue']);
+    });
+
+    it('enqueues nothing when the transaction rolls back', async () => {
+      const existing = media();
+      const mediaRepository = mediaRepo({
+        findByProductAndId: vi.fn().mockResolvedValue(existing),
+        completeIfAwaitingUpload: vi.fn().mockResolvedValue(false),
+      });
+      const queue = processingQueue();
+
+      await expect(
+        build(productRepo(), mediaRepository, objectStore(), { queue }).execute({
+          principal,
+          productId: existing.productId,
+          mediaId: existing.id,
+        }),
+      ).rejects.toBeInstanceOf(ProductMediaUploadConflictError);
+
+      expect(queue.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('still succeeds when the enqueue itself fails — the upload genuinely completed', async () => {
+      const existing = media();
+      const mediaRepository = mediaRepo({
+        findByProductAndId: vi.fn().mockResolvedValue(existing),
+      });
+      const queue = processingQueue({
+        enqueue: vi.fn().mockRejectedValue(new Error('redis is down')),
+      });
+
+      const result = await build(productRepo(), mediaRepository, objectStore(), {
+        queue,
+      }).execute({
+        principal,
+        productId: existing.productId,
+        mediaId: existing.id,
+      });
+
+      expect(result.media.status).toBe('PROCESSING');
+    });
+  });
+
   describe('ASM-14 reopening', () => {
     it('reopens an APPROVED product and records the reopening', async () => {
       const parent = approvedProduct();
@@ -360,7 +479,7 @@ describe('CompleteProductMediaUploadUseCase', () => {
       const products = productRepo({ findById: vi.fn().mockResolvedValue(parent) });
       const auditWriter = new RecordingAuditWriter();
 
-      await build(products, mediaRepository, objectStore(), auditWriter).execute({
+      await build(products, mediaRepository, objectStore(), { auditWriter }).execute({
         principal,
         productId: parent.id,
         mediaId: existing.id,
@@ -383,7 +502,7 @@ describe('CompleteProductMediaUploadUseCase', () => {
       const products = productRepo({ findById: vi.fn().mockResolvedValue(parent) });
       const auditWriter = new RecordingAuditWriter();
 
-      await build(products, mediaRepository, objectStore(), auditWriter).execute({
+      await build(products, mediaRepository, objectStore(), { auditWriter }).execute({
         principal,
         productId: parent.id,
         mediaId: existing.id,
@@ -407,11 +526,13 @@ describe('CompleteProductMediaUploadUseCase', () => {
       });
       const auditWriter = new RecordingAuditWriter();
 
-      const result = await build(products, mediaRepository, objectStore(), auditWriter).execute({
-        principal,
-        productId: parent.id,
-        mediaId: existing.id,
-      });
+      const result = await build(products, mediaRepository, objectStore(), { auditWriter }).execute(
+        {
+          principal,
+          productId: parent.id,
+          mediaId: existing.id,
+        },
+      );
 
       expect(result.media.status).toBe('PROCESSING');
       expect(auditWriter.entries.map((e) => e.action)).not.toContain(

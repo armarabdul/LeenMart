@@ -22,6 +22,7 @@ import type { ProductRepository } from '../../domain/repositories/product.reposi
 import type { ProductMediaRepository } from '../../domain/repositories/product-media.repository.js';
 import type { ProductId } from '../../domain/value-objects/product-id.value-object.js';
 import type { ProductMediaId } from '../../domain/value-objects/product-media-id.value-object.js';
+import type { ProductMediaProcessingQueue } from '../ports/product-media-processing-queue.port.js';
 
 export interface CompleteProductMediaUploadInput {
   readonly principal: Principal;
@@ -39,6 +40,7 @@ export interface CompleteProductMediaUploadDeps {
   readonly objectStore: ObjectStore;
   readonly transactionRunner: TransactionRunner;
   readonly auditWriter: AuditWriter;
+  readonly productMediaProcessingQueue: ProductMediaProcessingQueue;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -59,6 +61,18 @@ export interface CompleteProductMediaUploadDeps {
  * transaction — never as a separate call a client could omit. Only this
  * trigger is wired; title/category/brand/attribute edits are untouched, the
  * same restraint `UpdateProductUseCase` already keeps.
+ *
+ * **Also where S2-6b's async pipeline starts.** Once the transaction commits
+ * — never before, and never as part of it — this enqueues one
+ * `ProcessProductMediaUseCase` job. Deliberately outside the transaction: a
+ * job enqueued for a write that then rolled back would be a job for a media
+ * item that, as far as the database is concerned, was never completed. The
+ * inverse gap — the commit succeeds but the enqueue call itself fails — is
+ * accepted and logged loudly rather than papered over: closing it requires
+ * exactly the transactional-outbox machinery D-S2-6-H says this milestone
+ * does not build. A vendor's upload still succeeds either way; only the
+ * asynchronous processing would need a manual nudge, which is a smaller,
+ * honestly-documented gap than inventing an outbox to avoid admitting it.
  */
 export class CompleteProductMediaUploadUseCase {
   constructor(private readonly deps: CompleteProductMediaUploadDeps) {}
@@ -74,7 +88,7 @@ export class CompleteProductMediaUploadUseCase {
       logger,
     } = this.deps;
 
-    return transactionRunner.run(async (scope) => {
+    const result = await transactionRunner.run(async (scope) => {
       const products = productRepository.withTransaction(scope);
       const media = productMediaRepository.withTransaction(scope);
 
@@ -125,6 +139,35 @@ export class CompleteProductMediaUploadUseCase {
 
       return { media: completed };
     });
+
+    await this.enqueueProcessing(input, result.media);
+
+    return result;
+  }
+
+  /**
+   * S2-6b: fired only after `execute`'s transaction has committed — see the
+   * class doc comment for why this is outside it. A failure here is logged,
+   * never thrown: the vendor's upload genuinely did complete, and there is no
+   * user-facing error that would be honest to raise for a background job
+   * that has not run yet.
+   */
+  private async enqueueProcessing(
+    input: CompleteProductMediaUploadInput,
+    media: ProductMedia,
+  ): Promise<void> {
+    try {
+      await this.deps.productMediaProcessingQueue.enqueue({
+        mediaId: media.id,
+        vendorId: media.vendorId,
+        userId: input.principal.userId,
+      });
+    } catch (error) {
+      this.deps.logger.error(
+        { err: error, mediaId: media.id },
+        'Failed to enqueue product media processing — the upload itself is complete; the item will remain PROCESSING until an operator retries it',
+      );
+    }
   }
 
   /**

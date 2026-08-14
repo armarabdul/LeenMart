@@ -147,12 +147,15 @@ describe('tenant context', () => {
   });
 
   describe('model registry', () => {
-    it('covers exactly the models KYC-2B-3, S2-3a, S2-4 and S2-6a protect', () => {
+    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a and S2-6b protect', () => {
       expect([...TENANT_SCOPED_MODELS].sort()).toEqual([
         'Inventory',
         'KycDocument',
         'Product',
         'ProductMedia',
+        // S2-6b: the worker writes these under a tenant context of its own,
+        // never on the admin credential.
+        'ProductMediaVariant',
         'ProductVariant',
         'VendorKycSubmission',
         'VendorProfile',
