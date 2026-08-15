@@ -44,6 +44,30 @@ export interface InventoryRepository {
   setIfVersionMatches(inventory: Inventory, expectedVersion: number): Promise<boolean>;
 
   /**
+   * The Stage-3 checkout decrement `setIfVersionMatches`'s own doc comment
+   * already named and deferred (SDD 14.4's `WHERE available >= :qty`).
+   * A single atomic conditional `UPDATE`, no prior read: `false` means
+   * insufficient stock, and the caller (`PlaceOrderUseCase`) aborts its
+   * whole transaction rather than trusting a read that would already be
+   * stale. Deliberately does not touch `reserved` or `version` — this is a
+   * direct, permanent decrement, not a hold, exactly as `Inventory`'s own
+   * schema comment anticipates.
+   *
+   * Bound, in practice, to the `leenmart_checkout` credential (S3-3A) rather
+   * than the tenant-scoped one this repository otherwise assumes — this
+   * method (and `restoreAvailability` below) are the two statements that
+   * role's `inventory_checkout_decrement` RLS policy exists to permit.
+   */
+  decrementIfAvailable(variantId: ProductVariantId, quantity: number): Promise<boolean>;
+
+  /**
+   * The inverse of `decrementIfAvailable` — a cancelled order's stock going
+   * back. No conditional guard beyond the row existing: an increment cannot
+   * violate the `CHECK (available >= 0)` constraint the way a decrement can.
+   */
+  restoreAvailability(variantId: ProductVariantId, quantity: number): Promise<boolean>;
+
+  /**
    * Removes the counters for a set of variants outright.
    *
    * A genuine `DELETE`, not a soft one: inventory carries no `deleted_at`

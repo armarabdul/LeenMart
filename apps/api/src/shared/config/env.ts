@@ -139,10 +139,16 @@ const assertProductionDatabaseRoles = (
     APP_DATABASE_URL?: string | undefined;
     ADMIN_DATABASE_URL?: string | undefined;
     PUBLIC_DATABASE_URL?: string | undefined;
+    CHECKOUT_DATABASE_URL?: string | undefined;
   },
   ctx: z.RefinementCtx,
 ): void => {
-  for (const key of ['APP_DATABASE_URL', 'ADMIN_DATABASE_URL', 'PUBLIC_DATABASE_URL'] as const) {
+  for (const key of [
+    'APP_DATABASE_URL',
+    'ADMIN_DATABASE_URL',
+    'PUBLIC_DATABASE_URL',
+    'CHECKOUT_DATABASE_URL',
+  ] as const) {
     const value = env[key];
     if (!value) {
       ctx.addIssue({
@@ -214,6 +220,17 @@ const envSchema = z
      * trust boundary `ADMIN_DATABASE_URL` draws, one more role over.
      */
     PUBLIC_DATABASE_URL: z.string().url().startsWith('postgres').optional(),
+    /**
+     * The checkout connection (`leenmart_checkout`, S3-3A). Narrower than
+     * any runtime role above: SELECT on `vendors`, UPDATE on `inventory`
+     * only, full DML on the order module's own tables. Placing an order is
+     * the one operation in this platform that must atomically write
+     * `inventory` rows belonging to more than one vendor in a single
+     * transaction — something neither the single-tenant `leenmart_app` nor
+     * the deliberately SELECT-only `leenmart_public` can do, and
+     * `leenmart_admin` was never granted an RLS policy to do either.
+     */
+    CHECKOUT_DATABASE_URL: z.string().url().startsWith('postgres').optional(),
     DATABASE_POOL_SIZE: z.coerce.number().int().positive().max(100).default(10),
     REDIS_URL: z.string().url().startsWith('redis'),
 

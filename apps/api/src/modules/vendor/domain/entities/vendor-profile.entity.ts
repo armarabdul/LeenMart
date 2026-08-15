@@ -19,6 +19,15 @@ export interface VendorProfileProps {
   readonly userId: UserId;
   readonly status: VendorStatus;
   readonly plan: VendorPlanName;
+  /**
+   * The customer-safe shop display name (S3-3A, decision D-S3-03). `null`
+   * until the vendor sets one — never backfilled or guessed, since a name
+   * nobody chose is invented data. Plain `string`, not a dedicated value
+   * object: like `Address.recipientName`, it carries no behaviour beyond
+   * format validation, which happens once at the HTTP boundary
+   * (`setVendorShopNameRequestSchema`).
+   */
+  readonly shopName: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -102,6 +111,7 @@ export class VendorProfile {
       userId: props.userId,
       status: VendorStatus.REGISTERED,
       plan: 'COMMISSION',
+      shopName: null,
       createdAt: props.now,
       updatedAt: props.now,
     });
@@ -126,6 +136,10 @@ export class VendorProfile {
 
   get plan(): VendorPlanName {
     return this.props.plan;
+  }
+
+  get shopName(): string | null {
+    return this.props.shopName;
   }
 
   get createdAt(): Date {
@@ -197,5 +211,18 @@ export class VendorProfile {
   /** Returns a suspended vendor to service. Lands straight on `ACTIVE`: they already cleared KYC. */
   reinstate(now: Date): VendorProfile {
     return this.transition('REINSTATE', now);
+  }
+
+  /**
+   * Sets or changes the customer-safe shop display name (S3-3A, decision
+   * D-S3-03). Not a lifecycle transition — `shopName` is a mutable display
+   * attribute, not a state the SDD 15.1 diagram draws an edge for — so this
+   * does not go through `transition()` and carries no `from`/`to` guard.
+   * Callable from any status: a vendor may set their shop name before,
+   * during or after KYC, and nothing about this milestone's approved scope
+   * ties it to a particular stage of onboarding.
+   */
+  updateShopName(shopName: string, now: Date): VendorProfile {
+    return new VendorProfile({ ...this.props, shopName, updatedAt: now });
   }
 }

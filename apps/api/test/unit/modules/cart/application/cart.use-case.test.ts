@@ -122,6 +122,8 @@ const inventoryRepo = (overrides: Partial<InventoryRepository> = {}): InventoryR
     create: vi.fn(),
     findByProductAndVariant: vi.fn().mockResolvedValue(inventory(100)),
     setIfVersionMatches: vi.fn().mockResolvedValue(true),
+    decrementIfAvailable: vi.fn().mockResolvedValue(true),
+    restoreAvailability: vi.fn().mockResolvedValue(true),
     deleteForVariants: vi.fn().mockResolvedValue(0),
     deleteForProduct: vi.fn().mockResolvedValue(0),
     ...overrides,

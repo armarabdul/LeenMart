@@ -25,6 +25,14 @@ const ProductDetailPage = lazy(() =>
 const CartPage = lazy(() =>
   import('@/pages/CartPage').then((module) => ({ default: module.CartPage })),
 );
+const CheckoutPage = lazy(() =>
+  import('@/pages/CheckoutPage').then((module) => ({ default: module.CheckoutPage })),
+);
+const OrderConfirmationPage = lazy(() =>
+  import('@/pages/OrderConfirmationPage').then((module) => ({
+    default: module.OrderConfirmationPage,
+  })),
+);
 const NotFoundPage = lazy(() =>
   import('@/pages/NotFoundPage').then((module) => ({ default: module.NotFoundPage })),
 );
@@ -67,7 +75,11 @@ const router = createBrowserRouter([
       // its own separate, unwrapped presentation and is left untouched.
       {
         element: withBoundary(<RequireAuth />),
-        children: [{ path: '/cart', element: withBoundary(<CartPage />) }],
+        children: [
+          { path: '/cart', element: withBoundary(<CartPage />) },
+          { path: '/checkout', element: withBoundary(<CheckoutPage />) },
+          { path: '/orders/:id', element: withBoundary(<OrderConfirmationPage />) },
+        ],
       },
     ],
   },

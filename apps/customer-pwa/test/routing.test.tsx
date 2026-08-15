@@ -36,6 +36,8 @@ const renderAt = (path: string, store: ReturnType<typeof createStore>): void => 
           <Route path="/login" element={<p>Login page</p>} />
           <Route element={<RequireAuth />}>
             <Route path="/cart" element={<p>Cart page</p>} />
+            <Route path="/checkout" element={<p>Checkout page</p>} />
+            <Route path="/orders/:id" element={<p>Order confirmation page</p>} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -59,5 +61,31 @@ describe('product detail and cart route guarding', () => {
     store.dispatch(sessionEstablished(SESSION));
     renderAt('/cart', store);
     expect(screen.getByText('Cart page')).toBeInTheDocument();
+  });
+});
+
+describe('checkout and order confirmation route guarding (S3-3A)', () => {
+  it('redirects an anonymous visitor from /checkout to /login', () => {
+    renderAt('/checkout', createStore());
+    expect(screen.getByText('Login page')).toBeInTheDocument();
+  });
+
+  it('renders the checkout page for an authenticated session', () => {
+    const store = createStore();
+    store.dispatch(sessionEstablished(SESSION));
+    renderAt('/checkout', store);
+    expect(screen.getByText('Checkout page')).toBeInTheDocument();
+  });
+
+  it('redirects an anonymous visitor from /orders/:id to /login', () => {
+    renderAt('/orders/00000000-0000-7000-8000-000000000099', createStore());
+    expect(screen.getByText('Login page')).toBeInTheDocument();
+  });
+
+  it('renders the order confirmation page for an authenticated session', () => {
+    const store = createStore();
+    store.dispatch(sessionEstablished(SESSION));
+    renderAt('/orders/00000000-0000-7000-8000-000000000099', store);
+    expect(screen.getByText('Order confirmation page')).toBeInTheDocument();
   });
 });

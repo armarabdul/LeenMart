@@ -107,6 +107,7 @@ model User {
   mfaChallenges MfaChallenge[]
   addresses     Address[]
   cart          Cart?
+  orders        Order[]
   // Two named relations because a KYC submission records the reviewer who
   // claimed it and the administrator who decided it as separate people.
   kycReviewed   VendorKycSubmission[] @relation("KycReviewer")
@@ -271,17 +272,30 @@ enum VendorPlan {
 /// switching plans is a real commercial action (billing, proration) that
 /// D-S3-01 does not approve building yet; the column exists so commission
 /// resolution has something to read.
+/// `shopName` (S3-3A, decision D-S3-03) is the customer-safe vendor/shop
+/// display name SDD 6.3 requires as one of `order_items`' immutable snapshot
+/// fields ("vendor name") — a field this schema never had, because the SDD's
+/// conceptual `shops` sub-entity (module 3) was never built. Deliberately
+/// nullable rather than backfilled: inventing a name for a pre-existing
+/// vendor would be exactly the kind of invented business data this project
+/// refuses (no vendor may be given a name nobody chose). A vendor sets it
+/// themselves via `PATCH /api/v1/vendors/me/shop-profile`
+/// (`MANAGE_SHOP_PROFILE`, already-existing permission, previously unwired);
+/// until they do, `PlaceOrderUseCase` refuses to sell that vendor's items
+/// rather than snapshot a null or guessed name onto an order.
 model VendorProfile {
   id        String       @id @db.Uuid
   userId    String       @unique @map("user_id") @db.Uuid
   status    VendorStatus @default(REGISTERED)
   plan      VendorPlan   @default(COMMISSION)
+  shopName  String?      @map("shop_name") @db.VarChar(120)
   createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   user           User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   kycSubmissions VendorKycSubmission[]
   products       Product[]
+  subOrders      SubOrder[]
 
   @@map("vendors")
 }
@@ -1092,4 +1106,233 @@ model TaxRate {
   @@unique([hsnCode, effectiveFrom], map: "uq_tax_rates_hsn_code_effective_from")
   @@index([hsnCode, effectiveFrom], map: "idx_tax_rates_hsn_code_effective_from")
   @@map("tax_rates")
+}
+
+/// Order/SubOrder lifecycle (S3-3A, approved decision D-S3-06). Deliberately
+/// only the four states approved for this milestone — no SHIPPED, DELIVERED,
+/// REFUNDED, FAILED or COMPLETED, and no fulfilment-specific states
+/// (READY_FOR_PICKUP/REDEEMED/PICKUP_MISSED), which remain Stage 4.
+///
+/// One enum, not two: the approved decision is to "use the same state model
+/// consistently for Order and SubOrder," so `Order.status` and
+/// `SubOrder.status` both use this type rather than two structurally
+/// identical enums drifting apart later.
+///
+/// Only `PENDING_PAYMENT` is ever produced by S3-3A's own code paths.
+/// `CONFIRMED` and `PROCESSING` are fully modelled on the domain entities
+/// (`Order.confirm()`, `SubOrder.startProcessing()`) so the state machine and
+/// the cancellation-eligibility rule ("customer may cancel until PROCESSING")
+/// are real and tested, but neither transition has an HTTP caller yet —
+/// confirming payment is S3-3B's scope (a real or mock payment rail), and
+/// marking a sub-order as processing is vendor-portal/fulfilment scope, named
+/// nowhere in S3-3A's functional list. This mirrors `VendorProfile.activate()`'s
+/// own history: a fully-built transition with no caller until the milestone
+/// that needs one arrives.
+enum OrderStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  PROCESSING
+  CANCELLED
+}
+
+/// A customer's order (S3-3A, SDD 5 module 8, SDD 6.3 "Order ↔ Vendor
+/// cardinality": `Order 1..N SubOrder`).
+///
+/// Customer-owned, not vendor-owned — like `Cart`/`Address`, **outside**
+/// `TENANT_SCOPED_MODELS`, no RLS. Ownership is enforced in application code
+/// by `customerId`, the same convention `Address`/`Cart` already establish,
+/// because the tenant boundary SDD 6.6 protects is a *vendor's* data, and an
+/// order at this level belongs to the customer who placed it — its
+/// `SubOrder` children are what a vendor may see, and reads for that surface
+/// are not part of S3-3A (no vendor-facing order view is in scope here).
+///
+/// Read and written through the new `leenmart_checkout` role (S3-3A decision
+/// D-S3-07) rather than `leenmart_app`/`leenmart_admin`: the write that must
+/// happen in the same transaction — the atomic inventory decrement — touches
+/// rows belonging to one or more *other* vendors than any single tenant
+/// session could ever be scoped to, and neither existing runtime credential
+/// can do that safely (see the migration's own comment for the full
+/// reasoning this schema does not repeat).
+///
+/// The address is a full snapshot, never a live FK to `addresses` — SDD 6.3's
+/// own immutability reasoning for pricing, applied identically here: a
+/// customer editing or deleting a saved address later must not alter a
+/// placed order.
+///
+/// `totalAmount` is the tax-inclusive customer-facing total — the sum of
+/// every `OrderItem.lineAmount` — and is unaffected by whether tax resolves
+/// (approved decision D-S3-02: GST is never added on top of the
+/// already-tax-inclusive `ProductVariant.price`).
+model Order {
+  id            String      @id @db.Uuid
+  customerId    String      @map("customer_id") @db.Uuid
+  status        OrderStatus @default(PENDING_PAYMENT)
+  totalAmount   BigInt      @map("total_amount")
+  totalCurrency String      @default("INR") @map("total_currency") @db.VarChar(3)
+
+  /// Snapshot of the `Address` selected at checkout (SDD 6.3's
+  /// `order_addresses`, inlined here rather than a child table — S3-3A has
+  /// exactly one address per order and no separate lifecycle for it).
+  addressRecipientName String  @map("address_recipient_name") @db.VarChar(100)
+  addressPhone         String  @map("address_phone") @db.VarChar(20)
+  addressLine1         String  @map("address_line_1") @db.VarChar(200)
+  addressLine2         String? @map("address_line_2") @db.VarChar(200)
+  addressCity          String  @map("address_city") @db.VarChar(100)
+  addressState         String  @map("address_state") @db.VarChar(100)
+  addressPincode       String  @map("address_pincode") @db.VarChar(6)
+  addressLandmark      String? @map("address_landmark") @db.VarChar(200)
+  addressLabel         String  @map("address_label") @db.VarChar(50)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  /// `Restrict`, not `Cascade` like `Cart.user`: an order is retained
+  /// financial/audit history (SDD 22.5: 8 years), not disposable per-session
+  /// state, so it must not vanish if its owning `User` row ever did.
+  customer  User       @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  subOrders SubOrder[]
+
+  @@index([customerId, createdAt(sort: Desc)], map: "idx_orders_customer_created")
+  @@index([status, createdAt], map: "idx_orders_status_created")
+  @@map("orders")
+}
+
+/// One vendor's slice of a multi-vendor order (SDD 6.3: "One customer
+/// payment, N independent fulfilment lifecycles, N settlements, N
+/// cancellation paths"). `vendorId` is the grouping key `PlaceOrderUseCase`
+/// buckets cart items by — already denormalised onto `ProductVariant`, so no
+/// new lookup was needed to discover it.
+///
+/// `vendorShopNameSnapshot` duplicates `OrderItem`'s own copy rather than
+/// joining `OrderItem` to read it: a `SubOrder` with zero items is never
+/// producible by this milestone's code, but the snapshot belongs at the
+/// level SDD 6.3 actually draws it (the line item), and repeating it here is
+/// what lets a sub-order summary render without joining its children.
+model SubOrder {
+  id                     String      @id @db.Uuid
+  orderId                String      @map("order_id") @db.Uuid
+  vendorId               String      @map("vendor_id") @db.Uuid
+  status                 OrderStatus @default(PENDING_PAYMENT)
+  vendorShopNameSnapshot String      @map("vendor_shop_name_snapshot") @db.VarChar(120)
+  totalAmount            BigInt      @map("total_amount")
+  totalCurrency          String      @default("INR") @map("total_currency") @db.VarChar(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  order  Order         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  /// `Restrict`, matching every other catalogue/vendor foreign key in this
+  /// schema: a vendor with live order history must not vanish out from
+  /// under it.
+  vendor VendorProfile @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  items  OrderItem[]
+
+  @@index([orderId], map: "idx_sub_orders_order")
+  @@index([vendorId, status, createdAt(sort: Desc)], map: "idx_sub_orders_vendor_status_created")
+  @@map("sub_orders")
+}
+
+/// One line in a `SubOrder` — the immutable checkout snapshot SDD 6.3
+/// requires ("orders must be immutable evidence of what was agreed... a
+/// vendor editing a price or deleting a product must not alter historic
+/// orders"). Every `*Snapshot` field is copied at placement time and never
+/// updated afterward; this model has no `updatedAt` and no repository method
+/// that writes one.
+///
+/// `productId`/`variantId`/`vendorId` are plain columns with **no foreign
+/// key** to `catalogue`'s tables, mirroring `CartItem.variantId`'s own
+/// reasoning (SDD 5.1: no FK crossing a module boundary except to
+/// `users`/`vendors`) — `vendorId` alone is the one exception, and it is
+/// already covered by `SubOrder.vendorId`.
+///
+/// Tax is modelled as **resolved or not**, never defaulted to zero (approved
+/// decision D-S3-02): `taxResolved = false` means the CA-approved rate did
+/// not exist for this HSN code at placement time, and every `tax*` column
+/// beside it stays null — an unresolved amount is not the same fact as a
+/// zero-rated one, and this schema refuses to let the two collapse into the
+/// same representation.
+///
+/// Commission is always resolved (S3-2, D-S3-01: every `VendorPlan` has a
+/// seeded `CommissionRule`) and is stored for the ledger milestone that will
+/// eventually read it — **never returned in the customer-facing API
+/// response** (mapped out at the controller boundary, the same "deliberately
+/// narrow" DTO discipline this codebase already applies to KYC responses).
+model OrderItem {
+  id         String @id @db.Uuid
+  subOrderId String @map("sub_order_id") @db.Uuid
+  productId  String @map("product_id") @db.Uuid
+  variantId  String @map("variant_id") @db.Uuid
+  vendorId   String @map("vendor_id") @db.Uuid
+
+  productNameSnapshot    String @map("product_name_snapshot") @db.VarChar(200)
+  variantNameSnapshot    String @map("variant_name_snapshot") @db.VarChar(120)
+  vendorShopNameSnapshot String @map("vendor_shop_name_snapshot") @db.VarChar(120)
+  unitOfMeasureSnapshot  String @map("unit_of_measure_snapshot") @db.VarChar(40)
+
+  quantity          Int
+  unitPriceAmount   BigInt @map("unit_price_amount")
+  unitPriceCurrency String @default("INR") @map("unit_price_currency") @db.VarChar(3)
+  lineAmount        BigInt @map("line_amount")
+  lineCurrency      String @default("INR") @map("line_currency") @db.VarChar(3)
+
+  hsnCodeSnapshot String? @map("hsn_code_snapshot") @db.VarChar(8)
+
+  taxResolved        Boolean @default(false) @map("tax_resolved")
+  taxRateBasisPoints  Int?    @map("tax_rate_basis_points")
+  taxAmount           BigInt? @map("tax_amount")
+  taxCurrency         String? @map("tax_currency") @db.VarChar(3)
+
+  commissionRateBasisPoints Int    @map("commission_rate_basis_points")
+  commissionAmount          BigInt @map("commission_amount")
+  commissionCurrency        String @default("INR") @map("commission_currency") @db.VarChar(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  subOrder SubOrder @relation(fields: [subOrderId], references: [id], onDelete: Restrict)
+
+  @@index([subOrderId], map: "idx_order_items_sub_order")
+  @@index([variantId, createdAt], map: "idx_order_items_variant_created")
+  @@map("order_items")
+}
+
+/// `Idempotency-Key` storage (S3-3A, SDD 9.2/9.4/10.5/17.1). Scoped by
+/// `(userId, key, endpoint)` — SDD 6.4's own indexing note for this table
+/// says `unique (key, endpoint)`; `userId` narrows it further because a
+/// client-chosen header value alone is not guaranteed unique across
+/// different authenticated callers, and two different customers coincidentally
+/// choosing the same key must not collide.
+///
+/// `requestHash` (SHA-256 hex) is what SDD leaves unstated and this project
+/// adds: replaying the same key with a *different* payload is a client bug or
+/// a key-reuse collision, not a legitimate retry, and must be rejected rather
+/// than served a stale response for the wrong request.
+///
+/// No database TTL extension — the 24-hour honour window (SDD 9.2/10.5) is
+/// enforced by the middleware comparing `expiresAt` to the clock, matching
+/// this schema's existing convention of soft, application-checked expiry
+/// (`Otp.expiresAt`, `RefreshToken.expiresAt`) rather than a Postgres-native
+/// TTL mechanism nothing else here uses either.
+enum IdempotencyKeyStatus {
+  /// A request with this key is currently being handled. A second request
+  /// racing in with the same key while this is still true is the "handle
+  /// concurrent requests safely" case — refused, never double-executed.
+  IN_PROGRESS
+  COMPLETED
+}
+
+model IdempotencyKey {
+  id             String               @id @db.Uuid
+  userId         String               @map("user_id") @db.Uuid
+  key            String               @map("key") @db.VarChar(255)
+  endpoint       String               @map("endpoint") @db.VarChar(200)
+  requestHash    String               @map("request_hash") @db.VarChar(64)
+  status         IdempotencyKeyStatus @default(IN_PROGRESS)
+  responseStatus Int?                 @map("response_status")
+  responseBody   Json?                @map("response_body")
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt      DateTime             @map("expires_at") @db.Timestamptz(6)
+
+  @@unique([userId, key, endpoint], map: "uq_idempotency_keys_user_key_endpoint")
+  @@index([expiresAt], map: "idx_idempotency_keys_expires_at")
+  @@map("idempotency_keys")
 }

@@ -33,6 +33,8 @@ import {
   PrismaTransactionRunner,
 } from '../../shared/infrastructure/persistence/tenant-prisma.js';
 import { RegisterVendorUseCase } from './application/use-cases/register-vendor.use-case.js';
+import { SetVendorShopNameUseCase } from './application/use-cases/set-vendor-shop-name.use-case.js';
+import { ActivateVendorUseCase } from './application/use-cases/activate-vendor.use-case.js';
 import { createVendorController } from './interface/http/vendor.controller.js';
 import { createVendorRouter } from './interface/http/vendor.routes.js';
 import { createAdminKycController } from './interface/http/admin-kyc.controller.js';
@@ -237,9 +239,15 @@ const buildAdminKycDecisionUseCases = (params: {
 }): {
   startKycReviewUseCase: StartKycReviewUseCase;
   decideVendorKycUseCase: DecideVendorKycUseCase;
+  activateVendorUseCase: ActivateVendorUseCase;
 } => ({
   startKycReviewUseCase: new StartKycReviewUseCase(params),
   decideVendorKycUseCase: new DecideVendorKycUseCase(params),
+  // S3-3A, decision D-S3-04. Shares this same vendorRepository/
+  // transactionRunner/auditWriter — all three already bound to adminPrisma,
+  // the correct credential for a cross-tenant admin write (see
+  // `vendors_admin_decide`'s own RLS policy comment).
+  activateVendorUseCase: new ActivateVendorUseCase(params),
 });
 
 /** The document-access use case (KYC-7), split out for the same reason as the groups above. */
@@ -279,13 +287,14 @@ const buildAuditWriter = (deps: {
     clock: deps.clock,
   });
 
-/**
- * Everything the vendor-facing router needs: registration and the two KYC use
- * cases, all built on the tenant-scoped client. Split out of
- * `createVendorModule` for the same reason the builders above it were — to
- * keep the composition root under this file's function-length budget.
- */
-const buildVendorFacingUseCases = (params: {
+/** S3-3A, decision D-S3-03. Split out purely to keep `buildVendorFacingUseCases` under this file's function-length budget. */
+const buildSetVendorShopNameUseCase = (params: {
+  vendorRepository: PrismaVendorRepository;
+  clock: Clock;
+  logger: Logger;
+}): SetVendorShopNameUseCase => new SetVendorShopNameUseCase(params);
+
+interface VendorFacingUseCasesParams {
   prisma: PrismaClient;
   env: Env;
   objectStore: S3ObjectStore;
@@ -295,12 +304,25 @@ const buildVendorFacingUseCases = (params: {
   idGenerator: IdGenerator;
   clock: Clock;
   logger: Logger;
-}): {
+}
+
+interface VendorFacingUseCasesResult {
   vendorRepository: PrismaVendorRepository;
   registerVendorUseCase: RegisterVendorUseCase;
   createKycUploadIntentUseCase: CreateKycUploadIntentUseCase;
   submitVendorKycUseCase: SubmitVendorKycUseCase;
-} => {
+  setVendorShopNameUseCase: SetVendorShopNameUseCase;
+}
+
+/**
+ * Everything the vendor-facing router needs: registration and the two KYC use
+ * cases, all built on the tenant-scoped client. Split out of
+ * `createVendorModule` for the same reason the builders above it were — to
+ * keep the composition root under this file's function-length budget.
+ */
+const buildVendorFacingUseCases = (
+  params: VendorFacingUseCasesParams,
+): VendorFacingUseCasesResult => {
   const {
     prisma,
     env,
@@ -338,12 +360,18 @@ const buildVendorFacingUseCases = (params: {
     clock,
     logger,
   });
+  const setVendorShopNameUseCase = buildSetVendorShopNameUseCase({
+    vendorRepository,
+    clock,
+    logger,
+  });
 
   return {
     vendorRepository,
     registerVendorUseCase,
     createKycUploadIntentUseCase,
     submitVendorKycUseCase,
+    setVendorShopNameUseCase,
   };
 };
 
@@ -433,6 +461,7 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
     registerVendorUseCase,
     createKycUploadIntentUseCase,
     submitVendorKycUseCase,
+    setVendorShopNameUseCase,
   } = buildVendorFacingUseCases({
     prisma,
     env,
@@ -449,6 +478,7 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
     registerVendorUseCase,
     createKycUploadIntentUseCase,
     submitVendorKycUseCase,
+    setVendorShopNameUseCase,
   });
   const resolveVendorTenant = async (userId: UserId): Promise<VendorId | null> =>
     (await vendorRepository.findByUserId(userId))?.id ?? null;

@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import type {
+  ActivateVendorResponse,
   AdminKycDocumentAccessResponse,
   AdminKycQueueItem,
   AdminKycQueueQuery,
@@ -10,9 +11,11 @@ import type {
 } from '@leen-mart/contracts';
 import { getRequestId } from '../../../../shared/interface/http/middleware/request-context.js';
 import { validatedData } from '../../../../shared/interface/http/middleware/validate.js';
+import { toVendorId } from '../../../identity/index.js';
 import { toKycDocumentId } from '../../domain/value-objects/kyc-document-id.value-object.js';
 import { toKycId } from '../../domain/value-objects/kyc-id.value-object.js';
 import type { VendorKyc } from '../../domain/entities/vendor-kyc.entity.js';
+import type { VendorProfile } from '../../domain/entities/vendor-profile.entity.js';
 import type {
   KycReviewQueueItem,
   KycReviewSubmissionDetail,
@@ -21,6 +24,7 @@ import type {
   AccessKycDocumentResult,
   AccessKycDocumentUseCase,
 } from '../../application/use-cases/access-kyc-document.use-case.js';
+import type { ActivateVendorUseCase } from '../../application/use-cases/activate-vendor.use-case.js';
 import type { GetKycReviewSubmissionUseCase } from '../../application/use-cases/get-kyc-review-submission.use-case.js';
 import type { ListKycReviewQueueUseCase } from '../../application/use-cases/list-kyc-review-queue.use-case.js';
 import type { StartKycReviewUseCase } from '../../application/use-cases/start-kyc-review.use-case.js';
@@ -32,6 +36,7 @@ export interface AdminKycController {
   readonly startReview: (req: Request, res: Response) => Promise<void>;
   readonly decide: (req: Request, res: Response) => Promise<void>;
   readonly accessDocument: (req: Request, res: Response) => Promise<void>;
+  readonly activateVendor: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface AdminKycControllerDeps {
@@ -40,6 +45,7 @@ export interface AdminKycControllerDeps {
   readonly startKycReviewUseCase: StartKycReviewUseCase;
   readonly decideVendorKycUseCase: DecideVendorKycUseCase;
   readonly accessKycDocumentUseCase: AccessKycDocumentUseCase;
+  readonly activateVendorUseCase: ActivateVendorUseCase;
 }
 
 /**
@@ -134,6 +140,11 @@ const toDocumentAccessResponse = (
   expiresAt: result.expiresAt.toISOString(),
 });
 
+const toActivateVendorResponse = (vendor: VendorProfile): ActivateVendorResponse => ({
+  id: vendor.id,
+  status: vendor.status.name,
+});
+
 /** Narrows the wire union to the use case's command; the two shapes are deliberately separate. */
 const toDecisionCommand = (
   body: DecideVendorKycRequest,
@@ -141,6 +152,27 @@ const toDecisionCommand = (
   body.decision === 'APPROVE'
     ? { decision: 'APPROVE' }
     : { decision: 'REJECT', reason: body.reason, note: body.note };
+
+/** Split out of `createAdminKycController` for the same reason `createAccessDocumentHandler` is. */
+const createActivateVendorHandler =
+  (activateVendorUseCase: ActivateVendorUseCase): AdminKycController['activateVendor'] =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'POST /admin/kyc/vendors/:vendorId/activate reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+    const { params } = validatedData<unknown, unknown, { vendorId: string }>(req);
+
+    const vendor = await activateVendorUseCase.execute({
+      principal: req.principal,
+      vendorId: toVendorId(params.vendorId),
+    });
+
+    res
+      .status(200)
+      .json({ data: toActivateVendorResponse(vendor), meta: { requestId: getRequestId() } });
+  };
 
 /** Split out of `createAdminKycController` purely to stay under this file's max-lines-per-function budget. */
 const createAccessDocumentHandler =
@@ -241,4 +273,6 @@ export const createAdminKycController = (deps: AdminKycControllerDeps): AdminKyc
   },
 
   accessDocument: createAccessDocumentHandler(deps.accessKycDocumentUseCase),
+
+  activateVendor: createActivateVendorHandler(deps.activateVendorUseCase),
 });

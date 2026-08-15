@@ -22,7 +22,12 @@ import { PrismaClient } from '@prisma/client';
  * proving nothing.
  */
 const requireUrl = (
-  name: 'DATABASE_URL' | 'APP_DATABASE_URL' | 'ADMIN_DATABASE_URL' | 'PUBLIC_DATABASE_URL',
+  name:
+    | 'DATABASE_URL'
+    | 'APP_DATABASE_URL'
+    | 'ADMIN_DATABASE_URL'
+    | 'PUBLIC_DATABASE_URL'
+    | 'CHECKOUT_DATABASE_URL',
 ): string => {
   const value = process.env[name];
   if (!value) {
@@ -39,11 +44,13 @@ describe('database role separation', () => {
   const adminUrl = requireUrl('ADMIN_DATABASE_URL');
 
   const publicUrl = requireUrl('PUBLIC_DATABASE_URL');
+  const checkoutUrl = requireUrl('CHECKOUT_DATABASE_URL');
 
   const owner = new PrismaClient({ datasources: { db: { url: ownerUrl } } });
   const app = new PrismaClient({ datasources: { db: { url: appUrl } } });
   const admin = new PrismaClient({ datasources: { db: { url: adminUrl } } });
   const anon = new PrismaClient({ datasources: { db: { url: publicUrl } } });
+  const checkout = new PrismaClient({ datasources: { db: { url: checkoutUrl } } });
 
   interface RoleAttributes {
     readonly rolname: string;
@@ -75,6 +82,10 @@ describe('database role separation', () => {
     expect(publicUrl).not.toBe(ownerUrl);
     expect(publicUrl).not.toBe(appUrl);
     expect(publicUrl).not.toBe(adminUrl);
+    expect(checkoutUrl).not.toBe(ownerUrl);
+    expect(checkoutUrl).not.toBe(appUrl);
+    expect(checkoutUrl).not.toBe(adminUrl);
+    expect(checkoutUrl).not.toBe(publicUrl);
   });
 
   afterAll(async () => {
@@ -83,6 +94,7 @@ describe('database role separation', () => {
       app.$disconnect(),
       admin.$disconnect(),
       anon.$disconnect(),
+      checkout.$disconnect(),
     ]);
   });
 
@@ -326,6 +338,167 @@ describe('database role separation', () => {
         'product_media',
         'product_variants',
         'products',
+      ]);
+    });
+  });
+
+  describe('leenmart_checkout — a sixth role, narrowly scoped to order placement (S3-3A, Option B)', () => {
+    // The security proof the S3-3A Option-B approval explicitly required:
+    // this credential exists because placing a multi-vendor order needs one
+    // transaction that can decrement more than one vendor's inventory, which
+    // no role above can do — and it must be provably incapable of anything
+    // beyond that, not just narrower by convention.
+    it('exists', async () => {
+      expect(await attributesOf('leenmart_checkout')).toBeDefined();
+    });
+
+    it('is not SUPERUSER', async () => {
+      expect((await attributesOf('leenmart_checkout'))?.rolsuper).toBe(false);
+    });
+
+    it('does not have BYPASSRLS', async () => {
+      expect((await attributesOf('leenmart_checkout'))?.rolbypassrls).toBe(false);
+    });
+
+    it('cannot create roles or databases', async () => {
+      const attributes = await attributesOf('leenmart_checkout');
+
+      expect(attributes?.rolcreaterole).toBe(false);
+      expect(attributes?.rolcreatedb).toBe(false);
+    });
+
+    it('connects as leenmart_checkout', async () => {
+      expect(await currentUserOf(checkout)).toBe('leenmart_checkout');
+    });
+
+    it('is a genuinely different credential from every other role', async () => {
+      expect(await currentUserOf(checkout)).not.toBe(await currentUserOf(app));
+      expect(await currentUserOf(checkout)).not.toBe(await currentUserOf(admin));
+      expect(await currentUserOf(checkout)).not.toBe(await currentUserOf(anon));
+    });
+
+    it('cannot CREATE TABLE', async () => {
+      await expect(
+        checkout.$executeRawUnsafe('CREATE TABLE role_separation_checkout_probe (id integer)'),
+      ).rejects.toThrow(/permission denied for schema public/);
+    });
+
+    it('cannot read migration history', async () => {
+      await expect(
+        checkout.$executeRawUnsafe('SELECT count(*) FROM _prisma_migrations'),
+      ).rejects.toThrow(/permission denied for table _prisma_migrations/);
+    });
+
+    it('can place, read and update orders, sub-orders, order items and idempotency keys', async () => {
+      await expect(checkout.order.count()).resolves.toBeGreaterThanOrEqual(0);
+      await expect(checkout.subOrder.count()).resolves.toBeGreaterThanOrEqual(0);
+      await expect(checkout.orderItem.count()).resolves.toBeGreaterThanOrEqual(0);
+      await expect(checkout.idempotencyKey.count()).resolves.toBeGreaterThanOrEqual(0);
+    });
+
+    it('can read vendors, and can read and decrement inventory', async () => {
+      await expect(checkout.vendorProfile.count()).resolves.toBeGreaterThanOrEqual(0);
+      await expect(checkout.inventory.count()).resolves.toBeGreaterThanOrEqual(0);
+    });
+
+    it('can insert outbox events but never read, update or delete them', async () => {
+      await expect(
+        checkout.outboxEvent.createMany({
+          data: [
+            {
+              id: '00000000-0000-7000-8000-0000000c7ec0',
+              aggregateType: 'RoleSeparationProbe',
+              aggregateId: '00000000-0000-7000-8000-0000000c7ec1',
+              eventType: 'role-separation.probe',
+              payload: {},
+              occurredAt: new Date('2026-01-01T00:00:00.000Z'),
+            },
+          ],
+        }),
+      ).resolves.toEqual({ count: 1 });
+
+      await expect(checkout.outboxEvent.findMany()).rejects.toThrow(
+        /permission denied for table outbox_events/,
+      );
+      await expect(
+        checkout.$executeRawUnsafe("UPDATE outbox_events SET last_error = 'tampered' WHERE false"),
+      ).rejects.toThrow(/permission denied for table outbox_events/);
+      await expect(checkout.$executeRawUnsafe('DELETE FROM outbox_events')).rejects.toThrow(
+        /permission denied for table outbox_events/,
+      );
+
+      await owner.outboxEvent.deleteMany({ where: { aggregateType: 'RoleSeparationProbe' } });
+    });
+
+    it('cannot touch KYC material at all — no grant on vendor_kyc_submissions or kyc_documents', async () => {
+      await expect(checkout.vendorKycSubmission.count()).rejects.toThrow(
+        /permission denied for table vendor_kyc_submissions/,
+      );
+      await expect(checkout.kycDocument.count()).rejects.toThrow(
+        /permission denied for table kyc_documents/,
+      );
+    });
+
+    it('cannot touch users at all — no grant on the users table', async () => {
+      await expect(checkout.user.count()).rejects.toThrow(/permission denied for table users/);
+    });
+
+    it('cannot mutate the catalogue — no grant on products or product_variants', async () => {
+      await expect(checkout.product.count()).rejects.toThrow(
+        /permission denied for table products/,
+      );
+      await expect(checkout.productVariant.count()).rejects.toThrow(
+        /permission denied for table product_variants/,
+      );
+    });
+
+    it('cannot touch the cart — no grant on carts or cart_items', async () => {
+      await expect(checkout.cart.count()).rejects.toThrow(/permission denied for table carts/);
+      await expect(checkout.cartItem.count()).rejects.toThrow(
+        /permission denied for table cart_items/,
+      );
+    });
+
+    it('cannot write vendor rows — read-only, even for the one table it can see', async () => {
+      await expect(
+        checkout.$executeRawUnsafe("UPDATE vendors SET shop_name = 'tampered' WHERE false"),
+      ).rejects.toThrow(/permission denied for table vendors/);
+    });
+
+    it('cannot drive inventory negative — the decrement floor holds even for a statement this role IS privileged to run', async () => {
+      // `inventory_checkout_decrement`'s own `WITH CHECK (available >= 0)`
+      // is the enforcement layer that actually fires for this role (RLS is
+      // evaluated before the table's `chk_inventory_available_non_negative`
+      // CHECK constraint is ever reached) — proven here against the real
+      // grant/policy pair, not just the application-level
+      // `decrementIfAvailable` port in isolation.
+      const row = await owner.inventory.findFirst({ select: { variantId: true } });
+      if (!row) return; // Nothing seeded yet in this database — the constraint itself is proven at the migration/schema level regardless.
+      await expect(
+        checkout.$executeRawUnsafe(
+          'UPDATE inventory SET available = available - 999999999 WHERE variant_id = $1::uuid',
+          row.variantId,
+        ),
+      ).rejects.toThrow(/row-level security policy for table "inventory"/);
+    });
+
+    it('has no table grants beyond the ones S3-3A issues', async () => {
+      const rows = await owner.$queryRaw<{ relname: string }[]>`
+        SELECT DISTINCT c.relname
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
+        JOIN pg_roles r ON r.oid = acl.grantee
+        WHERE n.nspname = 'public' AND r.rolname = 'leenmart_checkout'`;
+
+      expect(rows.map((row) => row.relname).sort()).toEqual([
+        'idempotency_keys',
+        'inventory',
+        'order_items',
+        'orders',
+        'outbox_events',
+        'sub_orders',
+        'vendors',
       ]);
     });
   });

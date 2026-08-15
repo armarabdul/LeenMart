@@ -59,6 +59,16 @@ export interface Container {
    * tenant-context check unnecessary rather than merely skipped.
    */
   readonly publicPrisma: PrismaClient;
+  /**
+   * The checkout client (`leenmart_checkout`, S3-3A), on its own credential.
+   * Unwrapped by `withTenantBoundary`, same reasoning as `adminPrisma`/
+   * `publicPrisma`: this role's RLS policies (`vendors_checkout_read`,
+   * `inventory_checkout_decrement`) are both `USING (true)` — static, no
+   * session GUC to set — because a checkout transaction must reach rows
+   * belonging to more than one vendor, which is exactly what the
+   * tenant-context mechanism exists to prevent for `leenmart_app`.
+   */
+  readonly checkoutPrisma: PrismaClient;
   readonly redis: Redis;
   /**
    * A second connection, dedicated to BullMQ (S2-6b) — see
@@ -84,6 +94,10 @@ export const createContainer = (): Container => {
   // Same reasoning as adminPrisma: leenmart_public's RLS policies are static
   // (no session GUCs), so there is no tenant context to wrap.
   const publicPrisma = createPrismaClient(env, rootLogger, 'public');
+  // Same reasoning as adminPrisma/publicPrisma: leenmart_checkout's RLS
+  // policies are static (no session GUCs), so there is no tenant context to
+  // wrap it with.
+  const checkoutPrisma = createPrismaClient(env, rootLogger, 'checkout');
   const redis = createRedisClient(env, rootLogger);
   const bullRedis = createBullMqRedisClient(env, rootLogger);
   const clock = new SystemClock();
@@ -95,6 +109,7 @@ export const createContainer = (): Container => {
       prisma.$disconnect(),
       adminPrisma.$disconnect(),
       publicPrisma.$disconnect(),
+      checkoutPrisma.$disconnect(),
     ]);
     redis.disconnect();
     bullRedis.disconnect();
@@ -107,6 +122,7 @@ export const createContainer = (): Container => {
     prisma,
     adminPrisma,
     publicPrisma,
+    checkoutPrisma,
     redis,
     bullRedis,
     clock,

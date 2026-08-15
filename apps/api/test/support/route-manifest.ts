@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import type { Express } from 'express';
 import type { PrismaClient } from '@prisma/client';
-import { signUpVendorOwner, type Actor } from './actors.js';
+import { signUpVendorOwner, type Actor, type VendorActor } from './actors.js';
 
 /**
  * What kind of route this is, for the purpose of SDD 6.6 layer 2.
@@ -119,8 +119,8 @@ const VENDOR_EMAIL_PREFIX = 'cross-tenant-matrix-';
  * cannot reach vendor B's product" is exactly as strong when A and B are the
  * same two vendors throughout.
  */
-const vendorActors = new Map<string, Actor>();
-const vendorActor = async (ctx: RouteTestContext, label: string): Promise<Actor> => {
+const vendorActors = new Map<string, VendorActor>();
+const vendorActor = async (ctx: RouteTestContext, label: string): Promise<VendorActor> => {
   const cached = vendorActors.get(label);
   if (cached) return cached;
   // Awaited before caching, so a failed mint is retried rather than turned
@@ -275,6 +275,66 @@ const seedCartItem = async (ctx: RouteTestContext, owner: Actor): Promise<string
   return item.id;
 };
 
+// --- orders (S3-3A) ------------------------------------------------------
+
+/**
+ * Seeds one real, placed order owned by `owner` — a fresh `ACTIVE` vendor
+ * with a `shopName` set (S3-3A decisions D-S3-03/D-S3-04), an `APPROVED`
+ * product with stock, a saved address, and a genuine `POST /orders` call —
+ * then returns the order's id.
+ *
+ * Vendor activation has no HTTP path a test can reach (it requires a real
+ * KYC decision first, which `requireFullAccess` limits to
+ * RISK_ANALYST/SUPER_ADMIN — out of scope for what this matrix is proving),
+ * so `status`/`shopName` are set directly via `ctx.db`, the same convention
+ * `seedCartItem` already uses for `product.status`/`inventory.available`.
+ */
+const seedOrder = async (ctx: RouteTestContext, owner: Actor): Promise<string> => {
+  const categoryId = await seedCategoryRow(ctx);
+  const vendor = await vendorActor(ctx, 'order-matrix-vendor');
+  const createResponse = await authed(request(ctx.app).post('/api/v1/vendor/products'), vendor)
+    .send({
+      categoryId,
+      name: `Order Matrix Product ${(productSeq += 1)}`,
+      variant: {
+        sku: `ORDER-MATRIX-${Date.now()}-${productSeq}`,
+        name: 'Default',
+        price: { amount: '19900', currency: 'INR' },
+        unitOfMeasure: 'per piece',
+        quantityStep: 1,
+      },
+    })
+    .expect(201);
+  const productId = (createResponse.body as { data: { product: { id: string } } }).data.product.id;
+  const variantRow = await ctx.db.productVariant.findFirstOrThrow({ where: { productId } });
+
+  await ctx.db.inventory.update({ where: { variantId: variantRow.id }, data: { available: 100 } });
+  await ctx.db.product.update({ where: { id: productId }, data: { status: 'APPROVED' } });
+  await ctx.db.vendorProfile.update({
+    where: { id: vendor.vendorId },
+    data: { status: 'ACTIVE', shopName: 'Order Matrix Shop' },
+  });
+
+  await authed(request(ctx.app).post('/api/v1/me/cart/items'), owner)
+    .send({ variantId: variantRow.id, quantity: 1 })
+    .expect(201);
+
+  const addressResponse = await authed(request(ctx.app).post('/api/v1/me/addresses'), owner)
+    .send(VALID_ADDRESS)
+    .expect(201);
+  const addressId = (addressResponse.body as { data: { id: string } }).data.id;
+
+  const placeResponse = await authed(request(ctx.app).post('/api/v1/orders'), owner)
+    .set('Idempotency-Key', `matrix-${randomUUID()}`)
+    .send({ addressId, paymentMethod: 'ONLINE' })
+    .expect(201);
+  return (placeResponse.body as { data: { id: string } }).data.id;
+};
+
+/** The whole stored row, including its sub-orders — a refused cancel must leave every level unchanged. */
+const snapshotOrder = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
+  ctx.db.order.findUnique({ where: { id: resourceId }, include: { subOrders: true } });
+
 /** The whole stored row — the matrix always addresses an item by its own id, never a `cartId`. */
 const snapshotCartItem = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
   ctx.db.cartItem.findUnique({ where: { id: resourceId } });
@@ -410,6 +470,13 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     classification: 'SELF_SCOPED',
     why: 'Submits against the caller’s own vendor; the cross-tenant attack is a body replay, hand-tested in vendor-kyc-submission.test.ts (RD6).',
   },
+  {
+    method: 'PATCH',
+    prefix: '/api/v1/vendors',
+    path: '/me/shop-profile',
+    classification: 'SELF_SCOPED',
+    why: 'Sets the shop name on the caller’s own vendor profile (S3-3A, D-S3-03); there is no vendor id in the request to swap for another owner’s.',
+  },
 
   // --- admin KYC: /api/v1/admin/kyc ---
   {
@@ -446,6 +513,13 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     path: '/submissions/:kycId/decision',
     classification: 'ADMIN',
     why: 'Admin decision across every vendor (KYC-5 Commit 3).',
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/admin/kyc',
+    path: '/vendors/:vendorId/activate',
+    classification: 'ADMIN',
+    why: 'Admin-only vendor activation across every vendor (S3-3A, D-S3-04) — same permission/access-level gate as the KYC decision route above.',
   },
 
   // --- admin taxonomy: /api/v1/admin/categories (S2-2a) ---
@@ -919,6 +993,37 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     path: '/cart',
     classification: 'SELF_SCOPED',
     why: 'Clears only the caller’s own cart; takes no resource id.',
+  },
+
+  // --- orders: /api/v1/orders (S3-3A) ---
+  {
+    method: 'POST',
+    prefix: '/api/v1/orders',
+    path: '/',
+    classification: 'SELF_SCOPED',
+    why: 'Places an order from the caller’s own cart; takes no resource id.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/orders',
+    path: '/:id',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied order id and reads it.',
+    seed: seedOrder,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).get(`/api/v1/orders/${resourceId}`), actor),
+    snapshot: snapshotOrder,
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/orders',
+    path: '/:id/cancel',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied order id and cancels it.',
+    seed: seedOrder,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).post(`/api/v1/orders/${resourceId}/cancel`), actor),
+    snapshot: snapshotOrder,
   },
 ];
 

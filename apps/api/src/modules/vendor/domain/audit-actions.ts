@@ -24,19 +24,28 @@ export const VENDOR_AUDIT_ACTIONS = {
   KYC_REJECTED: 'vendor.kyc.rejected',
   /** An administrator was granted access to one uploaded document. */
   KYC_DOCUMENT_ACCESSED: 'vendor.kyc.document.accessed',
+  /**
+   * An administrator activated a KYC-approved vendor (S3-3A, decision
+   * D-S3-04) — the minimal application path `VendorProfile.activate()`
+   * needed to ever have a caller.
+   */
+  ACTIVATED: 'vendor.activated',
 } as const;
 
 export type VendorAuditAction = (typeof VENDOR_AUDIT_ACTIONS)[keyof typeof VENDOR_AUDIT_ACTIONS];
 
 /**
  * Stable domain entity names, not table names — see
- * `IDENTITY_AUDIT_ENTITY_TYPES` for why. All five actions above are recorded
+ * `IDENTITY_AUDIT_ENTITY_TYPES` for why. The first five actions are recorded
  * against the KYC submission itself, not the vendor: that is the aggregate
  * whose lifecycle the action changes, or whose evidence a document access
- * discloses.
+ * discloses. `ACTIVATED` (S3-3A) is the first action recorded against the
+ * vendor's own aggregate — there is no KYC row to attribute it to, since
+ * activation is a `VendorProfile` transition, not a KYC decision.
  */
 export const VENDOR_AUDIT_ENTITY_TYPES = {
   KYC: 'VendorKyc',
+  VENDOR: 'VendorProfile',
 } as const;
 
 export type VendorAuditEntityType =

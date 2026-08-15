@@ -24,11 +24,18 @@ import type { Env } from '../../config/env.js';
  * restricts it to `APPROVED`/`READY`, non-deleted rows regardless of what a
  * query asks for.
  *
- * All three runtime roles fall back to the owner URL when unset, which keeps
+ * `checkout` (S3-3A) is a fifth, narrower still: SELECT on `vendors`,
+ * UPDATE on `inventory` only, and full DML on the order module's own
+ * tables. It exists because placing a multi-vendor order needs to write
+ * `inventory` rows across more than one vendor in one transaction, which no
+ * role above can do (see `env.ts`'s `CHECKOUT_DATABASE_URL` comment for the
+ * full reasoning).
+ *
+ * All runtime roles fall back to the owner URL when unset, which keeps
  * development working before the roles are provisioned. `env.ts` refuses that
  * fallback in production, where it would silently disable RLS.
  */
-export type DatabaseRole = 'owner' | 'app' | 'admin' | 'public';
+export type DatabaseRole = 'owner' | 'app' | 'admin' | 'public' | 'checkout';
 
 export const databaseUrlFor = (env: Env, role: DatabaseRole): string => {
   if (role === 'app') {
@@ -39,6 +46,9 @@ export const databaseUrlFor = (env: Env, role: DatabaseRole): string => {
   }
   if (role === 'public') {
     return env.PUBLIC_DATABASE_URL ?? env.DATABASE_URL;
+  }
+  if (role === 'checkout') {
+    return env.CHECKOUT_DATABASE_URL ?? env.DATABASE_URL;
   }
   return env.DATABASE_URL;
 };

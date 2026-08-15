@@ -67,6 +67,24 @@ export const disposeIntegrationHarness = async (
   });
   const vendorIds = vendors.map((vendor) => vendor.id);
 
+  // Orders are `onDelete: Restrict` against both `users` and `vendors` (S3-3A
+  // — an order is retained financial/audit history, not disposable per-session
+  // state), so they must be torn down, child-first, before either of those.
+  const orders = await db.order.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  const orderIds = orders.map((order) => order.id);
+  const subOrders = await db.subOrder.findMany({
+    where: { orderId: { in: orderIds } },
+    select: { id: true },
+  });
+  const subOrderIds = subOrders.map((subOrder) => subOrder.id);
+  await db.orderItem.deleteMany({ where: { subOrderId: { in: subOrderIds } } });
+  await db.subOrder.deleteMany({ where: { id: { in: subOrderIds } } });
+  await db.order.deleteMany({ where: { id: { in: orderIds } } });
+  await db.idempotencyKey.deleteMany({ where: { userId: { in: ids } } });
+
   await db.inventory.deleteMany({ where: { vendorId: { in: vendorIds } } });
   await db.productVariant.deleteMany({ where: { vendorId: { in: vendorIds } } });
   await db.productMediaVariant.deleteMany({ where: { vendorId: { in: vendorIds } } });

@@ -14,6 +14,7 @@ import { createHealthRouter } from './shared/interface/http/routes/health.routes
 import { createCartModule } from './modules/cart/index.js';
 import { createCatalogueModule } from './modules/catalogue/index.js';
 import { createCustomerModule } from './modules/customer/index.js';
+import { createOrderModule } from './modules/order/index.js';
 import {
   createIdentityModule,
   type AccessTokenService,
@@ -55,6 +56,7 @@ const mountBusinessModules = (
     prisma: Container['prisma'];
     adminPrisma: Container['adminPrisma'];
     publicPrisma: Container['publicPrisma'];
+    checkoutPrisma: Container['checkoutPrisma'];
     env: Container['env'];
     bullRedis: Container['bullRedis'];
     redis: Container['redis'];
@@ -113,6 +115,12 @@ const mountBusinessModules = (
   // The public search surface (SDD 9.4/9.5, S2-7): a standalone path, sibling
   // to `/api/v1/catalogue/*` rather than nested under it, auth optional.
   app.use('/api/v1/search', catalogueModule.publicSearchRouter);
+
+  // The order surface (SDD 9.4, S3-3A): authenticated, customer-scoped,
+  // reading/writing on the dedicated `leenmart_checkout` credential rather
+  // than any tenant context — see `order.module.ts`'s own comment.
+  const orderModule = createOrderModule(params);
+  app.use('/api/v1/orders', orderModule.router);
 
   // Further business modules mount here as they are built.
 };
@@ -179,6 +187,7 @@ export const createApp = (container: Container): Express => {
     prisma,
     adminPrisma,
     publicPrisma,
+    checkoutPrisma,
     redis,
     bullRedis,
     clock,
@@ -213,6 +222,7 @@ export const createApp = (container: Container): Express => {
     prisma,
     adminPrisma,
     publicPrisma,
+    checkoutPrisma,
     env,
     bullRedis,
     redis,

@@ -30,6 +30,7 @@ const MANAGED_ROLES = {
   APP_DATABASE_URL: 'leenmart_app',
   ADMIN_DATABASE_URL: 'leenmart_admin',
   PUBLIC_DATABASE_URL: 'leenmart_public',
+  CHECKOUT_DATABASE_URL: 'leenmart_checkout',
 } as const;
 
 interface RoleCredential {

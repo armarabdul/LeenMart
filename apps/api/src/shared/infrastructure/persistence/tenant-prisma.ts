@@ -224,3 +224,29 @@ export class AdminTransactionRunner implements TransactionRunner {
     return this.adminPrisma.$transaction((tx) => work(tx as unknown as TransactionScope));
   }
 }
+
+/**
+ * `TransactionRunner` for the **checkout credential** (`leenmart_checkout`,
+ * S3-3A) — structurally identical to `AdminTransactionRunner` (a plain
+ * `$transaction`, no session GUCs to set), but kept as its own class rather
+ * than reused under the `Admin` name: the two credentials answer to
+ * different authorities, and a checkout transaction masquerading as an
+ * "admin" one would misdescribe exactly the distinction §6.6/KYC-2B-1 exist
+ * to draw.
+ *
+ * No tenant context because none of this role's RLS policies read one —
+ * `vendors_checkout_read` and `inventory_checkout_decrement` are both
+ * `USING (true)`, and the order module's own tables carry no RLS at all
+ * (customer-owned, ownership enforced in application code, the same
+ * `carts`/`addresses` convention). A multi-vendor `PlaceOrderUseCase`
+ * transaction could not express itself through the single-`vendor_id`
+ * session mechanism `PrismaTransactionRunner` requires even if it wanted
+ * to — this is the credential built for exactly that gap.
+ */
+export class CheckoutTransactionRunner implements TransactionRunner {
+  constructor(private readonly checkoutPrisma: PrismaClient) {}
+
+  async run<T>(work: (scope: TransactionScope) => Promise<T>): Promise<T> {
+    return this.checkoutPrisma.$transaction((tx) => work(tx as unknown as TransactionScope));
+  }
+}

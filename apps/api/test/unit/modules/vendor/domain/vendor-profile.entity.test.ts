@@ -19,6 +19,7 @@ const inState = (status: VendorStatus): VendorProfile =>
     userId,
     status,
     plan: 'COMMISSION',
+    shopName: null,
     createdAt: now,
     updatedAt: now,
   });

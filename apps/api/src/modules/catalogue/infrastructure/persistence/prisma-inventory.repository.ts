@@ -91,6 +91,27 @@ export class PrismaInventoryRepository implements InventoryRepository {
     return result.count === 1;
   }
 
+  async decrementIfAvailable(variantId: ProductVariantId, quantity: number): Promise<boolean> {
+    // The condition lives in the WHERE, never in a prior read: Prisma's
+    // `decrement` compiles to `available = available - :quantity` in the
+    // same statement as the `available >= :quantity` guard, so PostgreSQL
+    // evaluates both atomically against whatever the row's current value is
+    // at execution time, not at some earlier read.
+    const result = await this.prisma.inventory.updateMany({
+      where: { variantId, available: { gte: quantity } },
+      data: { available: { decrement: quantity } },
+    });
+    return result.count === 1;
+  }
+
+  async restoreAvailability(variantId: ProductVariantId, quantity: number): Promise<boolean> {
+    const result = await this.prisma.inventory.updateMany({
+      where: { variantId },
+      data: { available: { increment: quantity } },
+    });
+    return result.count === 1;
+  }
+
   async deleteForVariants(variantIds: readonly ProductVariantId[]): Promise<number> {
     if (variantIds.length === 0) {
       return 0;

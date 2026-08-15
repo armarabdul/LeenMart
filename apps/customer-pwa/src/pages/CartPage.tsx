@@ -98,7 +98,7 @@ export const CartPage = (): JSX.Element => {
         ))}
       </ul>
 
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between">
         {total !== null ? (
           <p className="text-lg font-semibold text-slate-900">Total: {total}</p>
         ) : (
@@ -106,6 +106,12 @@ export const CartPage = (): JSX.Element => {
             Cart total unavailable — some items&apos; pricing could not be resolved.
           </p>
         )}
+        <Link
+          to="/checkout"
+          className="rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600"
+        >
+          Proceed to checkout
+        </Link>
       </div>
     </main>
   );

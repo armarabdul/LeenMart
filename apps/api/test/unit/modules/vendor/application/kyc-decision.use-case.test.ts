@@ -73,6 +73,7 @@ const profile = (status: VendorStatus): VendorProfile =>
     userId: toUserId(ids.generate()),
     status,
     plan: 'COMMISSION',
+    shopName: null,
     createdAt: NOW,
     updatedAt: NOW,
   });

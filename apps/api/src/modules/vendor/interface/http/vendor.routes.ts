@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   createKycUploadIntentRequestSchema,
   registerVendorRequestSchema,
+  setVendorShopNameRequestSchema,
   submitVendorKycRequestSchema,
 } from '@leen-mart/contracts';
 import { asyncHandler } from '../../../../shared/interface/http/middleware/async-handler.js';
@@ -77,6 +78,22 @@ export const createVendorRouter = (
     requirePermission('SUBMIT_OR_EDIT_KYC'),
     validate({ body: submitVendorKycRequestSchema }),
     asyncHandler(controller.submitKyc),
+  );
+
+  // S3-3A, decision D-S3-03. `MANAGE_SHOP_PROFILE` (SDD 8.2:
+  // VENDOR_OWNER/VENDOR_MANAGER `OWN`) is the same "designed for, not yet
+  // wired" permission `requirePermission`'s own doc comment names as an
+  // example — this is its first route. Step 3 ("may this principal act on
+  // *this* object?") stays in the use case, which loads the caller's own
+  // vendor profile by `principal.userId` and never accepts a vendor id from
+  // the request — the same discipline `/me/kyc*` above already establishes.
+  router.patch(
+    '/me/shop-profile',
+    authenticate(accessTokenService, sessionDenylist),
+    tenantContext(resolveVendorTenant),
+    requirePermission('MANAGE_SHOP_PROFILE'),
+    validate({ body: setVendorShopNameRequestSchema }),
+    asyncHandler(controller.setShopName),
   );
 
   return router;

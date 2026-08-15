@@ -3,12 +3,16 @@ import type {
   CreateKycUploadIntentRequest,
   CreateKycUploadIntentResponse,
   RegisterVendorResponse,
+  SetVendorShopNameRequest,
   SubmitVendorKycRequest,
   SubmitVendorKycResponse,
+  VendorShopProfileResponse,
 } from '@leen-mart/contracts';
 import { getRequestId } from '../../../../shared/interface/http/middleware/request-context.js';
 import { validatedData } from '../../../../shared/interface/http/middleware/validate.js';
+import type { VendorProfile } from '../../domain/entities/vendor-profile.entity.js';
 import type { CreateKycUploadIntentUseCase } from '../../application/use-cases/create-kyc-upload-intent.use-case.js';
+import type { SetVendorShopNameUseCase } from '../../application/use-cases/set-vendor-shop-name.use-case.js';
 import type { SubmitVendorKycUseCase } from '../../application/use-cases/submit-vendor-kyc.use-case.js';
 import type { RegisterVendorUseCase } from '../../application/use-cases/register-vendor.use-case.js';
 
@@ -16,13 +20,21 @@ export interface VendorController {
   readonly register: (req: Request, res: Response) => Promise<void>;
   readonly createKycUploadIntent: (req: Request, res: Response) => Promise<void>;
   readonly submitKyc: (req: Request, res: Response) => Promise<void>;
+  readonly setShopName: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface VendorControllerDeps {
   readonly registerVendorUseCase: RegisterVendorUseCase;
   readonly createKycUploadIntentUseCase: CreateKycUploadIntentUseCase;
   readonly submitVendorKycUseCase: SubmitVendorKycUseCase;
+  readonly setVendorShopNameUseCase: SetVendorShopNameUseCase;
 }
+
+const toShopProfileResponse = (vendor: VendorProfile): VendorShopProfileResponse => ({
+  id: vendor.id,
+  status: vendor.status.name,
+  shopName: vendor.shopName,
+});
 
 type IntentResult = Awaited<ReturnType<CreateKycUploadIntentUseCase['execute']>>;
 
@@ -51,6 +63,27 @@ const toUploadIntentResponse = (intent: IntentResult): CreateKycUploadIntentResp
  * translates use-case output to the wire envelope, and never translates
  * errors — the global error handler owns that (SDD 17.1).
  */
+/** Split out of `createVendorController` to stay under this file's max-lines-per-function budget. */
+const createSetShopNameHandler =
+  (setVendorShopNameUseCase: SetVendorShopNameUseCase): VendorController['setShopName'] =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'PATCH /vendors/me/shop-profile reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+
+    const { body } = validatedData<SetVendorShopNameRequest>(req);
+    const vendor = await setVendorShopNameUseCase.execute({
+      principal: req.principal,
+      shopName: body.shopName,
+    });
+
+    res
+      .status(200)
+      .json({ data: toShopProfileResponse(vendor), meta: { requestId: getRequestId() } });
+  };
+
 export const createVendorController = (deps: VendorControllerDeps): VendorController => ({
   register: async (req: Request, res: Response): Promise<void> => {
     // `authenticate()` guarantees `req.principal` is set before this handler
@@ -112,4 +145,6 @@ export const createVendorController = (deps: VendorControllerDeps): VendorContro
     };
     res.status(201).json({ data, meta: { requestId: getRequestId() } });
   },
+
+  setShopName: createSetShopNameHandler(deps.setVendorShopNameUseCase),
 });

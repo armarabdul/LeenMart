@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import {
+  activateVendorRequestSchema,
   adminKycQueueQuerySchema,
   decideVendorKycRequestSchema,
   startKycReviewRequestSchema,
@@ -20,6 +21,8 @@ const kycIdParamsSchema = z.object({ kycId: z.string().uuid() }).strict();
 const kycDocumentParamsSchema = z
   .object({ kycId: z.string().uuid(), documentId: z.string().uuid() })
   .strict();
+
+const vendorIdParamsSchema = z.object({ vendorId: z.string().uuid() }).strict();
 
 /**
  * Mounted at `/api/v1/admin/kyc` — the admin surface (SDD 9.4), separate from
@@ -105,6 +108,23 @@ export const createAdminKycRouter = (
     requireFullAccess,
     validate({ params: kycDocumentParamsSchema }),
     asyncHandler(controller.accessDocument),
+  );
+
+  // S3-3A, decision D-S3-04: the minimal application path for
+  // `VendorProfile.activate()`. Same permission and access-level gate as the
+  // decision routes above — SDD 8.2 draws no separate "activate vendor" row,
+  // and activation is the direct next step after the same KYC-approval
+  // authority those routes already require. Mounted under /admin/kyc rather
+  // than a new top-level admin surface, for the same reason: no new router,
+  // no new mount line, the smallest change that gives the transition a
+  // caller.
+  router.post(
+    '/vendors/:vendorId/activate',
+    authenticate(accessTokenService, sessionDenylist),
+    requirePermission('APPROVE_OR_REJECT_VENDOR_KYC'),
+    requireFullAccess,
+    validate({ params: vendorIdParamsSchema, body: activateVendorRequestSchema }),
+    asyncHandler(controller.activateVendor),
   );
 
   return router;

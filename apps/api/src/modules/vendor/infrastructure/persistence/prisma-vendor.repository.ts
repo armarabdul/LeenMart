@@ -10,6 +10,7 @@ interface VendorProfileRow {
   readonly userId: string;
   readonly status: string;
   readonly plan: VendorPlanName;
+  readonly shopName: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -20,6 +21,7 @@ const toDomain = (row: VendorProfileRow): VendorProfile =>
     userId: toUserId(row.userId),
     status: VendorStatus.fromName(row.status),
     plan: row.plan,
+    shopName: row.shopName,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   });
@@ -47,6 +49,7 @@ export class PrismaVendorRepository implements VendorRepository {
         userId: vendorProfile.userId,
         status: vendorProfile.status.name,
         plan: vendorProfile.plan,
+        shopName: vendorProfile.shopName,
         createdAt: vendorProfile.createdAt,
         updatedAt: vendorProfile.updatedAt,
       },
@@ -54,15 +57,18 @@ export class PrismaVendorRepository implements VendorRepository {
   }
 
   /**
-   * Writes only the lifecycle state — `id`/`userId` are immutable, and
-   * `createdAt` is set once at registration. Mirrors the narrow-update
-   * convention `PrismaUserRepository`/`PrismaOtpRepository` already follow.
+   * Writes the lifecycle state and shop name — `id`/`userId`/`plan` are
+   * immutable here (plan changes are S3-2's own deliberately-withheld
+   * concern), and `createdAt` is set once at registration. Mirrors the
+   * narrow-update convention `PrismaUserRepository`/`PrismaOtpRepository`
+   * already follow.
    */
   async update(vendorProfile: VendorProfile): Promise<void> {
     await this.prisma.vendorProfile.update({
       where: { id: vendorProfile.id },
       data: {
         status: vendorProfile.status.name,
+        shopName: vendorProfile.shopName,
         updatedAt: vendorProfile.updatedAt,
       },
     });

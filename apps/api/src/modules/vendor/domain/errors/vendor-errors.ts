@@ -3,6 +3,7 @@ import {
   ConflictError,
   DomainRuleError,
   ForbiddenError,
+  NotFoundError,
 } from '@leen-mart/domain-kit';
 import type { VendorStatusName } from '../value-objects/vendor-status.value-object.js';
 
@@ -55,6 +56,21 @@ export class InvalidVendorStatusTransitionError extends DomainRuleError {
       details: options.details ?? [
         { field: 'status', issue: `${from} → ${to} is not a permitted transition` },
       ],
+    });
+  }
+}
+
+/**
+ * The authenticated caller has no vendor profile of their own (S3-3A:
+ * `SetVendorShopNameUseCase`) — never distinguishes "no such vendor id" from
+ * "not yours", the same not-found-not-forbidden shape every other
+ * ownership-scoped lookup in this codebase already uses.
+ */
+export class VendorProfileNotFoundError extends NotFoundError {
+  constructor(options: AppErrorOptions = {}) {
+    super('No vendor profile was found for this account.', {
+      ...options,
+      code: 'VENDOR_PROFILE_NOT_FOUND',
     });
   }
 }
