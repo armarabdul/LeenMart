@@ -243,6 +243,15 @@ enum VendorStatus {
   TERMINATED
 }
 
+/// S3-2, ASM-06: "a vendor is on exactly one plan at a time — `COMMISSION`
+/// or `SUBSCRIPTION` — with the plan determining an effective commission
+/// rate." Only these two values — no category-specific or custom plan is
+/// approved for V1 (D-S3-01).
+enum VendorPlan {
+  COMMISSION
+  SUBSCRIPTION
+}
+
 /// A vendor's onboarding record (SDD 15.1).
 ///
 /// `user_id` is unique: a single account may hold at most one vendor
@@ -254,10 +263,19 @@ enum VendorStatus {
 /// Only the columns registration actually writes exist here. KYC documents,
 /// shops, business hours and trust scores (SDD 5, module 3) arrive with the
 /// chunks that implement them.
+///
+/// `plan` (S3-2) defaults every vendor — new and pre-existing alike — to
+/// `COMMISSION`: the baseline plan with no special arrangement, never the
+/// free `SUBSCRIPTION` tier, which nothing has qualified a pre-existing
+/// vendor for. There is deliberately no `changePlan()` anywhere yet —
+/// switching plans is a real commercial action (billing, proration) that
+/// D-S3-01 does not approve building yet; the column exists so commission
+/// resolution has something to read.
 model VendorProfile {
   id        String       @id @db.Uuid
   userId    String       @unique @map("user_id") @db.Uuid
   status    VendorStatus @default(REGISTERED)
+  plan      VendorPlan   @default(COMMISSION)
   createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -1012,4 +1030,66 @@ model CartItem {
   /// migration on the next `prisma migrate dev`.
   @@index([cartId], map: "idx_cart_items_cart")
   @@map("cart_items")
+}
+
+/// A commission rate effective from a point in time, for one vendor plan
+/// (S3-2, SDD 5 module 7 "pricing-tax": `commission_rules`; D-S3-01).
+///
+/// Effective-dated and append-only rather than a single mutable rate column,
+/// per D-S3-01's "configuration, not an irreversible hard-coded business
+/// rule" and this schema's own stated convention that financial-adjacent
+/// rows are corrected with a new row, never an edit (§6.1). Resolving the
+/// rate that applied at a given instant is "the most recent row for this
+/// plan with `effective_from <= asOf`" — deliberately no `effective_to`
+/// column: closing the previous range on every insert is exactly the kind
+/// of concurrent-write hazard an open-ended, append-only design avoids.
+///
+/// `rate_basis_points` (0–10000, i.e. 100.00% at 10000) is an integer, never
+/// a float, matching this schema's money-adjacent convention — 10% is 1000,
+/// 0% is 0. `Money.percentageOf()` (domain-kit) is what actually applies it.
+///
+/// The two rows the approved V1 baseline requires (`COMMISSION` → 1000 bps,
+/// `SUBSCRIPTION` → 0 bps) are seeded by this migration — real, approved
+/// figures, not placeholders (contrast `TaxRate` below, which starts empty).
+model CommissionRule {
+  id              String     @id @db.Uuid
+  plan            VendorPlan
+  rateBasisPoints Int        @map("rate_basis_points")
+  effectiveFrom   DateTime   @map("effective_from") @db.Timestamptz(6)
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  /// One rule per (plan, instant) — the database-level backing for
+  /// "resolution is unambiguous", hand-added in the migration alongside the
+  /// CHECK constraint Prisma's DSL cannot express.
+  @@unique([plan, effectiveFrom], map: "uq_commission_rules_plan_effective_from")
+  @@index([plan, effectiveFrom], map: "idx_commission_rules_plan_effective_from")
+  @@map("commission_rules")
+}
+
+/// A GST/tax rate effective from a point in time, for one HSN/SAC
+/// classification (S3-2, SDD 5 module 7 "pricing-tax": `tax_rates`; D-S3-05).
+///
+/// Keyed by `hsn_code`, not by product or variant: HSN is a nationwide GST
+/// classification, not a per-vendor or per-listing attribute — the same
+/// classification code applies to every seller's identically-classified
+/// goods. `Product.hsnCode` (S2-3, nullable) is the existing lookup key;
+/// this table is deliberately not a new per-product/variant column.
+///
+/// Same effective-dating shape as `CommissionRule` above, for the same
+/// reason. **Starts genuinely empty** — D-S3-05 explicitly forbids
+/// populating invented GST rates; every row here must be CA-approved before
+/// it exists. Until a row exists for a given HSN code, tax resolution
+/// returns an explicit unresolved state (`ResolveTaxUseCase`) rather than
+/// guessing — this table having zero rows for months is the *expected*,
+/// correct V1 state, not a bug.
+model TaxRate {
+  id              String   @id @db.Uuid
+  hsnCode         String   @map("hsn_code") @db.VarChar(8)
+  rateBasisPoints Int      @map("rate_basis_points")
+  effectiveFrom   DateTime @map("effective_from") @db.Timestamptz(6)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([hsnCode, effectiveFrom], map: "uq_tax_rates_hsn_code_effective_from")
+  @@index([hsnCode, effectiveFrom], map: "idx_tax_rates_hsn_code_effective_from")
+  @@map("tax_rates")
 }

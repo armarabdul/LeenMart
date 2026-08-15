@@ -106,7 +106,14 @@ class RecordingObjectStore implements ObjectStore {
 }
 
 const vendorIn = (status: VendorStatus): VendorProfile =>
-  VendorProfile.reconstitute({ id: vendorId, userId, status, createdAt: NOW, updatedAt: NOW });
+  VendorProfile.reconstitute({
+    id: vendorId,
+    userId,
+    status,
+    plan: 'COMMISSION',
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
 
 const setup = (
   options: { vendor?: VendorProfile | null; onPresign?: (input: PresignPutInput) => void } = {},

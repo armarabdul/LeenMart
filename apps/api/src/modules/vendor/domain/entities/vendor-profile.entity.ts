@@ -5,10 +5,20 @@ import {
 } from '../value-objects/vendor-status.value-object.js';
 import { InvalidVendorStatusTransitionError } from '../errors/vendor-errors.js';
 
+/**
+ * S3-2, ASM-06: "a vendor is on exactly one plan at a time — `COMMISSION` or
+ * `SUBSCRIPTION`." A plain string-literal union rather than a rich
+ * transition-guarded class, mirroring `ProductStatusName` — there is no
+ * `changePlan()` here yet (see the class doc comment below), so there is no
+ * state machine to model.
+ */
+export type VendorPlanName = 'COMMISSION' | 'SUBSCRIPTION';
+
 export interface VendorProfileProps {
   readonly id: VendorId;
   readonly userId: UserId;
   readonly status: VendorStatus;
+  readonly plan: VendorPlanName;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -79,12 +89,19 @@ type VendorTransition = keyof typeof TRANSITIONS;
 export class VendorProfile {
   private constructor(private readonly props: VendorProfileProps) {}
 
-  /** Entry point of SDD 15.1's lifecycle: a new vendor always starts REGISTERED. */
+  /**
+   * Entry point of SDD 15.1's lifecycle: a new vendor always starts
+   * REGISTERED. `plan` is not a parameter — every new vendor starts on
+   * `COMMISSION` (S3-2, D-S3-01), the same default the migration backfills
+   * onto every pre-existing row, so there is exactly one place this decision
+   * is made rather than one for new vendors and another for old ones.
+   */
   static register(props: { id: VendorId; userId: UserId; now: Date }): VendorProfile {
     return new VendorProfile({
       id: props.id,
       userId: props.userId,
       status: VendorStatus.REGISTERED,
+      plan: 'COMMISSION',
       createdAt: props.now,
       updatedAt: props.now,
     });
@@ -105,6 +122,10 @@ export class VendorProfile {
 
   get status(): VendorStatus {
     return this.props.status;
+  }
+
+  get plan(): VendorPlanName {
+    return this.props.plan;
   }
 
   get createdAt(): Date {

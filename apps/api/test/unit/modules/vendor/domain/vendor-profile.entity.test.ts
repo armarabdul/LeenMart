@@ -14,7 +14,14 @@ const now = new Date('2026-01-01T00:00:00.000Z');
 const later = new Date('2026-01-02T00:00:00.000Z');
 
 const inState = (status: VendorStatus): VendorProfile =>
-  VendorProfile.reconstitute({ id: vendorId, userId, status, createdAt: now, updatedAt: now });
+  VendorProfile.reconstitute({
+    id: vendorId,
+    userId,
+    status,
+    plan: 'COMMISSION',
+    createdAt: now,
+    updatedAt: now,
+  });
 
 /** Every transition method, so the illegal-move tests can sweep the whole surface. */
 const TRANSITIONS = {
@@ -76,6 +83,12 @@ describe('VendorProfile', () => {
       const vendor = VendorProfile.register({ id: vendorId, userId, now });
 
       expect(vendor.status.name).toBe('REGISTERED');
+    });
+
+    it('defaults every new vendor to the COMMISSION plan (S3-2, D-S3-01)', () => {
+      const vendor = VendorProfile.register({ id: vendorId, userId, now });
+
+      expect(vendor.plan).toBe('COMMISSION');
     });
 
     it('reconstitutes a persisted vendor with its stored status rather than defaulting it', () => {

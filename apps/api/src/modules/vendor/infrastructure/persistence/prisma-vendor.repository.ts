@@ -1,7 +1,7 @@
 import type { TransactionScope } from '@leen-mart/domain-kit';
 import type { PrismaClient } from '@prisma/client';
 import { toUserId, toVendorId, type UserId, type VendorId } from '../../../identity/index.js';
-import { VendorProfile } from '../../domain/entities/vendor-profile.entity.js';
+import { VendorProfile, type VendorPlanName } from '../../domain/entities/vendor-profile.entity.js';
 import { VendorStatus } from '../../domain/value-objects/vendor-status.value-object.js';
 import type { VendorRepository } from '../../domain/repositories/vendor.repository.js';
 
@@ -9,6 +9,7 @@ interface VendorProfileRow {
   readonly id: string;
   readonly userId: string;
   readonly status: string;
+  readonly plan: VendorPlanName;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -18,6 +19,7 @@ const toDomain = (row: VendorProfileRow): VendorProfile =>
     id: toVendorId(row.id),
     userId: toUserId(row.userId),
     status: VendorStatus.fromName(row.status),
+    plan: row.plan,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   });
@@ -44,6 +46,7 @@ export class PrismaVendorRepository implements VendorRepository {
         id: vendorProfile.id,
         userId: vendorProfile.userId,
         status: vendorProfile.status.name,
+        plan: vendorProfile.plan,
         createdAt: vendorProfile.createdAt,
         updatedAt: vendorProfile.updatedAt,
       },

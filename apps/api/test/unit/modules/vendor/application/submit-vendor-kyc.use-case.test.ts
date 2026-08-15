@@ -142,6 +142,7 @@ const vendorIn = (status: VendorStatus): VendorProfile =>
     id: vendorId,
     userId,
     status,
+    plan: 'COMMISSION',
     createdAt: NOW,
     updatedAt: NOW,
   });

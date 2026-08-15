@@ -72,6 +72,7 @@ const profile = (status: VendorStatus): VendorProfile =>
     id: vendorId,
     userId: toUserId(ids.generate()),
     status,
+    plan: 'COMMISSION',
     createdAt: NOW,
     updatedAt: NOW,
   });
