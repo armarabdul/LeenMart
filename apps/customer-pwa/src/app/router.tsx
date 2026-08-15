@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { AppLayout } from '@/components/AppLayout';
 import { RequireAuth } from '@/features/auth/RequireAuth';
 
 /**
@@ -11,6 +12,12 @@ import { RequireAuth } from '@/features/auth/RequireAuth';
  */
 const HomePage = lazy(() =>
   import('@/pages/HomePage').then((module) => ({ default: module.HomePage })),
+);
+const CataloguePage = lazy(() =>
+  import('@/pages/CataloguePage').then((module) => ({ default: module.CataloguePage })),
+);
+const SearchPage = lazy(() =>
+  import('@/pages/SearchPage').then((module) => ({ default: module.SearchPage })),
 );
 const NotFoundPage = lazy(() =>
   import('@/pages/NotFoundPage').then((module) => ({ default: module.NotFoundPage })),
@@ -38,7 +45,15 @@ const withBoundary = (element: JSX.Element): JSX.Element => (
 );
 
 const router = createBrowserRouter([
-  { path: '/', element: withBoundary(<HomePage />) },
+  {
+    element: <AppLayout />,
+    children: [
+      { path: '/', element: withBoundary(<HomePage />) },
+      { path: '/catalogue', element: withBoundary(<CataloguePage />) },
+      { path: '/catalogue/:slug', element: withBoundary(<CataloguePage />) },
+      { path: '/search', element: withBoundary(<SearchPage />) },
+    ],
+  },
   { path: '/register', element: withBoundary(<RegisterPage />) },
   { path: '/login', element: withBoundary(<LoginPage />) },
   {

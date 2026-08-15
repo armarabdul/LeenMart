@@ -1,87 +1,51 @@
 import { env } from '@/shared/config/env';
-import { useGetReadinessQuery } from '@/shared/api/health.api';
-import { StatusPill } from '@/components/StatusPill';
+import { useGetCategoryTreeQuery } from '@/features/catalogue/catalogue.api';
+import { CategoryTree } from '@/features/catalogue/components/CategoryTree';
+import { SearchBar } from '@/features/catalogue/components/SearchBar';
 
 /**
- * Foundation shell.
- *
- * Deliberately not a product page. It exists to prove the whole vertical slice
- * works end to end: env validation, the Redux store, RTK Query against the API,
- * Tailwind, and the error boundary.
+ * Marketplace home (Phase 2). Replaces the earlier foundation-scaffold
+ * content — that vertical-slice check now lives implicitly in every screen
+ * that calls the API, so a dedicated status page is no longer needed here.
  */
 export const HomePage = (): JSX.Element => {
-  const { data, isLoading, isError, refetch } = useGetReadinessQuery();
+  const { data: categories, isLoading, isError } = useGetCategoryTreeQuery();
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col gap-8 px-5 py-12">
-      <header className="flex flex-col gap-2">
-        <p className="text-xs font-semibold uppercase tracking-widest text-brand-700">
-          Foundation scaffold
-        </p>
+    <main className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-10">
+      <section className="flex flex-col items-center gap-4 rounded-xl border border-slate-200 bg-white px-6 py-10 text-center shadow-sm">
         <h1 className="text-3xl font-bold tracking-tight text-slate-900">{env.appName}</h1>
-        <p className="text-sm text-slate-600">
-          No business modules are implemented. This shell verifies that the frontend, the API and
-          the backing services are correctly wired together.
+        <p className="max-w-md text-sm text-slate-600">
+          Browse products from independent vendors across every category.
         </p>
-      </header>
-
-      <section
-        aria-labelledby="platform-status"
-        className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
-      >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 id="platform-status" className="text-sm font-semibold text-slate-900">
-            Platform status
-          </h2>
-          <button
-            type="button"
-            onClick={() => void refetch()}
-            className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-500"
-          >
-            Refresh
-          </button>
+        <div className="w-full max-w-lg">
+          <SearchBar autoFocus />
         </div>
+      </section>
 
-        {isLoading && <p className="text-sm text-slate-500">Checking dependencies…</p>}
+      <section aria-labelledby="browse-categories" className="flex flex-col gap-3">
+        <h2 id="browse-categories" className="text-sm font-semibold text-slate-900">
+          Browse categories
+        </h2>
+
+        {isLoading && <p className="text-sm text-slate-500">Loading categories…</p>}
 
         {isError && (
-          <p className="text-sm text-red-700">
-            The API is unreachable. Start it with <code className="font-mono">pnpm dev</code> and
-            make sure <code className="font-mono">pnpm infra:up</code> has been run.
+          <p role="alert" className="text-sm text-red-700">
+            Categories couldn&apos;t be loaded right now. Please try again shortly.
           </p>
         )}
 
-        {data && (
-          <ul className="flex flex-col divide-y divide-slate-100">
-            <li className="flex items-center justify-between py-2">
-              <span className="text-sm text-slate-700">API</span>
-              <StatusPill status={data.status === 'ok' ? 'up' : 'down'} />
-            </li>
-            {data.dependencies.map((dependency) => (
-              <li key={dependency.name} className="flex items-center justify-between py-2">
-                <span className="text-sm text-slate-700">
-                  {dependency.name}
-                  {typeof dependency.latencyMs === 'number' && (
-                    <span className="ml-2 text-xs text-slate-400">{dependency.latencyMs} ms</span>
-                  )}
-                </span>
-                <StatusPill status={dependency.status} />
-              </li>
-            ))}
-          </ul>
+        {categories && categories.length === 0 && (
+          <p className="text-sm text-slate-500">No categories are available yet.</p>
+        )}
+
+        {categories && categories.length > 0 && (
+          <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+            <CategoryTree nodes={categories} />
+          </div>
         )}
       </section>
-
-      <dl className="grid grid-cols-2 gap-3 text-sm">
-        <div className="rounded-lg border border-slate-200 bg-white p-3">
-          <dt className="text-xs uppercase tracking-wide text-slate-500">Environment</dt>
-          <dd className="mt-1 font-medium text-slate-900">{env.environment}</dd>
-        </div>
-        <div className="rounded-lg border border-slate-200 bg-white p-3">
-          <dt className="text-xs uppercase tracking-wide text-slate-500">Version</dt>
-          <dd className="mt-1 font-medium text-slate-900">{env.appVersion}</dd>
-        </div>
-      </dl>
     </main>
   );
 };
