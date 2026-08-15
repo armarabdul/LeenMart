@@ -1,10 +1,15 @@
 import { useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate, type Location } from 'react-router-dom';
 import { useLoginMutation } from '@/features/auth/auth.api';
 import { apiErrorMessage } from '@/shared/api/base-api';
 
+interface LoginLocationState {
+  readonly from?: Location;
+}
+
 export const LoginPage = (): JSX.Element => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [login, { isLoading, error }] = useLoginMutation();
@@ -13,7 +18,13 @@ export const LoginPage = (): JSX.Element => {
     event.preventDefault();
     try {
       await login({ email, password }).unwrap();
-      void navigate('/account');
+      // `RequireAuth` already sets this on its own redirect (`/account`,
+      // `/cart`, or any future guarded route) — reading it back is what
+      // makes "return to where you came from" actually true, rather than
+      // every guarded route silently losing its destination to a hardcoded
+      // `/account`.
+      const from = (location.state as LoginLocationState | null)?.from;
+      void navigate(from ? `${from.pathname}${from.search}` : '/account', { replace: true });
     } catch {
       // Surfaced below via `error` from the mutation hook.
     }

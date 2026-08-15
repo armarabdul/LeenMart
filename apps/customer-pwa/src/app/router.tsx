@@ -19,6 +19,12 @@ const CataloguePage = lazy(() =>
 const SearchPage = lazy(() =>
   import('@/pages/SearchPage').then((module) => ({ default: module.SearchPage })),
 );
+const ProductDetailPage = lazy(() =>
+  import('@/pages/ProductDetailPage').then((module) => ({ default: module.ProductDetailPage })),
+);
+const CartPage = lazy(() =>
+  import('@/pages/CartPage').then((module) => ({ default: module.CartPage })),
+);
 const NotFoundPage = lazy(() =>
   import('@/pages/NotFoundPage').then((module) => ({ default: module.NotFoundPage })),
 );
@@ -52,6 +58,17 @@ const router = createBrowserRouter([
       { path: '/catalogue', element: withBoundary(<CataloguePage />) },
       { path: '/catalogue/:slug', element: withBoundary(<CataloguePage />) },
       { path: '/search', element: withBoundary(<SearchPage />) },
+      // Public: browsing a product never requires a session — only adding
+      // it to the cart does (`AddToCartButton` handles that redirect itself).
+      { path: '/products/:id', element: withBoundary(<ProductDetailPage />) },
+      // `/cart` needs both `AppLayout`'s chrome and `RequireAuth`'s guard, so
+      // `RequireAuth` nests here instead of standing alongside `AppLayout`
+      // the way it does for `/account` below — that route deliberately keeps
+      // its own separate, unwrapped presentation and is left untouched.
+      {
+        element: withBoundary(<RequireAuth />),
+        children: [{ path: '/cart', element: withBoundary(<CartPage />) }],
+      },
     ],
   },
   { path: '/register', element: withBoundary(<RegisterPage />) },

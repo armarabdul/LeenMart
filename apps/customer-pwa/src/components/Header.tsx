@@ -3,6 +3,7 @@ import { Link, NavLink } from 'react-router-dom';
 import { useAppSelector } from '@/app/hooks';
 import { selectCurrentUser, selectIsAuthenticated } from '@/shared/api/session.slice';
 import { SearchBar } from '@/features/catalogue/components/SearchBar';
+import { useGetCartQuery } from '@/features/cart/cart.api';
 import { env } from '@/shared/config/env';
 
 const navLinkClassName = ({ isActive }: { isActive: boolean }): string =>
@@ -11,10 +12,34 @@ const navLinkClassName = ({ isActive }: { isActive: boolean }): string =>
   }`;
 
 /**
- * No cart entry point here yet — Phase 4 (cart UI) is deliberately deferred
- * pending a backend surface that resolves a variant back to product/price
- * data, so a cart icon would only ever link to nothing.
+ * A cart badge for an anonymous visitor would either lie (always zero) or
+ * require a request `RequireAuth` will reject — `skip` keeps this from
+ * firing at all until a session exists, and `/cart` itself already redirects
+ * an anonymous click through login via the same guard `/account` uses.
  */
+const CartLink = (): JSX.Element => {
+  const isAuthenticated = useAppSelector(selectIsAuthenticated);
+  const { data: cart } = useGetCartQuery(undefined, { skip: !isAuthenticated });
+  const itemCount = cart?.items.reduce((sum, item) => sum + item.quantity, 0) ?? 0;
+
+  return (
+    <Link
+      to="/cart"
+      className="relative rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:text-brand-700"
+    >
+      Cart
+      {itemCount > 0 && (
+        <span
+          aria-label={`${itemCount} item${itemCount === 1 ? '' : 's'} in cart`}
+          className="absolute -right-1 -top-1 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-brand-700 px-1 text-[10px] font-semibold leading-none text-white"
+        >
+          {itemCount}
+        </span>
+      )}
+    </Link>
+  );
+};
+
 export const Header = (): JSX.Element => {
   const isAuthenticated = useAppSelector(selectIsAuthenticated);
   const user = useAppSelector(selectCurrentUser);
@@ -41,6 +66,7 @@ export const Header = (): JSX.Element => {
         </div>
 
         <div className="ml-auto hidden items-center gap-2 sm:flex">
+          <CartLink />
           {isAuthenticated ? (
             <Link
               to="/account"
@@ -88,6 +114,13 @@ export const Header = (): JSX.Element => {
             onClick={() => setIsMobileNavOpen(false)}
           >
             Catalogue
+          </NavLink>
+          <NavLink
+            to="/cart"
+            className={navLinkClassName}
+            onClick={() => setIsMobileNavOpen(false)}
+          >
+            Cart
           </NavLink>
           {isAuthenticated ? (
             <NavLink
