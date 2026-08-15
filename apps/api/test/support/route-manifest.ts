@@ -559,6 +559,21 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     why: 'Unauthenticated public category detail by slug; platform-owned, no tenant to cross.',
   },
 
+  // --- public product detail: /api/v1/catalogue/products/:id (S3-3 discovery milestone) ---
+  // Unauthenticated and tenant-free for the same underlying reason
+  // `/api/v1/search` above is PUBLIC: `products_public_read` (S2-7) and
+  // `product_variants_public_read`/`inventory_public_read` (S3-1) are what
+  // confine this route to APPROVED, non-deleted rows on `leenmart_public` —
+  // not a tenant boundary this manifest's TENANT_OWNED matrix would need to
+  // drive, since there is no vendor-scoped notion of "wrong owner" here at all.
+  {
+    method: 'GET',
+    prefix: '/api/v1/catalogue',
+    path: '/products/:id',
+    classification: 'PUBLIC',
+    why: 'Unauthenticated public product detail; RLS on leenmart_public (products_public_read/product_variants_public_read/inventory_public_read) confines results to APPROVED, non-deleted rows regardless of tenant.',
+  },
+
   // --- vendor products: /api/v1/vendor/products (S2-3b) ---
   //
   // The catalogue module's first tenant-scoped routes, and the first

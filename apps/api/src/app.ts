@@ -99,6 +99,11 @@ const mountBusinessModules = (
   // The public catalogue surface (SDD 9.4/9.5, S2-2c): unauthenticated, no
   // tenant context, cache-friendly reads of the same platform-owned taxonomy.
   app.use('/api/v1/catalogue', catalogueModule.publicCategoryRouter);
+  // The public product-detail surface (SDD 9.4, S3-3 discovery milestone):
+  // unauthenticated, same `/api/v1/catalogue` prefix as the router above but
+  // reading tenant-scoped tables on `publicPrisma` instead — RLS is what
+  // makes that safe (see `catalogue.module.ts`).
+  app.use('/api/v1/catalogue', catalogueModule.publicProductRouter);
   // The vendor-facing catalogue surface (SDD 9.4, S2-3b/S2-5): authenticated
   // and tenant-scoped, unlike the three routers around it.
   app.use('/api/v1/vendor/products', catalogueModule.vendorProductRouter);

@@ -77,6 +77,9 @@ import { SearchProductsUseCase } from './application/use-cases/search-products.u
 import { PrismaProductSearchQuery } from './infrastructure/persistence/prisma-product-search-query.js';
 import { createPublicSearchController } from './interface/http/public-search.controller.js';
 import { createPublicSearchRouter } from './interface/http/public-search.routes.js';
+import { GetPublicProductDetailUseCase } from './application/use-cases/get-public-product-detail.use-case.js';
+import { createPublicProductController } from './interface/http/public-product.controller.js';
+import { createPublicProductRouter } from './interface/http/public-product.routes.js';
 
 export interface CatalogueModuleDeps {
   /**
@@ -140,6 +143,8 @@ export interface CatalogueModule {
   readonly adminProductRouter: Router;
   /** Mounted at `/api/v1/search` — unauthenticated (auth optional), on `publicPrisma`, no tenant context (S2-7). */
   readonly publicSearchRouter: Router;
+  /** Mounted at `/api/v1/catalogue`, alongside `publicCategoryRouter` — unauthenticated, on `publicPrisma`, no tenant context (S3-3 discovery milestone). */
+  readonly publicProductRouter: Router;
 }
 
 /** Split out purely to keep `createCatalogueModule` under this file's line budget. */
@@ -482,13 +487,38 @@ const buildPublicSearchRouter = (params: {
 };
 
 /**
+ * The public product-detail surface (S3-3 discovery milestone), built on
+ * `publicPrisma`. Reuses the exact repository classes
+ * `buildVendorProductRouter` uses, bound to the unauthenticated credential
+ * instead of the tenant-scoped one — the identical substitution S3-1's
+ * `AddCartItemUseCase` already made for `PrismaProductVariantRepository`/
+ * `PrismaInventoryRepository`, and this file's own `buildPublicSearchRouter`
+ * made for `PrismaProductSearchQuery`. `products_public_read` (S2-7) and
+ * `product_variants_public_read`/`inventory_public_read` (S3-1) already exist
+ * and are what make this safe — no new grant, no new policy, no new
+ * migration.
+ */
+const buildPublicProductRouter = (publicPrisma: PrismaClient): Router =>
+  createPublicProductRouter(
+    createPublicProductController({
+      getPublicProductDetailUseCase: new GetPublicProductDetailUseCase({
+        productRepository: new PrismaProductRepository(publicPrisma),
+        productVariantRepository: new PrismaProductVariantRepository(publicPrisma),
+        productMediaRepository: new PrismaProductMediaRepository(publicPrisma),
+        inventoryRepository: new PrismaInventoryRepository(publicPrisma),
+      }),
+    }),
+  );
+
+/**
  * The catalogue module (SDD 5, module 4): taxonomy, vendor products, the
- * moderation core (S2-5), the product media data model/upload flow (S2-6a)
- * and the public search surface (S2-7). The async processing worker (S2-6b)
- * lives in its own process; public media delivery (S2-6c) is still a later
- * chunk, and nothing here anticipates it.
+ * moderation core (S2-5), the product media data model/upload flow (S2-6a),
+ * the public search surface (S2-7) and the public product-detail surface
+ * (S3-3 discovery milestone). The async processing worker (S2-6b) lives in
+ * its own process; public media delivery (S2-6c) is still a later chunk, and
+ * nothing here anticipates it.
  *
- * Five routers, and the credential each runs on is the whole security story.
+ * Six routers, and the credential each runs on is the whole security story.
  * `adminCategoryRouter` uses `adminPrisma` for the admin-owned taxonomy.
  * `publicCategoryRouter` (S2-2c) uses the ordinary `prisma` for the
  * unauthenticated public tree — same tables, same `CategoryRepository` port
@@ -501,7 +531,10 @@ const buildPublicSearchRouter = (params: {
  * `adminKycRouter`/vendor-facing `router` draw in `vendor.module.ts`.
  * `publicSearchRouter` (S2-7) uses neither — its own fourth credential,
  * `publicPrisma`, whose RLS policy is what makes it safe for an anonymous
- * caller to read a tenant-scoped table at all.
+ * caller to read a tenant-scoped table at all. `publicProductRouter` (S3-3
+ * discovery milestone) uses the same `publicPrisma` credential as
+ * `publicSearchRouter`, extended by S3-1's own `product_variants_public_read`/
+ * `inventory_public_read` policies rather than a new one of its own.
  */
 export const createCatalogueModule = (deps: CatalogueModuleDeps): CatalogueModule => {
   const {
@@ -545,6 +578,7 @@ export const createCatalogueModule = (deps: CatalogueModuleDeps): CatalogueModul
       sessionDenylist,
       logger: moduleLogger,
     }),
+    publicProductRouter: buildPublicProductRouter(publicPrisma),
     adminCategoryRouter: buildAdminCategoryRouter({
       adminPrisma,
       accessTokenService,
