@@ -1218,6 +1218,20 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
       authed(request(ctx.app).post(`/api/v1/vendor/orders/${resourceId}/deliver`), actor),
     snapshot: snapshotVendorSubOrder,
   },
+  // --- vendor earnings: /api/v1/vendor/earnings (S3-8) ---
+  //
+  // A single self-scoped `GET` — there is no `:id` in this router at all
+  // (locked decision #4: one endpoint, summary + a page of lines), so it has
+  // nothing for the `TENANT_OWNED` matrix to probe with a client-supplied
+  // id. The tenant-scoped `leenmart_app` client is what confines every read
+  // to the caller's own vendor.
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendor/earnings',
+    path: '/',
+    classification: 'SELF_SCOPED',
+    why: 'Reads only the caller’s own accrued earnings — the tenant-scoped client cannot return anyone else’s.',
+  },
 ];
 
 export const isTenantOwned = (route: ManifestRoute): route is TenantOwnedRoute =>

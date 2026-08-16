@@ -29,7 +29,7 @@ import { ListVendorOrdersUseCase } from './application/use-cases/list-vendor-ord
 import { CancelOrderUseCase } from './application/use-cases/cancel-order.use-case.js';
 import { InitiatePaymentUseCase } from './application/use-cases/initiate-payment.use-case.js';
 import { ConfirmPaymentUseCase } from './application/use-cases/confirm-payment.use-case.js';
-import { createLedgerModule, type PostOrderPaymentJournalsUseCase } from '../ledger/index.js';
+import type { PostOrderPaymentJournalsUseCase } from '../ledger/index.js';
 import { ShipSubOrderUseCase } from './application/use-cases/ship-sub-order.use-case.js';
 import { StartProcessingUseCase } from './application/use-cases/start-processing.use-case.js';
 import { PrismaOrderRepository } from './infrastructure/persistence/prisma-order.repository.js';
@@ -58,6 +58,13 @@ export interface OrderModuleDeps {
    * entities).
    */
   readonly resolveVendorTenant: VendorTenantResolver;
+  /**
+   * S3-7's ledger posting, built by the composition root (S3-8: the ledger
+   * module now also builds a vendor-facing router, so app.ts constructs one
+   * shared `LedgerModule` instance and hands this collaborator in, rather
+   * than this module minting a second, router-less instance of its own).
+   */
+  readonly postOrderPaymentJournalsUseCase: PostOrderPaymentJournalsUseCase;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
   readonly logger: Logger;
@@ -362,6 +369,7 @@ export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
     accessTokenService,
     sessionDenylist,
     resolveVendorTenant,
+    postOrderPaymentJournalsUseCase,
     clock,
     idGenerator,
     logger,
@@ -371,14 +379,6 @@ export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
   const repositories = buildOrderRepositories(deps);
   const paymentGateway = new MockPaymentGateway(idGenerator);
   const { resolveCommissionUseCase, resolveTaxUseCase } = createPricingTaxModule({ prisma, clock });
-  // S3-7: built here for the same reason `pricing-tax` is — this module is
-  // the ledger's only caller, and the ledger publishes no router of its own.
-  // On `checkoutPrisma` because `leenmart_checkout` is the only role granted
-  // INSERT on the ledger tables.
-  const { postOrderPaymentJournalsUseCase } = createLedgerModule({
-    checkoutPrisma: deps.checkoutPrisma,
-    idGenerator,
-  });
 
   const useCases = buildOrderUseCases({
     repositories,

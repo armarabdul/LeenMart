@@ -16,6 +16,9 @@ const VendorOrderDetailPage = lazy(() =>
     default: module.VendorOrderDetailPage,
   })),
 );
+const VendorEarningsPage = lazy(() =>
+  import('@/pages/VendorEarningsPage').then((module) => ({ default: module.VendorEarningsPage })),
+);
 const NotFoundPage = lazy(() =>
   import('@/pages/NotFoundPage').then((module) => ({ default: module.NotFoundPage })),
 );
@@ -43,6 +46,7 @@ const router = createBrowserRouter([
         children: [
           { path: '/orders', element: withBoundary(<VendorOrdersPage />) },
           { path: '/orders/:id', element: withBoundary(<VendorOrderDetailPage />) },
+          { path: '/earnings', element: withBoundary(<VendorEarningsPage />) },
         ],
       },
       { path: '*', element: withBoundary(<NotFoundPage />) },

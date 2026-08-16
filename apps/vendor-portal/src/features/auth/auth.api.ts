@@ -41,6 +41,15 @@ export const authApi = baseApi.injectEndpoints({
           await queryFulfilled;
         } finally {
           dispatch(sessionCleared());
+          // Purges every cached query result (vendor orders, vendor earnings,
+          // …), not just the session — found during S3-8's own cross-vendor
+          // isolation walkthrough: without this, a second vendor signing in
+          // on the same tab reused the first vendor's cached responses (the
+          // RTK Query cache key carries no identity), briefly rendering one
+          // vendor's data under another vendor's session. The backend itself
+          // was never at risk — every request it received was correctly
+          // scoped — this is purely the client-side display layer.
+          dispatch(baseApi.util.resetApiState());
         }
       },
     }),

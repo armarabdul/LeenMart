@@ -24,6 +24,18 @@ import type { UserId, VendorId } from '../../../modules/identity/index.js';
  * every query, which `orders_vendor_select`/`sub_orders_vendor_select`/
  * `order_items_vendor_select` (20260816130000) require.
  *
+ * `LedgerJournal`/`LedgerEntry` join here from S3-8, the same way and for
+ * the same reason `Order`/`SubOrder`/`OrderItem` did: S3-7 posts them on the
+ * unwrapped `leenmart_checkout` write path (`PrismaLedgerRepository` inside
+ * `PostOrderPaymentJournalsUseCase`), which is untouched by this set. S3-8's
+ * new `PrismaVendorEarningsQuery` is the first *reader* built on the wrapped
+ * `prisma` client, and `ledger_journals_vendor_select`/
+ * `ledger_entries_vendor_select` (20260817090000) both require
+ * `app.vendor_id` to be set for that role to see anything at all — without
+ * this entry, every query that repository issues would run with no tenant
+ * context and silently return zero rows (RLS's own fail-closed behaviour),
+ * not merely another vendor's data leaking.
+ *
  * Prisma model names, not table names — this is matched against the `model`
  * field the query extension receives.
  */
@@ -39,6 +51,8 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'Order',
   'SubOrder',
   'OrderItem',
+  'LedgerJournal',
+  'LedgerEntry',
 ]);
 
 /**

@@ -147,10 +147,16 @@ describe('tenant context', () => {
   });
 
   describe('model registry', () => {
-    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a, S2-6b and S3-5 protect', () => {
+    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a, S2-6b, S3-5 and S3-8 protect', () => {
       expect([...TENANT_SCOPED_MODELS].sort()).toEqual([
         'Inventory',
         'KycDocument',
+        // S3-8: the vendor earnings statement's own read-only repository
+        // queries these through the wrapped `prisma` client, alongside — not
+        // instead of — the unwrapped `leenmart_checkout` write path S3-7's
+        // ledger posting already uses.
+        'LedgerEntry',
+        'LedgerJournal',
         // S3-5: the vendor-order surface's own repository reads/writes these
         // through the wrapped `prisma` client, alongside — not instead of —
         // the unwrapped `leenmart_checkout` path the customer-facing order

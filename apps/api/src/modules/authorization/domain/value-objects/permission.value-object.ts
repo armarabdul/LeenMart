@@ -13,6 +13,12 @@
  * decision was to introduce a dedicated permission rather than stretch that
  * one a second time. Its `PERMISSION_LABELS` entry is therefore this
  * project's own wording, not a transcription of the SDD.
+ *
+ * `VIEW_VENDOR_EARNINGS` is the second exception, for the same reason:
+ * S3-8's locked decision #2 explicitly refuses to reuse `VIEW_VENDOR_PAYOUTS`
+ * for the read-only accrued-earnings statement, since that permission is
+ * payout-oriented and S3-8 implements no payout capability at all — reusing
+ * it would misrepresent what the granted capability actually is.
  */
 export type Permission =
   | 'BROWSE_CATALOGUE'
@@ -33,6 +39,7 @@ export type Permission =
   | 'SCAN_PICKUP_QR'
   | 'CONFIGURE_DELIVERY_SLOTS'
   | 'VIEW_VENDOR_PAYOUTS'
+  | 'VIEW_VENDOR_EARNINGS'
   | 'CHANGE_PAYOUT_BANK_DETAILS'
   | 'MANAGE_VENDOR_STAFF'
   | 'APPROVE_OR_REJECT_PRODUCT'
@@ -73,6 +80,8 @@ export const PERMISSION_LABELS: Readonly<Record<Permission, string>> = {
   SCAN_PICKUP_QR: 'Scan pickup QR',
   CONFIGURE_DELIVERY_SLOTS: 'Configure delivery/slots',
   VIEW_VENDOR_PAYOUTS: 'View vendor payouts',
+  /** S3-8: not an SDD 8.2 row — see this type's own doc comment. */
+  VIEW_VENDOR_EARNINGS: 'View vendor earnings statement (accrued, not payout)',
   CHANGE_PAYOUT_BANK_DETAILS: 'Change payout bank details',
   MANAGE_VENDOR_STAFF: 'Manage vendor staff',
   APPROVE_OR_REJECT_PRODUCT: 'Approve/reject product',

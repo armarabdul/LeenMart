@@ -14,6 +14,7 @@ import { createHealthRouter } from './shared/interface/http/routes/health.routes
 import { createCartModule } from './modules/cart/index.js';
 import { createCatalogueModule } from './modules/catalogue/index.js';
 import { createCustomerModule } from './modules/customer/index.js';
+import { createLedgerModule } from './modules/ledger/index.js';
 import { createOrderModule } from './modules/order/index.js';
 import {
   createIdentityModule,
@@ -116,6 +117,16 @@ const mountBusinessModules = (
   // to `/api/v1/catalogue/*` rather than nested under it, auth optional.
   app.use('/api/v1/search', catalogueModule.publicSearchRouter);
 
+  // The ledger module (SDD 10.3, S3-7; vendor read surface added S3-8).
+  // Built once here, ahead of `orderModule`, so both its collaborators are
+  // handed out from a single instance: the posting use case goes into
+  // `orderModule` (the ledger's only writer-side caller), and its own
+  // vendor-facing router is mounted directly below.
+  const ledgerModule = createLedgerModule({
+    ...params,
+    resolveVendorTenant: vendorModule.resolveVendorTenant,
+  });
+
   // The order surface (SDD 9.4, S3-3A): authenticated, customer-scoped,
   // reading/writing on the dedicated `leenmart_checkout` credential rather
   // than any tenant context — see `order.module.ts`'s own comment.
@@ -124,6 +135,7 @@ const mountBusinessModules = (
     // D-1's own pattern, repeated here: the resolver, and nothing else,
     // crosses from `vendor` to `order` (SDD 5.1).
     resolveVendorTenant: vendorModule.resolveVendorTenant,
+    postOrderPaymentJournalsUseCase: ledgerModule.postOrderPaymentJournalsUseCase,
   });
   app.use('/api/v1/orders', orderModule.router);
   // The vendor-facing order surface (SDD 9.4, S3-5): authenticated,
@@ -131,6 +143,10 @@ const mountBusinessModules = (
   // above — a distinct credential and a distinct resource shape (SubOrder,
   // not Order).
   app.use('/api/v1/vendor/orders', orderModule.vendorRouter);
+  // The vendor earnings statement (SDD 10.3, S3-8): authenticated,
+  // tenant-scoped on `leenmart_app`, read-only — a ledger-derived report, not
+  // a payout or settlement surface.
+  app.use('/api/v1/vendor/earnings', ledgerModule.vendorRouter);
 
   // Further business modules mount here as they are built.
 };

@@ -222,6 +222,27 @@ export const PERMISSION_MATRIX: Readonly<
     RISK_ANALYST: 'READ_ONLY',
     SUPER_ADMIN: 'FULL',
   },
+  /**
+   * S3-8, not an SDD 8.2 row (see `Permission`'s own doc comment). Same
+   * vendor-role shape as `VIEW_VENDOR_ORDERS`/`ACCEPT_OR_REJECT_ORDER`: all
+   * three vendor roles get `OWN`-scoped read access to their own accrued
+   * earnings, no other role gets it (locked decision #2 grants no read
+   * access to `FINANCE_ADMIN`/`RISK_ANALYST` here — those roles already
+   * reach ledger data through `VIEW_VENDOR_PAYOUTS`/the ledger's own
+   * `leenmart_admin` SELECT reach; S3-8 adds no admin surface, so this table
+   * grants that pairing no additional capability).
+   */
+  VIEW_VENDOR_EARNINGS: {
+    CUSTOMER: 'NONE',
+    VENDOR_OWNER: 'OWN',
+    VENDOR_MANAGER: 'OWN',
+    VENDOR_STAFF: 'OWN',
+    SUPPORT_AGENT: 'NONE',
+    CATALOGUE_MODERATOR: 'NONE',
+    FINANCE_ADMIN: 'NONE',
+    RISK_ANALYST: 'NONE',
+    SUPER_ADMIN: 'FULL',
+  },
   CHANGE_PAYOUT_BANK_DETAILS: {
     CUSTOMER: 'NONE',
     VENDOR_OWNER: 'OWN',

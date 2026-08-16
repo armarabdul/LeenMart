@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "api",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@leen-mart/api", "dev"],
+      "port": 4000
+    },
+    {
+      "name": "customer-pwa",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@leen-mart/customer-pwa", "dev"],
+      "port": 5173
+    }
+  ]
+}
