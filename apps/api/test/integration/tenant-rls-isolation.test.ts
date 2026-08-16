@@ -132,6 +132,11 @@ describe('tenant RLS isolation', () => {
       // `product_media` joined in S2-6a, and `product_media_variants` in
       // S2-6b — written by a background worker rather than a request, which
       // is precisely why it is in the boundary rather than exempt from it.
+      // `orders`/`sub_orders`/`order_items` joined in S3-5 — additively:
+      // `leenmart_checkout`'s own policies on these three stay `USING (true)`
+      // (unchanged reach), and it is only `leenmart_app`'s new vendor-scoped
+      // policies that are actually restrictive (see the `20260816130000`
+      // migration's own header).
       const rows = await owner.$queryRaw<{ tablename: string }[]>`
         SELECT tablename FROM pg_tables
         WHERE schemaname = 'public' AND rowsecurity ORDER BY tablename`;
@@ -139,10 +144,13 @@ describe('tenant RLS isolation', () => {
       expect(rows.map((row) => row.tablename)).toEqual([
         'inventory',
         'kyc_documents',
+        'order_items',
+        'orders',
         'product_media',
         'product_media_variants',
         'product_variants',
         'products',
+        'sub_orders',
         'vendor_kyc_submissions',
         'vendors',
       ]);

@@ -6,6 +6,7 @@ import { Order, type OrderAddressSnapshot } from '../../domain/entities/order.en
 import { OrderItem, type TaxSnapshot } from '../../domain/entities/order-item.entity.js';
 import { SubOrder } from '../../domain/entities/sub-order.entity.js';
 import type { OrderRepository, OrderSummary } from '../../domain/repositories/order.repository.js';
+import { SubOrderConcurrentlyModifiedError } from '../../domain/errors/order-errors.js';
 import { toOrderId, type OrderId } from '../../domain/value-objects/order-id.value-object.js';
 import { toOrderItemId } from '../../domain/value-objects/order-item-id.value-object.js';
 import { toSubOrderId } from '../../domain/value-objects/sub-order-id.value-object.js';
@@ -61,6 +62,7 @@ const toSubOrder = (row: OrderRow['subOrders'][number]): SubOrder =>
     items: row.items.map(toOrderItem),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    version: row.version,
   });
 
 const toDomain = (row: OrderRow): Order => {
@@ -201,6 +203,16 @@ export class PrismaOrderRepository implements OrderRepository {
    * open transaction, and opening a second one on the same connection is
    * exactly the pitfall `runInTenantTransaction`'s own comment documents
    * for the tenant-scoped client.
+   *
+   * Each sub-order write is version-guarded (S3-5): from this milestone
+   * onward a vendor's own `StartProcessingUseCase` can write the very same
+   * row on a different credential (`leenmart_app`) between this method's
+   * read and write. `updateMany` with `version` in the `WHERE` — never a
+   * prior read, the same `Inventory.setIfVersionMatches` idiom — means a
+   * lost race throws `SubOrderConcurrentlyModifiedError` instead of silently
+   * overwriting whatever the vendor just wrote (or the vendor's write
+   * silently overwriting a customer's cancellation, the same failure mode in
+   * reverse).
    */
   async updateStatus(order: Order): Promise<void> {
     await this.prisma.order.update({
@@ -208,10 +220,17 @@ export class PrismaOrderRepository implements OrderRepository {
       data: { status: order.status.name, updatedAt: order.updatedAt },
     });
     for (const subOrder of order.subOrders) {
-      await this.prisma.subOrder.update({
-        where: { id: subOrder.id },
-        data: { status: subOrder.status.name, updatedAt: subOrder.updatedAt },
+      const result = await this.prisma.subOrder.updateMany({
+        where: { id: subOrder.id, version: subOrder.version },
+        data: {
+          status: subOrder.status.name,
+          updatedAt: subOrder.updatedAt,
+          version: { increment: 1 },
+        },
       });
+      if (result.count !== 1) {
+        throw new SubOrderConcurrentlyModifiedError();
+      }
     }
   }
 }

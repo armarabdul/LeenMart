@@ -169,3 +169,48 @@ export class PaymentFailedError extends DomainRuleError {
     super('PAYMENT_FAILED', 'The payment could not be completed. Please try again.', options);
   }
 }
+
+/**
+ * Ownership-scoped lookup miss for the vendor-facing surface (S3-5) — never
+ * distinguishes "no such sub-order" from "not yours" (SEC-06), the same
+ * discipline `OrderNotFoundError` already applies to the customer surface.
+ */
+export class SubOrderNotFoundError extends NotFoundError {
+  constructor(options: AppErrorOptions = {}) {
+    super('The requested order was not found.', { ...options, code: 'SUB_ORDER_NOT_FOUND' });
+  }
+}
+
+/**
+ * S3-5's own concurrency guard: `SubOrder.version` no longer matched what the
+ * repository's conditional `UPDATE ... WHERE version = :expected` expected,
+ * meaning another writer — a customer cancelling, or the vendor's own retried
+ * request — already moved this row. A 409, not a 422: the request was valid
+ * when sent, and simply lost a race it could not have observed.
+ */
+export class SubOrderConcurrentlyModifiedError extends ConflictError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This order was just updated elsewhere. Please refresh and try again.', {
+      ...options,
+      code: 'SUB_ORDER_CONCURRENTLY_MODIFIED',
+    });
+  }
+}
+
+/**
+ * S3-5's vendor-order ACTIVE gate: `VendorProfile.status !== 'ACTIVE'`.
+ * Mirrors `VendorNotEligibleForOrderError`'s reasoning but scoped to the
+ * *requesting* vendor acting on their own orders, not a vendor being sold
+ * from — a distinct check with no existing caller before this milestone (see
+ * S3-5 discovery §A.3: no route previously gated on the acting vendor's own
+ * status).
+ */
+export class VendorNotActiveForOrdersError extends DomainRuleError {
+  constructor(options: AppErrorOptions = {}) {
+    super(
+      'VENDOR_NOT_ACTIVE',
+      'Your vendor account is not active yet, so you cannot manage orders.',
+      options,
+    );
+  }
+}

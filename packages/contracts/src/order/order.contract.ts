@@ -128,6 +128,42 @@ export const confirmPaymentRequestSchema = z
   })
   .strict();
 
+/**
+ * "Vendor Orders" (S3-5, `VIEW_VENDOR_ORDERS`). List row — deliberately as
+ * narrow as `orderSummaryResponseSchema` (S3-4), the same "enough to list,
+ * nothing more" discipline.
+ */
+export const vendorSubOrderSummaryResponseSchema = z.object({
+  id: uuidSchema,
+  orderId: uuidSchema,
+  status: orderStatusSchema,
+  totalAmount: moneySchema,
+  createdAt: isoDateTimeSchema,
+});
+
+/**
+ * Vendor-facing sub-order detail (S3-5). Reuses `orderItemResponseSchema`
+ * and `orderAddressSnapshotSchema` as-is rather than duplicating them —
+ * `orderItemResponseSchema` already excludes commission (see its own
+ * comment), and the address snapshot already carries only the delivery
+ * contact (`recipientName`/`phone`), never the customer's account identity —
+ * both already satisfy locked decision #6 with no changes.
+ *
+ * No other vendor's items and no other vendor's sub-orders ever reach this
+ * shape: it describes exactly one `SubOrder`, never the parent multi-vendor
+ * `Order`.
+ */
+export const vendorSubOrderResponseSchema = z.object({
+  id: uuidSchema,
+  orderId: uuidSchema,
+  status: orderStatusSchema,
+  totalAmount: moneySchema,
+  address: orderAddressSnapshotSchema,
+  items: z.array(orderItemResponseSchema),
+  createdAt: isoDateTimeSchema,
+  updatedAt: isoDateTimeSchema,
+});
+
 export type OrderStatusDto = z.infer<typeof orderStatusSchema>;
 export type PlaceOrderRequest = z.infer<typeof placeOrderRequestSchema>;
 export type OrderAddressSnapshotDto = z.infer<typeof orderAddressSnapshotSchema>;
@@ -136,5 +172,7 @@ export type OrderItemResponse = z.infer<typeof orderItemResponseSchema>;
 export type SubOrderResponse = z.infer<typeof subOrderResponseSchema>;
 export type OrderResponse = z.infer<typeof orderResponseSchema>;
 export type OrderSummaryResponse = z.infer<typeof orderSummaryResponseSchema>;
+export type VendorSubOrderSummaryResponse = z.infer<typeof vendorSubOrderSummaryResponseSchema>;
+export type VendorSubOrderResponse = z.infer<typeof vendorSubOrderResponseSchema>;
 export type PaymentInitiationResponse = z.infer<typeof paymentInitiationResponseSchema>;
 export type ConfirmPaymentRequest = z.infer<typeof confirmPaymentRequestSchema>;

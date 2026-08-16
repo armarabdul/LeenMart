@@ -11,12 +11,18 @@ import type { UserId, VendorId } from '../../../modules/identity/index.js';
  * before any tenant is known, so making them tenant-scoped would make
  * authentication impossible rather than safe.
  *
- * `sub_orders`, `payments` and `ledger_entries` join this set when those
- * tables exist (SDD 6.6 names them alongside `kyc_documents`).
- *
  * `Product`/`ProductVariant` join here from S2-3a: unlike `Category`, they
  * are vendor-owned rows, not platform-owned ones, and carry a `vendor_id`
  * (denormalised onto the variant too) for exactly this reason.
+ *
+ * `Order`/`SubOrder`/`OrderItem` join here from S3-5, alongside — not
+ * instead of — their existing, unwrapped `leenmart_checkout` write path
+ * (`PrismaOrderRepository`, `CheckoutTransactionRunner`). That path never
+ * routes through `withTenantBoundary`, so these three joining this set
+ * changes nothing for it; it only means a *new* vendor-order repository
+ * built on the wrapped `prisma` client now gets `app.vendor_id` set before
+ * every query, which `orders_vendor_select`/`sub_orders_vendor_select`/
+ * `order_items_vendor_select` (20260816130000) require.
  *
  * Prisma model names, not table names — this is matched against the `model`
  * field the query extension receives.
@@ -30,6 +36,9 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'Inventory',
   'ProductMedia',
   'ProductMediaVariant',
+  'Order',
+  'SubOrder',
+  'OrderItem',
 ]);
 
 /**

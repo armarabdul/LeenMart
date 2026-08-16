@@ -1,6 +1,8 @@
 import type { PrismaClient } from '@prisma/client';
 import type { Router } from 'express';
 import type { Clock, IdGenerator, Logger } from '@leen-mart/domain-kit';
+import { AmbientAuditWriter, type AuditWriter } from '../audit/index.js';
+import { PrismaAuditLogRepository } from '../audit/infrastructure/persistence/prisma-audit-log.repository.js';
 import { PrismaCartItemRepository } from '../cart/infrastructure/persistence/prisma-cart-item.repository.js';
 import { PrismaCartRepository } from '../cart/infrastructure/persistence/prisma-cart.repository.js';
 import { PrismaProductRepository } from '../catalogue/infrastructure/persistence/prisma-product.repository.js';
@@ -11,20 +13,30 @@ import type { AccessTokenService, SessionDenylist } from '../identity/index.js';
 import { createPricingTaxModule } from '../pricing-tax/index.js';
 import type { ResolveCommissionUseCase, ResolveTaxUseCase } from '../pricing-tax/index.js';
 import { PrismaVendorRepository } from '../vendor/infrastructure/persistence/prisma-vendor.repository.js';
-import { CheckoutTransactionRunner } from '../../shared/infrastructure/persistence/tenant-prisma.js';
+import {
+  CheckoutTransactionRunner,
+  PrismaTransactionRunner,
+} from '../../shared/infrastructure/persistence/tenant-prisma.js';
 import { IdempotencyKeyRepository } from '../../shared/infrastructure/persistence/idempotency-key.repository.js';
 import { PrismaOutboxWriter } from '../../shared/infrastructure/persistence/prisma-outbox-writer.js';
+import type { VendorTenantResolver } from '../../shared/interface/http/middleware/tenant-context.js';
 import { PlaceOrderUseCase } from './application/use-cases/place-order.use-case.js';
 import { GetOrderUseCase } from './application/use-cases/get-order.use-case.js';
+import { GetVendorOrderUseCase } from './application/use-cases/get-vendor-order.use-case.js';
 import { ListOrdersUseCase } from './application/use-cases/list-orders.use-case.js';
+import { ListVendorOrdersUseCase } from './application/use-cases/list-vendor-orders.use-case.js';
 import { CancelOrderUseCase } from './application/use-cases/cancel-order.use-case.js';
 import { InitiatePaymentUseCase } from './application/use-cases/initiate-payment.use-case.js';
 import { ConfirmPaymentUseCase } from './application/use-cases/confirm-payment.use-case.js';
+import { StartProcessingUseCase } from './application/use-cases/start-processing.use-case.js';
 import { PrismaOrderRepository } from './infrastructure/persistence/prisma-order.repository.js';
 import { PrismaPaymentAttemptRepository } from './infrastructure/persistence/prisma-payment-attempt.repository.js';
+import { PrismaVendorOrderRepository } from './infrastructure/persistence/prisma-vendor-order.repository.js';
 import { MockPaymentGateway } from './infrastructure/payment/mock-payment-gateway.js';
 import { createOrderController } from './interface/http/order.controller.js';
 import { createOrderRouter } from './interface/http/order.routes.js';
+import { createVendorOrderController } from './interface/http/vendor-order.controller.js';
+import { createVendorOrderRouter } from './interface/http/vendor-order.routes.js';
 
 export interface OrderModuleDeps {
   /** The plain, non-RLS client — cart/address reads, exactly the credential those two modules already use for themselves. */
@@ -35,6 +47,14 @@ export interface OrderModuleDeps {
   readonly checkoutPrisma: PrismaClient;
   readonly accessTokenService: AccessTokenService;
   readonly sessionDenylist: SessionDenylist;
+  /**
+   * Resolves the caller's own vendor for `tenantContext` (S3-5) — the same
+   * resolver `catalogue`'s vendor-facing router already receives from the
+   * composition root, handed to this module for the identical reason (SDD
+   * 5.1: only a resolver crosses from `vendor`, never its repositories or
+   * entities).
+   */
+  readonly resolveVendorTenant: VendorTenantResolver;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
   readonly logger: Logger;
@@ -42,6 +62,8 @@ export interface OrderModuleDeps {
 
 export interface OrderModule {
   readonly router: Router;
+  /** Mounted separately at `/api/v1/vendor/orders` (S3-5) — vendor-scoped, on `leenmart_app` rather than `leenmart_checkout`. */
+  readonly vendorRouter: Router;
 }
 
 interface OrderRepositories {
@@ -201,6 +223,76 @@ const buildOrderUseCases = (deps: BuildOrderUseCasesDeps): OrderUseCases => ({
 });
 
 /**
+ * The vendor-facing surface (S3-5) — deliberately built on the *tenant-scoped*
+ * `prisma` client (`leenmart_app`), never `checkoutPrisma`, per locked
+ * decision #2. Split out of `createOrderModule` for the same
+ * function-length-budget reason every other builder in this file is.
+ */
+const buildVendorOrderRouter = (params: {
+  prisma: PrismaClient;
+  accessTokenService: AccessTokenService;
+  sessionDenylist: SessionDenylist;
+  resolveVendorTenant: VendorTenantResolver;
+  idGenerator: IdGenerator;
+  clock: Clock;
+  logger: Logger;
+}): Router => {
+  const {
+    prisma,
+    accessTokenService,
+    sessionDenylist,
+    resolveVendorTenant,
+    idGenerator,
+    clock,
+    logger,
+  } = params;
+
+  // A second `VendorRepository` instance, bound to the tenant-scoped client
+  // rather than `checkoutPrisma` — `buildOrderRepositories`'s own
+  // `vendorRepository` exists only to resolve plan/status/shopName for the
+  // *sold-from* vendor at checkout time; the ACTIVE gate here checks the
+  // *requesting* vendor's own profile instead, which must read through RLS.
+  const vendorRepository = new PrismaVendorRepository(prisma);
+  const vendorOrderRepository = new PrismaVendorOrderRepository(prisma);
+  const transactionRunner = new PrismaTransactionRunner(prisma);
+  const outboxWriter = new PrismaOutboxWriter(prisma, idGenerator, clock);
+  const auditWriter: AuditWriter = new AmbientAuditWriter({
+    auditLogRepository: new PrismaAuditLogRepository(prisma),
+    idGenerator,
+    clock,
+  });
+
+  const listVendorOrdersUseCase = new ListVendorOrdersUseCase({
+    vendorRepository,
+    vendorOrderRepository,
+  });
+  const getVendorOrderUseCase = new GetVendorOrderUseCase({
+    vendorRepository,
+    vendorOrderRepository,
+  });
+  const startProcessingUseCase = new StartProcessingUseCase({
+    vendorRepository,
+    vendorOrderRepository,
+    outboxWriter,
+    auditWriter,
+    transactionRunner,
+    clock,
+    logger,
+  });
+
+  const controller = createVendorOrderController({
+    listVendorOrdersUseCase,
+    getVendorOrderUseCase,
+    startProcessingUseCase,
+  });
+  return createVendorOrderRouter(controller, {
+    accessTokenService,
+    sessionDenylist,
+    resolveVendorTenant,
+  });
+};
+
+/**
  * This module's own composition root (SDD 2.3), mirroring every other
  * module's shape. Constructs `pricing-tax` itself (S3-2's own doc comment
  * names this module as its "intended caller") on the plain client —
@@ -208,7 +300,15 @@ const buildOrderUseCases = (deps: BuildOrderUseCasesDeps): OrderUseCases => ({
  * module's own `PricingTaxModuleDeps.prisma` comment already states.
  */
 export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
-  const { prisma, accessTokenService, sessionDenylist, clock, idGenerator, logger } = deps;
+  const {
+    prisma,
+    accessTokenService,
+    sessionDenylist,
+    resolveVendorTenant,
+    clock,
+    idGenerator,
+    logger,
+  } = deps;
   const moduleLogger = logger.child({ module: 'order' });
 
   const repositories = buildOrderRepositories(deps);
@@ -234,5 +334,15 @@ export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
     idGenerator,
   });
 
-  return { router };
+  const vendorRouter = buildVendorOrderRouter({
+    prisma,
+    accessTokenService,
+    sessionDenylist,
+    resolveVendorTenant,
+    idGenerator,
+    clock,
+    logger: moduleLogger,
+  });
+
+  return { router, vendorRouter };
 };

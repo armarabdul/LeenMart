@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import type { Express } from 'express';
 import type { PrismaClient } from '@prisma/client';
-import { signUpVendorOwner, type Actor, type VendorActor } from './actors.js';
+import { signUpCustomer, signUpVendorOwner, type Actor, type VendorActor } from './actors.js';
 
 /**
  * What kind of route this is, for the purpose of SDD 6.6 layer 2.
@@ -128,6 +128,24 @@ const vendorActor = async (ctx: RouteTestContext, label: string): Promise<Vendor
   const minted = await signUpVendorOwner(ctx.app, VENDOR_EMAIL_PREFIX, label);
   vendorActors.set(label, minted);
   return minted;
+};
+
+/**
+ * `vendorActor`, additionally activated (S3-5). The matrix's own `twoOwners()`
+ * mints *both* the resource owner and the attacker through whichever `actor`
+ * function a route supplies — so for the vendor-order routes, which refuse
+ * any non-ACTIVE vendor before ownership is ever checked
+ * (`requireActiveVendor`), a plain `vendorActor` attacker would be refused
+ * with `VENDOR_NOT_ACTIVE` (422) rather than reach the RLS/ownership check
+ * the matrix is actually proving — a false failure, not a real isolation
+ * gap. Every vendor-order manifest entry uses this instead of the bare
+ * `vendorActor` so both the owner and the attacker clear that gate the same
+ * way a real ACTIVE vendor would.
+ */
+const activeVendorActor = async (ctx: RouteTestContext, label: string): Promise<VendorActor> => {
+  const actor = await vendorActor(ctx, label);
+  await ctx.db.vendorProfile.update({ where: { id: actor.vendorId }, data: { status: 'ACTIVE' } });
+  return actor;
 };
 
 let productSeq = 0;
@@ -338,6 +356,77 @@ const snapshotOrder = (ctx: RouteTestContext, resourceId: string): Promise<unkno
 /** The whole stored row — the matrix always addresses an item by its own id, never a `cartId`. */
 const snapshotCartItem = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
   ctx.db.cartItem.findUnique({ where: { id: resourceId } });
+
+// --- vendor orders (S3-5) -------------------------------------------------
+
+/**
+ * Seeds one real sub-order owned by `owner` (a vendor, minted via
+ * `vendorActor`) and returns the **sub-order's own id** — never the parent
+ * order id, matching S3-5's locked decision to address vendor-order
+ * resources by `SubOrderId` throughout.
+ *
+ * `owner` is typed `Actor` (the shared `TenantOwnedRoute.seed` signature)
+ * but is always a `VendorActor` at runtime for these two routes (both
+ * override `actor: vendorActor` below) — `owner.vendorId` is deliberately
+ * never read here; the vendor's own `VendorProfile` row is looked up by
+ * `userId` instead, which every `Actor` already carries, so no cast is
+ * needed.
+ */
+const seedVendorSubOrder = async (ctx: RouteTestContext, owner: Actor): Promise<string> => {
+  const categoryId = await seedCategoryRow(ctx);
+  const vendorProfile = await ctx.db.vendorProfile.findFirstOrThrow({
+    where: { userId: owner.userId },
+  });
+  const customer = await signUpCustomer(
+    ctx.app,
+    VENDOR_EMAIL_PREFIX,
+    `vendor-order-customer-${Date.now()}-${(productSeq += 1)}`,
+  );
+
+  const createResponse = await authed(request(ctx.app).post('/api/v1/vendor/products'), owner)
+    .send({
+      categoryId,
+      name: `Vendor Order Matrix Product ${(productSeq += 1)}`,
+      variant: {
+        sku: `VENDOR-ORDER-MATRIX-${Date.now()}-${productSeq}`,
+        name: 'Default',
+        price: { amount: '19900', currency: 'INR' },
+        unitOfMeasure: 'per piece',
+        quantityStep: 1,
+      },
+    })
+    .expect(201);
+  const productId = (createResponse.body as { data: { product: { id: string } } }).data.product.id;
+  const variantRow = await ctx.db.productVariant.findFirstOrThrow({ where: { productId } });
+
+  await ctx.db.inventory.update({ where: { variantId: variantRow.id }, data: { available: 100 } });
+  await ctx.db.product.update({ where: { id: productId }, data: { status: 'APPROVED' } });
+  await ctx.db.vendorProfile.update({
+    where: { id: vendorProfile.id },
+    data: { status: 'ACTIVE', shopName: 'Vendor Order Matrix Shop' },
+  });
+
+  await authed(request(ctx.app).post('/api/v1/me/cart/items'), customer)
+    .send({ variantId: variantRow.id, quantity: 1 })
+    .expect(201);
+
+  const addressResponse = await authed(request(ctx.app).post('/api/v1/me/addresses'), customer)
+    .send(VALID_ADDRESS)
+    .expect(201);
+  const addressId = (addressResponse.body as { data: { id: string } }).data.id;
+
+  const placeResponse = await authed(request(ctx.app).post('/api/v1/orders'), customer)
+    .set('Idempotency-Key', `matrix-${randomUUID()}`)
+    .send({ addressId, paymentMethod: 'ONLINE' })
+    .expect(201);
+  const orderId = (placeResponse.body as { data: { id: string } }).data.id;
+  const subOrderRow = await ctx.db.subOrder.findFirstOrThrow({ where: { orderId } });
+  return subOrderRow.id;
+};
+
+/** The whole stored row — a refused read/write must be provable to have changed nothing. */
+const snapshotVendorSubOrder = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
+  ctx.db.subOrder.findUnique({ where: { id: resourceId } });
 
 /**
  * Every route the application actually mounts, classified.
@@ -1060,6 +1149,45 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
         .set('Idempotency-Key', `matrix-${randomUUID()}`)
         .send({ testScenario: 'SUCCEEDED' }),
     snapshot: snapshotOrder,
+  },
+
+  // --- vendor orders: /api/v1/vendor/orders (S3-5) ---
+  //
+  // Addressed by SubOrderId throughout (locked decision #5) — every seed here
+  // returns a sub-order id, never the parent order id. Each supplies
+  // `vendorActor`, the same reason `vendor/products` routes do: a customer
+  // token carries neither `VIEW_VENDOR_ORDERS`/`ACCEPT_OR_REJECT_ORDER` nor a
+  // vendor for `tenantContext` to resolve.
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendor/orders',
+    path: '/',
+    classification: 'SELF_SCOPED',
+    why: 'Lists only the caller’s own sub-orders — the tenant-scoped client cannot return anyone else’s.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendor/orders',
+    path: '/:id',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied sub-order id and reads it.',
+    actor: activeVendorActor,
+    seed: seedVendorSubOrder,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).get(`/api/v1/vendor/orders/${resourceId}`), actor),
+    snapshot: snapshotVendorSubOrder,
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/vendor/orders',
+    path: '/:id/process',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied sub-order id and starts processing it.',
+    actor: activeVendorActor,
+    seed: seedVendorSubOrder,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).post(`/api/v1/vendor/orders/${resourceId}/process`), actor),
+    snapshot: snapshotVendorSubOrder,
   },
 ];
 

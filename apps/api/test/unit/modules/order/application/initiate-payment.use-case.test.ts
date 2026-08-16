@@ -85,6 +85,7 @@ const buildOrder = (status: OrderStatus, customer = customerId): Order => {
     items: [item],
     createdAt: NOW,
     updatedAt: NOW,
+    version: 1,
   });
   return Order.reconstitute({
     id: orderId,

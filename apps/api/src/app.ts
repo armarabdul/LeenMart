@@ -119,8 +119,18 @@ const mountBusinessModules = (
   // The order surface (SDD 9.4, S3-3A): authenticated, customer-scoped,
   // reading/writing on the dedicated `leenmart_checkout` credential rather
   // than any tenant context — see `order.module.ts`'s own comment.
-  const orderModule = createOrderModule(params);
+  const orderModule = createOrderModule({
+    ...params,
+    // D-1's own pattern, repeated here: the resolver, and nothing else,
+    // crosses from `vendor` to `order` (SDD 5.1).
+    resolveVendorTenant: vendorModule.resolveVendorTenant,
+  });
   app.use('/api/v1/orders', orderModule.router);
+  // The vendor-facing order surface (SDD 9.4, S3-5): authenticated,
+  // tenant-scoped on `leenmart_app`, mounted apart from the customer router
+  // above — a distinct credential and a distinct resource shape (SubOrder,
+  // not Order).
+  app.use('/api/v1/vendor/orders', orderModule.vendorRouter);
 
   // Further business modules mount here as they are built.
 };

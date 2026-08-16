@@ -1138,21 +1138,25 @@ enum OrderStatus {
 /// A customer's order (S3-3A, SDD 5 module 8, SDD 6.3 "Order ↔ Vendor
 /// cardinality": `Order 1..N SubOrder`).
 ///
-/// Customer-owned, not vendor-owned — like `Cart`/`Address`, **outside**
-/// `TENANT_SCOPED_MODELS`, no RLS. Ownership is enforced in application code
-/// by `customerId`, the same convention `Address`/`Cart` already establish,
-/// because the tenant boundary SDD 6.6 protects is a *vendor's* data, and an
-/// order at this level belongs to the customer who placed it — its
-/// `SubOrder` children are what a vendor may see, and reads for that surface
-/// are not part of S3-3A (no vendor-facing order view is in scope here).
+/// Customer-owned, not vendor-owned — like `Cart`/`Address`. Ownership for
+/// the customer-facing surface is enforced in application code by
+/// `customerId`, the same convention `Address`/`Cart` already establish.
 ///
-/// Read and written through the new `leenmart_checkout` role (S3-3A decision
-/// D-S3-07) rather than `leenmart_app`/`leenmart_admin`: the write that must
-/// happen in the same transaction — the atomic inventory decrement — touches
-/// rows belonging to one or more *other* vendors than any single tenant
-/// session could ever be scoped to, and neither existing runtime credential
-/// can do that safely (see the migration's own comment for the full
-/// reasoning this schema does not repeat).
+/// Read and written through the `leenmart_checkout` role (S3-3A decision
+/// D-S3-07) for the customer-facing surface rather than `leenmart_app`/
+/// `leenmart_admin`: the write that must happen in the same transaction —
+/// the atomic inventory decrement — touches rows belonging to one or more
+/// *other* vendors than any single tenant session could ever be scoped to,
+/// and neither existing runtime credential can do that safely (see
+/// 20260815120000's own comment for the full reasoning this schema does not
+/// repeat).
+///
+/// S3-5 adds RLS and a `TENANT_SCOPED_MODELS` membership alongside that —
+/// not a replacement for the above, an addition for a *second* surface: a
+/// vendor may read their own order's address snapshot (via `SubOrder`) on
+/// the `leenmart_app` credential, scoped by `orders_vendor_select`
+/// (20260816130000). The customer-facing path through `leenmart_checkout`
+/// is completely unaffected — that role's own policies stay `USING (true)`.
 ///
 /// The address is a full snapshot, never a live FK to `addresses` — SDD 6.3's
 /// own immutability reasoning for pricing, applied identically here: a
@@ -1217,6 +1221,11 @@ model SubOrder {
   vendorShopNameSnapshot String      @map("vendor_shop_name_snapshot") @db.VarChar(120)
   totalAmount            BigInt      @map("total_amount")
   totalCurrency          String      @default("INR") @map("total_currency") @db.VarChar(3)
+  /// Optimistic-concurrency guard (S3-5) — see `Inventory.version`'s own
+  /// comment for the pattern. Needed from S3-5 onward: a customer cancelling
+  /// and a vendor starting processing are now two independent writers on the
+  /// same row.
+  version                Int         @default(1)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)

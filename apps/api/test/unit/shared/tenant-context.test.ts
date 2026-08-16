@@ -147,16 +147,23 @@ describe('tenant context', () => {
   });
 
   describe('model registry', () => {
-    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a and S2-6b protect', () => {
+    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a, S2-6b and S3-5 protect', () => {
       expect([...TENANT_SCOPED_MODELS].sort()).toEqual([
         'Inventory',
         'KycDocument',
+        // S3-5: the vendor-order surface's own repository reads/writes these
+        // through the wrapped `prisma` client, alongside — not instead of —
+        // the unwrapped `leenmart_checkout` path the customer-facing order
+        // surface already uses.
+        'Order',
+        'OrderItem',
         'Product',
         'ProductMedia',
         // S2-6b: the worker writes these under a tenant context of its own,
         // never on the admin credential.
         'ProductMediaVariant',
         'ProductVariant',
+        'SubOrder',
         'VendorKycSubmission',
         'VendorProfile',
       ]);

@@ -46,6 +46,7 @@ const subOrderInState = (
     items: [],
     createdAt: now,
     updatedAt: now,
+    version: 1,
   });
 
 const orderInState = (
@@ -324,5 +325,57 @@ describe('SubOrder', () => {
       OrderStatus.CANCELLED,
     );
     expect(subOrderInState(OrderStatus.CONFIRMED).cancel(later).status).toBe(OrderStatus.CANCELLED);
+  });
+
+  describe('version (S3-5 optimistic-concurrency guard)', () => {
+    it('open() always starts at version 1', () => {
+      const subOrder = SubOrder.open({
+        id: toSubOrderId('00000000-0000-7000-8000-000000000b31'),
+        orderId,
+        vendorId: vendorAId,
+        vendorShopNameSnapshot: 'Test Shop',
+        totalAmount: Money.fromMajor(50),
+        items: [],
+        now,
+      });
+
+      expect(subOrder.version).toBe(1);
+    });
+
+    it('reconstitute() carries whatever version the repository read', () => {
+      const subOrder = SubOrder.reconstitute({
+        id: toSubOrderId('00000000-0000-7000-8000-000000000b32'),
+        orderId,
+        vendorId: vendorAId,
+        status: OrderStatus.CONFIRMED,
+        vendorShopNameSnapshot: 'Test Shop',
+        totalAmount: Money.fromMajor(50),
+        items: [],
+        createdAt: now,
+        updatedAt: now,
+        version: 7,
+      });
+
+      expect(subOrder.version).toBe(7);
+    });
+
+    it('startProcessing() leaves version unchanged — the repository, not the domain, bumps it on write', () => {
+      const before = SubOrder.reconstitute({
+        id: toSubOrderId('00000000-0000-7000-8000-000000000b33'),
+        orderId,
+        vendorId: vendorAId,
+        status: OrderStatus.CONFIRMED,
+        vendorShopNameSnapshot: 'Test Shop',
+        totalAmount: Money.fromMajor(50),
+        items: [],
+        createdAt: now,
+        updatedAt: now,
+        version: 3,
+      });
+
+      const processing = before.startProcessing(later);
+
+      expect(processing.version).toBe(3);
+    });
   });
 });

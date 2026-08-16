@@ -16,6 +16,18 @@ export interface SubOrderProps {
   readonly items: readonly OrderItem[];
   readonly createdAt: Date;
   readonly updatedAt: Date;
+  /**
+   * Optimistic-concurrency guard (S3-5), the same `Inventory.version`
+   * pattern: the entity carries the version it was read with, a repository
+   * write conditions on `WHERE version = :expectedVersion` and increments it
+   * atomically, and a caller that lost the race gets `false`/a thrown
+   * conflict rather than silently overwriting a concurrent change. Needed
+   * from S3-5 onward because two independent actors — a customer cancelling
+   * and a vendor starting processing — can now both write the same
+   * `SubOrder` row; before this milestone only one writer (the customer's own
+   * cancel/payment-confirmation path) ever touched it.
+   */
+  readonly version: number;
 }
 
 /**
@@ -61,6 +73,7 @@ export class SubOrder {
       items: props.items,
       createdAt: props.now,
       updatedAt: props.now,
+      version: 1,
     });
   }
 
@@ -104,6 +117,10 @@ export class SubOrder {
     return this.props.updatedAt;
   }
 
+  get version(): number {
+    return this.props.version;
+  }
+
   private transition(name: SubOrderTransition, now: Date): SubOrder {
     const { from, to } = TRANSITIONS[name];
     if (!(from as readonly OrderStatusName[]).includes(this.props.status.name)) {
@@ -117,7 +134,7 @@ export class SubOrder {
     return this.transition('CONFIRM', now);
   }
 
-  /** No HTTP caller in S3-3A — vendor-portal/fulfilment scope, named nowhere in this milestone. */
+  /** Vendor-initiated (S3-5): `POST /api/v1/vendor/orders/:id/process`, via `StartProcessingUseCase`. */
   startProcessing(now: Date): SubOrder {
     return this.transition('START_PROCESSING', now);
   }

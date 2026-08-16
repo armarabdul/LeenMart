@@ -523,7 +523,13 @@ describe('database role separation', () => {
       // `products`/`product_variants` joined this list in S2-3a; `inventory`
       // in S2-4; `product_media` in S2-6a; `product_media_variants` in S2-6b —
       // written by the background worker, and therefore exactly the kind of
-      // table that must not be exempt from the boundary.
+      // table that must not be exempt from the boundary. `orders`/
+      // `sub_orders`/`order_items` joined in S3-5: RLS is additive there —
+      // `leenmart_checkout`'s own policies stay `USING (true)` (unchanged
+      // reach), and it is only `leenmart_app`'s new vendor-scoped policies
+      // that are actually restrictive — see the `20260816130000` migration's
+      // own header for why enabling RLS was required to add a second,
+      // narrower credential onto tables that never had it before.
       const rows = await owner.$queryRawUnsafe<{ tablename: string }[]>(
         'SELECT tablename FROM pg_tables WHERE schemaname = $1 AND rowsecurity ORDER BY tablename',
         'public',
@@ -532,10 +538,13 @@ describe('database role separation', () => {
       expect(rows.map((row) => row.tablename)).toEqual([
         'inventory',
         'kyc_documents',
+        'order_items',
+        'orders',
         'product_media',
         'product_media_variants',
         'product_variants',
         'products',
+        'sub_orders',
         'vendor_kyc_submissions',
         'vendors',
       ]);
