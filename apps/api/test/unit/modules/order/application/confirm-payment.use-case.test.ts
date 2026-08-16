@@ -8,6 +8,7 @@ import type { Principal } from '../../../../../src/modules/identity/application/
 import { toProductId } from '../../../../../src/modules/catalogue/domain/value-objects/product-id.value-object.js';
 import { toProductVariantId } from '../../../../../src/modules/catalogue/domain/value-objects/product-variant-id.value-object.js';
 import type { OutboxWriter } from '../../../../../src/shared/application/ports/outbox-writer.port.js';
+import type { PostOrderPaymentJournalsUseCase } from '../../../../../src/modules/ledger/index.js';
 import { ConfirmPaymentUseCase } from '../../../../../src/modules/order/application/use-cases/confirm-payment.use-case.js';
 import type { PaymentGateway } from '../../../../../src/modules/order/application/ports/payment-gateway.port.js';
 import { Order } from '../../../../../src/modules/order/domain/entities/order.entity.js';
@@ -153,11 +154,22 @@ const runner = (): TransactionRunner => ({
   run: async (work) => work({} as TransactionScope),
 });
 
+/**
+ * A no-op ledger poster (S3-7). The accounting this use case triggers is
+ * proved in `post-order-payment-journals.use-case.test.ts` and against a
+ * real database in `ledger.test.ts`; here it is stubbed so these tests keep
+ * asserting only the payment/confirmation behaviour they were written for.
+ */
+const ledgerPoster = (
+  execute: PostOrderPaymentJournalsUseCase['execute'] = vi.fn().mockResolvedValue(undefined),
+): PostOrderPaymentJournalsUseCase => ({ execute }) as unknown as PostOrderPaymentJournalsUseCase;
+
 interface BuildOverrides {
   orderRepository?: OrderRepository;
   paymentAttemptRepository?: PaymentAttemptRepository;
   paymentGateway?: PaymentGateway;
   outboxWriter?: OutboxWriter;
+  postOrderPaymentJournalsUseCase?: PostOrderPaymentJournalsUseCase;
 }
 
 const buildUseCase = (overrides: BuildOverrides = {}): ConfirmPaymentUseCase =>
@@ -166,6 +178,7 @@ const buildUseCase = (overrides: BuildOverrides = {}): ConfirmPaymentUseCase =>
     paymentAttemptRepository: overrides.paymentAttemptRepository ?? paymentAttemptRepo(),
     paymentGateway: overrides.paymentGateway ?? paymentGateway(),
     outboxWriter: overrides.outboxWriter ?? outboxWriter(),
+    postOrderPaymentJournalsUseCase: overrides.postOrderPaymentJournalsUseCase ?? ledgerPoster(),
     transactionRunner: runner(),
     clock,
     logger: new NullLogger(),

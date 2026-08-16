@@ -1406,3 +1406,110 @@ model IdempotencyKey {
   @@index([expiresAt], map: "idx_idempotency_keys_expires_at")
   @@map("idempotency_keys")
 }
+
+/// The SDD 10.3 chart of accounts, as a closed enum.
+///
+/// Every account the SDD names is declared here so the taxonomy is complete
+/// and future milestones need no enum migration. Only three are *reachable*
+/// in S3-7 — see `LedgerJournalKind`. The rest are provisioned-but-dormant
+/// and documented as such:
+///
+///   GST_OUTPUT / TCS_PAYABLE / TDS_PAYABLE — BR-13 (GST/TCS/TDS) is an
+///     unresolved P0 legal question; no authoritative rate exists in this
+///     repository, and S3-7 explicitly refuses to fabricate one.
+///   REFUND_CLEARING       — refunds do not exist (BR-06 unresolved).
+///   VENDOR_RECEIVABLE_COD — COD does not exist.
+///   HOLD_SUSPENSE         — settlement holds have no release workflow in
+///     S3-7; posting a hold now would strand every vendor balance with no
+///     supported exit. Provisioned so the settlement milestone can use it
+///     without redesigning the ledger.
+enum LedgerAccountCode {
+  GATEWAY_CLEARING
+  VENDOR_PAYABLE
+  PLATFORM_COMMISSION_INCOME
+  GST_OUTPUT
+  TCS_PAYABLE
+  TDS_PAYABLE
+  REFUND_CLEARING
+  HOLD_SUSPENSE
+  VENDOR_RECEIVABLE_COD
+}
+
+/// Which side of the double entry a line sits on. Two values, never a signed
+/// amount: a signed "net" column is exactly the single-amount shortcut SDD
+/// 10.3 rules out, and it makes an unbalanced journal representable.
+enum LedgerDirection {
+  DEBIT
+  CREDIT
+}
+
+/// Why a journal was posted. One value per posting event S3-7 supports;
+/// future events (hold placed, hold released, refund reversed, TCS withheld)
+/// add members here rather than changing the journal shape.
+enum LedgerJournalKind {
+  PAYMENT_CAPTURED
+  COMMISSION_ACCRUED
+}
+
+/// One balanced double-entry journal (SDD 10.3), scoped to a single
+/// `SubOrder` — the accounting unit, because financial ownership in a
+/// multi-vendor order is per vendor. A single order-wide journal would mix
+/// Vendor A's payable with Vendor B's indistinguishably.
+///
+/// **Append-only.** No UPDATE or DELETE policy exists for any role, and
+/// `trg_ledger_journals_immutable` refuses both at the database, mirroring
+/// `audit_logs` (SDD 18.4). Corrections are new compensating journals.
+model LedgerJournal {
+  id               String            @id @db.Uuid
+  kind             LedgerJournalKind
+  orderId          String            @map("order_id") @db.Uuid
+  subOrderId       String            @map("sub_order_id") @db.Uuid
+  paymentAttemptId String            @map("payment_attempt_id") @db.Uuid
+  /// Denormalised from `SubOrder.vendorId` so vendor RLS is a column
+  /// comparison, never a subquery — the same technique every child table in
+  /// this schema already uses.
+  vendorId         String            @map("vendor_id") @db.Uuid
+  currency         String            @default("INR") @db.VarChar(3)
+
+  occurredAt DateTime @map("occurred_at") @db.Timestamptz(6)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  entries LedgerEntry[]
+
+  /// The ledger's own idempotency guard: one journal of each kind per
+  /// sub-order, enforced by the database. A replayed payment confirmation
+  /// cannot post a second set — defence in depth behind the route's
+  /// `Idempotency-Key` middleware and `Order.confirm()`'s own status guard.
+  @@unique([subOrderId, kind], map: "uq_ledger_journals_sub_order_kind")
+  @@index([vendorId, createdAt(sort: Desc)], map: "idx_ledger_journals_vendor_created")
+  @@index([orderId], map: "idx_ledger_journals_order")
+  @@map("ledger_journals")
+}
+
+/// One line of a journal. `SUM(debit) = SUM(credit)` per journal is enforced
+/// by the domain before persistence and re-checked by
+/// `chk_ledger_entries_amount_positive` plus the balance assertion in
+/// `PostOrderPaymentJournalsUseCase`.
+model LedgerEntry {
+  id          String            @id @db.Uuid
+  journalId   String            @map("journal_id") @db.Uuid
+  accountCode LedgerAccountCode @map("account_code")
+  /// `NULL` for platform-owned accounts (commission income, gateway
+  /// clearing); set for vendor-owned balances (`VENDOR_PAYABLE`).
+  vendorId    String?           @map("vendor_id") @db.Uuid
+  direction   LedgerDirection
+  /// Integer minor units (ADR-006) — never a float, never a decimal string.
+  amountMinor BigInt            @map("amount_minor")
+  currency    String            @default("INR") @db.VarChar(3)
+  /// Set where a line is attributable to one order line (commission);
+  /// `NULL` for sub-order-level lines.
+  orderItemId String?           @map("order_item_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  journal LedgerJournal @relation(fields: [journalId], references: [id], onDelete: Restrict)
+
+  @@index([journalId], map: "idx_ledger_entries_journal")
+  @@index([accountCode, vendorId], map: "idx_ledger_entries_account_vendor")
+  @@map("ledger_entries")
+}

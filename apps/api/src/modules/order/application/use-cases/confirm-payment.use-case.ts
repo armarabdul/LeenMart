@@ -6,6 +6,7 @@ import {
   type TransactionScope,
 } from '@leen-mart/domain-kit';
 import type { Principal } from '../../../identity/index.js';
+import type { PostOrderPaymentJournalsUseCase } from '../../../ledger/index.js';
 import type { OutboxWriter } from '../../../../shared/application/ports/outbox-writer.port.js';
 import { ORDER_AUDIT_ACTIONS, ORDER_AUDIT_ENTITY_TYPES } from '../../domain/audit-actions.js';
 import type { Order } from '../../domain/entities/order.entity.js';
@@ -31,6 +32,11 @@ export interface ConfirmPaymentDeps {
   readonly paymentAttemptRepository: PaymentAttemptRepository;
   readonly paymentGateway: PaymentGateway;
   readonly outboxWriter: OutboxWriter;
+  /**
+   * S3-7: posts the double-entry journals for a captured payment, inside
+   * this use case's own transaction — see `resolveInTransaction`.
+   */
+  readonly postOrderPaymentJournalsUseCase: PostOrderPaymentJournalsUseCase;
   readonly transactionRunner: TransactionRunner;
   readonly clock: Clock;
   readonly logger: Logger;
@@ -76,6 +82,40 @@ export class ConfirmPaymentUseCase {
 
     logger.info({ orderId: outcome.order.id }, 'Payment confirmed — order CONFIRMED');
     return outcome.order;
+  }
+
+  /**
+   * The accounting for this capture (S3-7), posted inside the *same*
+   * transaction as the status change so the money record and the order state
+   * can never disagree: an unbalanced journal, or a duplicate one caught by
+   * `uq_ledger_journals_sub_order_kind`, aborts the whole confirmation
+   * rather than leaving a `CONFIRMED` order with no ledger behind it.
+   *
+   * Mapped per sub-order so each vendor's postings stay independently
+   * traceable, and `commissionAmount` is read straight off the `OrderItem`
+   * snapshot — never recomputed here, which would risk drifting from what
+   * the customer was actually charged.
+   */
+  private async postLedger(
+    scope: TransactionScope,
+    confirmed: Order,
+    paymentAttemptId: string,
+    now: Date,
+  ): Promise<void> {
+    await this.deps.postOrderPaymentJournalsUseCase.execute(scope, {
+      orderId: confirmed.id,
+      paymentAttemptId,
+      occurredAt: now,
+      subOrders: confirmed.subOrders.map((subOrder) => ({
+        subOrderId: subOrder.id,
+        vendorId: subOrder.vendorId,
+        total: subOrder.totalAmount,
+        commissionLines: subOrder.items.map((item) => ({
+          orderItemId: item.id,
+          commissionAmount: item.commissionAmount,
+        })),
+      })),
+    });
   }
 
   private async resolveInTransaction(
@@ -132,6 +172,9 @@ export class ConfirmPaymentUseCase {
     await attempts.updateStatus(attempt.succeed(now));
     const confirmed = order.confirm(now);
     await orders.updateStatus(confirmed);
+
+    await this.postLedger(scope, confirmed, attempt.id, now);
+
     await outboxes.write({
       aggregateType: ORDER_AUDIT_ENTITY_TYPES.ORDER,
       aggregateId: toUuid(orderId),

@@ -506,6 +506,10 @@ describe('database role separation', () => {
       expect(rows.map((row) => row.relname).sort()).toEqual([
         'idempotency_keys',
         'inventory',
+        // S3-7: the ledger's only writer. SELECT + INSERT only — the
+        // append-only guarantee is asserted directly in `ledger.test.ts`.
+        'ledger_entries',
+        'ledger_journals',
         'order_items',
         'orders',
         'outbox_events',
@@ -538,6 +542,12 @@ describe('database role separation', () => {
       expect(rows.map((row) => row.tablename)).toEqual([
         'inventory',
         'kyc_documents',
+        // S3-7: the ledger. Vendor-scoped SELECT for `leenmart_app`,
+        // cross-vendor SELECT for `leenmart_admin`, SELECT+INSERT for the
+        // checkout writer — and no UPDATE/DELETE policy for anyone, which is
+        // half of what makes it append-only.
+        'ledger_entries',
+        'ledger_journals',
         'order_items',
         'orders',
         'product_media',

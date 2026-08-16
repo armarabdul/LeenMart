@@ -29,6 +29,7 @@ import { ListVendorOrdersUseCase } from './application/use-cases/list-vendor-ord
 import { CancelOrderUseCase } from './application/use-cases/cancel-order.use-case.js';
 import { InitiatePaymentUseCase } from './application/use-cases/initiate-payment.use-case.js';
 import { ConfirmPaymentUseCase } from './application/use-cases/confirm-payment.use-case.js';
+import { createLedgerModule, type PostOrderPaymentJournalsUseCase } from '../ledger/index.js';
 import { ShipSubOrderUseCase } from './application/use-cases/ship-sub-order.use-case.js';
 import { StartProcessingUseCase } from './application/use-cases/start-processing.use-case.js';
 import { PrismaOrderRepository } from './infrastructure/persistence/prisma-order.repository.js';
@@ -125,6 +126,8 @@ interface BuildOrderUseCasesDeps {
   readonly paymentGateway: MockPaymentGateway;
   readonly resolveCommissionUseCase: ResolveCommissionUseCase;
   readonly resolveTaxUseCase: ResolveTaxUseCase;
+  /** S3-7: the ledger posting driven by a captured payment. */
+  readonly postOrderPaymentJournalsUseCase: PostOrderPaymentJournalsUseCase;
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
   readonly logger: Logger;
@@ -187,7 +190,14 @@ const buildCheckoutUseCases = (
 const buildPaymentUseCases = (
   deps: BuildOrderUseCasesDeps,
 ): Pick<OrderUseCases, 'initiatePaymentUseCase' | 'confirmPaymentUseCase'> => {
-  const { repositories, paymentGateway, idGenerator, clock, logger } = deps;
+  const {
+    repositories,
+    paymentGateway,
+    postOrderPaymentJournalsUseCase,
+    idGenerator,
+    clock,
+    logger,
+  } = deps;
   const { orderRepository, paymentAttemptRepository, outboxWriter, transactionRunner } =
     repositories;
 
@@ -206,6 +216,7 @@ const buildPaymentUseCases = (
     paymentAttemptRepository,
     paymentGateway,
     outboxWriter,
+    postOrderPaymentJournalsUseCase,
     transactionRunner,
     clock,
     logger,
@@ -360,12 +371,21 @@ export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
   const repositories = buildOrderRepositories(deps);
   const paymentGateway = new MockPaymentGateway(idGenerator);
   const { resolveCommissionUseCase, resolveTaxUseCase } = createPricingTaxModule({ prisma, clock });
+  // S3-7: built here for the same reason `pricing-tax` is — this module is
+  // the ledger's only caller, and the ledger publishes no router of its own.
+  // On `checkoutPrisma` because `leenmart_checkout` is the only role granted
+  // INSERT on the ledger tables.
+  const { postOrderPaymentJournalsUseCase } = createLedgerModule({
+    checkoutPrisma: deps.checkoutPrisma,
+    idGenerator,
+  });
 
   const useCases = buildOrderUseCases({
     repositories,
     paymentGateway,
     resolveCommissionUseCase,
     resolveTaxUseCase,
+    postOrderPaymentJournalsUseCase,
     idGenerator,
     clock,
     logger: moduleLogger,
