@@ -1,4 +1,4 @@
-import type { OrderResponse, PlaceOrderRequest } from '@leen-mart/contracts';
+import type { OrderResponse, OrderSummaryResponse, PlaceOrderRequest } from '@leen-mart/contracts';
 import type { SuccessEnvelope } from '@/shared/api/base-api';
 import { baseApi } from '@/shared/api/base-api';
 
@@ -31,7 +31,30 @@ export const checkoutApi = baseApi.injectEndpoints({
       transformResponse: (response: SuccessEnvelope<OrderResponse>) => response.data,
       providesTags: (_result, _error, orderId) => [{ type: 'Order', id: orderId }],
     }),
+    // "My Orders" (S3-4). A bare `'Order'` tag — invalidated by `placeOrder`'s
+    // own existing `invalidatesTags` without any change there, since RTK
+    // Query already treats a type-only invalidation as matching every
+    // id-scoped tag of that type too.
+    listOrders: builder.query<readonly OrderSummaryResponse[], void>({
+      query: () => '/orders',
+      transformResponse: (response: SuccessEnvelope<readonly OrderSummaryResponse[]>) =>
+        response.data,
+      providesTags: ['Order'],
+    }),
+    cancelOrder: builder.mutation<OrderResponse, string>({
+      query: (orderId) => ({
+        url: `/orders/${encodeURIComponent(orderId)}/cancel`,
+        method: 'POST',
+      }),
+      transformResponse: (response: SuccessEnvelope<OrderResponse>) => response.data,
+      invalidatesTags: ['Order'],
+    }),
   }),
 });
 
-export const { usePlaceOrderMutation, useGetOrderQuery } = checkoutApi;
+export const {
+  usePlaceOrderMutation,
+  useGetOrderQuery,
+  useListOrdersQuery,
+  useCancelOrderMutation,
+} = checkoutApi;

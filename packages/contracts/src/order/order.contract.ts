@@ -87,6 +87,21 @@ export const orderResponseSchema = z.object({
 });
 
 /**
+ * GET /api/v1/orders (S3-4, "My Orders"). Deliberately narrower than
+ * `orderResponseSchema` — no address, no sub-orders, no items — the same
+ * "enough to list, nothing more" discipline the admin KYC queue row already
+ * applies (`adminKycQueueItemSchema`). A list row exists to let the customer
+ * pick which order to open next; `GET /orders/:id` is still the only place
+ * the full snapshot is ever returned.
+ */
+export const orderSummaryResponseSchema = z.object({
+  id: uuidSchema,
+  status: orderStatusSchema,
+  totalAmount: moneySchema,
+  createdAt: isoDateTimeSchema,
+});
+
+/**
  * S3-3A defined this ahead of its first caller, exactly for S3-3B: the
  * response of `POST /api/v1/orders/:id/payment/initiate`. Unchanged from
  * its original shape — starting a payment attempt tells the caller nothing
@@ -120,5 +135,6 @@ export type OrderItemTaxDto = z.infer<typeof orderItemTaxSchema>;
 export type OrderItemResponse = z.infer<typeof orderItemResponseSchema>;
 export type SubOrderResponse = z.infer<typeof subOrderResponseSchema>;
 export type OrderResponse = z.infer<typeof orderResponseSchema>;
+export type OrderSummaryResponse = z.infer<typeof orderSummaryResponseSchema>;
 export type PaymentInitiationResponse = z.infer<typeof paymentInitiationResponseSchema>;
 export type ConfirmPaymentRequest = z.infer<typeof confirmPaymentRequestSchema>;

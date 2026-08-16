@@ -231,6 +231,7 @@ const orderRepo = (overrides: Partial<OrderRepository> = {}): OrderRepository =>
     withTransaction: () => repository,
     create: vi.fn(),
     findByIdAndCustomerId: vi.fn().mockResolvedValue(null),
+    findAllByCustomerId: vi.fn().mockResolvedValue([]),
     updateStatus: vi.fn(),
     ...overrides,
   };

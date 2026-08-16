@@ -1006,6 +1006,13 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
   {
     method: 'GET',
     prefix: '/api/v1/orders',
+    path: '/',
+    classification: 'SELF_SCOPED',
+    why: 'Lists only the caller’s own orders (S3-4, "My Orders"); takes no resource id.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/orders',
     path: '/:id',
     classification: 'TENANT_OWNED',
     why: 'Accepts a client-supplied order id and reads it.',

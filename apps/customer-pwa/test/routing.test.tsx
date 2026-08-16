@@ -37,6 +37,7 @@ const renderAt = (path: string, store: ReturnType<typeof createStore>): void => 
           <Route element={<RequireAuth />}>
             <Route path="/cart" element={<p>Cart page</p>} />
             <Route path="/checkout" element={<p>Checkout page</p>} />
+            <Route path="/orders" element={<p>Order history page</p>} />
             <Route path="/orders/:id" element={<p>Order confirmation page</p>} />
           </Route>
         </Routes>
@@ -87,5 +88,19 @@ describe('checkout and order confirmation route guarding (S3-3A)', () => {
     store.dispatch(sessionEstablished(SESSION));
     renderAt('/orders/00000000-0000-7000-8000-000000000099', store);
     expect(screen.getByText('Order confirmation page')).toBeInTheDocument();
+  });
+});
+
+describe('order history route guarding (S3-4)', () => {
+  it('redirects an anonymous visitor from /orders to /login', () => {
+    renderAt('/orders', createStore());
+    expect(screen.getByText('Login page')).toBeInTheDocument();
+  });
+
+  it('renders the order history page for an authenticated session', () => {
+    const store = createStore();
+    store.dispatch(sessionEstablished(SESSION));
+    renderAt('/orders', store);
+    expect(screen.getByText('Order history page')).toBeInTheDocument();
   });
 });

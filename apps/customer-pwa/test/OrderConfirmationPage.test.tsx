@@ -1,23 +1,32 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import type { OrderItemResponse, OrderResponse, SubOrderResponse } from '@leen-mart/contracts';
+import type {
+  OrderItemResponse,
+  OrderResponse,
+  OrderStatusDto,
+  SubOrderResponse,
+} from '@leen-mart/contracts';
 import { createStore } from '@/app/store';
 import { OrderConfirmationPage } from '@/pages/OrderConfirmationPage';
-import { useGetOrderQuery } from '@/features/checkout/checkout.api';
+import { useCancelOrderMutation, useGetOrderQuery } from '@/features/checkout/checkout.api';
 import {
   useConfirmPaymentMutation,
   useInitiatePaymentMutation,
 } from '@/features/payment/payment.api';
 
-vi.mock('@/features/checkout/checkout.api', () => ({ useGetOrderQuery: vi.fn() }));
+vi.mock('@/features/checkout/checkout.api', () => ({
+  useGetOrderQuery: vi.fn(),
+  useCancelOrderMutation: vi.fn(),
+}));
 vi.mock('@/features/payment/payment.api', () => ({
   useInitiatePaymentMutation: vi.fn(),
   useConfirmPaymentMutation: vi.fn(),
 }));
 
 const mockedUseGetOrderQuery = vi.mocked(useGetOrderQuery);
+const mockedUseCancelOrderMutation = vi.mocked(useCancelOrderMutation);
 const mockedUseInitiatePaymentMutation = vi.mocked(useInitiatePaymentMutation);
 const mockedUseConfirmPaymentMutation = vi.mocked(useConfirmPaymentMutation);
 
@@ -69,14 +78,24 @@ const order = (overrides: Partial<OrderResponse> = {}): OrderResponse => ({
 
 const renderOrderPage = (
   data: OrderResponse | undefined,
-  options: { isLoading?: boolean; isError?: boolean } = {},
-): void => {
+  options: {
+    isLoading?: boolean;
+    isError?: boolean;
+    cancelOrder?: ReturnType<typeof vi.fn>;
+    cancelState?: { isLoading?: boolean; error?: unknown };
+  } = {},
+): { cancelOrder: ReturnType<typeof vi.fn> } => {
+  const cancelOrder = options.cancelOrder ?? vi.fn();
   mockedUseGetOrderQuery.mockReturnValue({
     data,
     isLoading: options.isLoading ?? false,
     isError: options.isError ?? false,
     error: undefined,
   } as unknown as ReturnType<typeof useGetOrderQuery>);
+  mockedUseCancelOrderMutation.mockReturnValue([
+    cancelOrder,
+    { isLoading: options.cancelState?.isLoading ?? false, error: options.cancelState?.error },
+  ] as unknown as ReturnType<typeof useCancelOrderMutation>);
   mockedUseInitiatePaymentMutation.mockReturnValue([
     vi.fn(),
     { isLoading: false, error: undefined },
@@ -95,6 +114,8 @@ const renderOrderPage = (
       </MemoryRouter>
     </Provider>,
   );
+
+  return { cancelOrder };
 };
 
 describe('OrderConfirmationPage', () => {
@@ -158,5 +179,76 @@ describe('OrderConfirmationPage', () => {
 
     expect(screen.getByText(/Asha Rao/)).toBeInTheDocument();
     expect(screen.getByText(/221B Baker Street/)).toBeInTheDocument();
+  });
+
+  describe('cancel order (S3-4)', () => {
+    const cancellableStatuses: OrderStatusDto[] = ['PENDING_PAYMENT', 'CONFIRMED'];
+    const nonCancellableStatuses: OrderStatusDto[] = ['PROCESSING', 'CANCELLED'];
+
+    it.each(cancellableStatuses)('shows the cancel button while the order is %s', (status) => {
+      renderOrderPage(order({ status }));
+
+      expect(screen.getByRole('button', { name: 'Cancel order' })).toBeInTheDocument();
+    });
+
+    it.each(nonCancellableStatuses)('hides the cancel button once the order is %s', (status) => {
+      renderOrderPage(order({ status }));
+
+      expect(screen.queryByRole('button', { name: 'Cancel order' })).not.toBeInTheDocument();
+    });
+
+    it('shows a loading state while cancelling', () => {
+      renderOrderPage(order({ status: 'PENDING_PAYMENT' }), {
+        cancelState: { isLoading: true },
+      });
+
+      expect(screen.getByRole('button', { name: 'Cancelling…' })).toBeDisabled();
+    });
+
+    it('calls the cancel mutation with the order id on click', () => {
+      const { cancelOrder } = renderOrderPage(order({ status: 'PENDING_PAYMENT' }));
+      cancelOrder.mockReturnValue({
+        unwrap: () => Promise.resolve(order({ status: 'CANCELLED' })),
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel order' }));
+
+      expect(cancelOrder).toHaveBeenCalledWith('order-1');
+    });
+
+    it('surfaces a cancellation error without claiming the order was cancelled', async () => {
+      const { cancelOrder } = renderOrderPage(order({ status: 'PENDING_PAYMENT' }), {
+        cancelState: {
+          error: {
+            status: 422,
+            data: {
+              error: {
+                code: 'ORDER_CANCELLATION_NOT_ALLOWED',
+                message: 'This order can no longer be cancelled.',
+              },
+            },
+          },
+        },
+      });
+      cancelOrder.mockReturnValue({
+        unwrap: () =>
+          Promise.reject(
+            Object.assign(new Error('rejected'), {
+              status: 422,
+              data: {
+                error: {
+                  code: 'ORDER_CANCELLATION_NOT_ALLOWED',
+                  message: 'This order can no longer be cancelled.',
+                },
+              },
+            }),
+          ),
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel order' }));
+
+      await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+      expect(screen.getByRole('alert')).toHaveTextContent('This order can no longer be cancelled.');
+    });
   });
 });

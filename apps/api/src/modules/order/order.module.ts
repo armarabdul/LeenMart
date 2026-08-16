@@ -16,6 +16,7 @@ import { IdempotencyKeyRepository } from '../../shared/infrastructure/persistenc
 import { PrismaOutboxWriter } from '../../shared/infrastructure/persistence/prisma-outbox-writer.js';
 import { PlaceOrderUseCase } from './application/use-cases/place-order.use-case.js';
 import { GetOrderUseCase } from './application/use-cases/get-order.use-case.js';
+import { ListOrdersUseCase } from './application/use-cases/list-orders.use-case.js';
 import { CancelOrderUseCase } from './application/use-cases/cancel-order.use-case.js';
 import { InitiatePaymentUseCase } from './application/use-cases/initiate-payment.use-case.js';
 import { ConfirmPaymentUseCase } from './application/use-cases/confirm-payment.use-case.js';
@@ -89,6 +90,7 @@ const buildOrderRepositories = (
 interface OrderUseCases {
   readonly placeOrderUseCase: PlaceOrderUseCase;
   readonly getOrderUseCase: GetOrderUseCase;
+  readonly listOrdersUseCase: ListOrdersUseCase;
   readonly cancelOrderUseCase: CancelOrderUseCase;
   readonly initiatePaymentUseCase: InitiatePaymentUseCase;
   readonly confirmPaymentUseCase: ConfirmPaymentUseCase;
@@ -104,10 +106,13 @@ interface BuildOrderUseCasesDeps {
   readonly logger: Logger;
 }
 
-/** `PlaceOrderUseCase`/`GetOrderUseCase`/`CancelOrderUseCase` — split out of `buildOrderUseCases` purely to keep every function under this file's line budget. */
+/** `PlaceOrderUseCase`/`GetOrderUseCase`/`ListOrdersUseCase`/`CancelOrderUseCase` — split out of `buildOrderUseCases` purely to keep every function under this file's line budget. */
 const buildCheckoutUseCases = (
   deps: BuildOrderUseCasesDeps,
-): Pick<OrderUseCases, 'placeOrderUseCase' | 'getOrderUseCase' | 'cancelOrderUseCase'> => {
+): Pick<
+  OrderUseCases,
+  'placeOrderUseCase' | 'getOrderUseCase' | 'listOrdersUseCase' | 'cancelOrderUseCase'
+> => {
   const { repositories, resolveCommissionUseCase, resolveTaxUseCase, idGenerator, clock, logger } =
     deps;
   const {
@@ -141,6 +146,7 @@ const buildCheckoutUseCases = (
     logger,
   });
   const getOrderUseCase = new GetOrderUseCase({ orderRepository });
+  const listOrdersUseCase = new ListOrdersUseCase({ orderRepository });
   const cancelOrderUseCase = new CancelOrderUseCase({
     orderRepository,
     inventoryRepository,
@@ -150,7 +156,7 @@ const buildCheckoutUseCases = (
     logger,
   });
 
-  return { placeOrderUseCase, getOrderUseCase, cancelOrderUseCase };
+  return { placeOrderUseCase, getOrderUseCase, listOrdersUseCase, cancelOrderUseCase };
 };
 
 /** `InitiatePaymentUseCase`/`ConfirmPaymentUseCase` (S3-3B) — split out for the same reason as `buildCheckoutUseCases`. */

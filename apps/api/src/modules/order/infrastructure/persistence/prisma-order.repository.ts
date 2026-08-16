@@ -1,11 +1,11 @@
 import type { PrismaClient, Prisma } from '@prisma/client';
 import { Money, type TransactionScope } from '@leen-mart/domain-kit';
 import { toProductId, toProductVariantId } from '../../../catalogue/index.js';
-import { toUserId, toVendorId } from '../../../identity/index.js';
+import { toUserId, toVendorId, type UserId } from '../../../identity/index.js';
 import { Order, type OrderAddressSnapshot } from '../../domain/entities/order.entity.js';
 import { OrderItem, type TaxSnapshot } from '../../domain/entities/order-item.entity.js';
 import { SubOrder } from '../../domain/entities/sub-order.entity.js';
-import type { OrderRepository } from '../../domain/repositories/order.repository.js';
+import type { OrderRepository, OrderSummary } from '../../domain/repositories/order.repository.js';
 import { toOrderId, type OrderId } from '../../domain/value-objects/order-id.value-object.js';
 import { toOrderItemId } from '../../domain/value-objects/order-item-id.value-object.js';
 import { toSubOrderId } from '../../domain/value-objects/sub-order-id.value-object.js';
@@ -86,6 +86,19 @@ const toDomain = (row: OrderRow): Order => {
     updatedAt: row.updatedAt,
   });
 };
+
+const toSummary = (row: {
+  id: string;
+  status: string;
+  totalAmount: bigint;
+  totalCurrency: string;
+  createdAt: Date;
+}): OrderSummary => ({
+  id: toOrderId(row.id),
+  status: OrderStatus.fromName(row.status),
+  totalAmount: Money.fromMinor(row.totalAmount, row.totalCurrency as 'INR'),
+  createdAt: row.createdAt,
+});
 
 /**
  * `orders`/`sub_orders`/`order_items` (S3-3A). Bound to `leenmart_checkout` —
@@ -168,6 +181,17 @@ export class PrismaOrderRepository implements OrderRepository {
       include: { subOrders: { include: { items: true } } },
     });
     return row ? toDomain(row) : null;
+  }
+
+  /** No `include` at all — the summary row needs none of `subOrders`/items, so the query never fetches them (S3-4). */
+  async findAllByCustomerId(customerId: UserId, limit: number): Promise<readonly OrderSummary[]> {
+    const rows = await this.prisma.order.findMany({
+      where: { customerId },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit,
+      select: { id: true, status: true, totalAmount: true, totalCurrency: true, createdAt: true },
+    });
+    return rows.map(toSummary);
   }
 
   /**

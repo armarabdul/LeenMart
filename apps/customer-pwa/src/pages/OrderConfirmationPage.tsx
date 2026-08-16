@@ -1,14 +1,11 @@
 import { Link, useParams } from 'react-router-dom';
-import type {
-  OrderItemResponse,
-  OrderResponse,
-  OrderStatusDto,
-  SubOrderResponse,
-} from '@leen-mart/contracts';
+import type { OrderItemResponse, OrderResponse, SubOrderResponse } from '@leen-mart/contracts';
 import { apiErrorMessage } from '@/shared/api/base-api';
 import { formatMoney } from '@/shared/lib/format-money';
+import { ORDER_STATUS_LABEL } from '@/shared/lib/order-status-label';
 import { useGetOrderQuery } from '@/features/checkout/checkout.api';
 import { TestPaymentPanel } from '@/features/payment/components/TestPaymentPanel';
+import { CancelOrderButton } from '@/features/checkout/components/CancelOrderButton';
 
 const OrderSkeleton = (): JSX.Element => (
   <div className="flex flex-col gap-4">
@@ -17,13 +14,6 @@ const OrderSkeleton = (): JSX.Element => (
     ))}
   </div>
 );
-
-const STATUS_LABEL: Record<OrderStatusDto, string> = {
-  PENDING_PAYMENT: 'Payment pending',
-  CONFIRMED: 'Confirmed',
-  PROCESSING: 'Processing',
-  CANCELLED: 'Cancelled',
-};
 
 /**
  * Every figure here comes straight from the order's own stored snapshot
@@ -50,7 +40,9 @@ const SubOrderCard = ({ subOrder }: { readonly subOrder: SubOrderResponse }): JS
   <div className="rounded-lg border border-slate-200 bg-white p-4">
     <div className="flex items-center justify-between">
       <h3 className="text-sm font-semibold text-slate-900">Sold by {subOrder.vendorShopName}</h3>
-      <span className="text-xs font-medium text-slate-500">{STATUS_LABEL[subOrder.status]}</span>
+      <span className="text-xs font-medium text-slate-500">
+        {ORDER_STATUS_LABEL[subOrder.status]}
+      </span>
     </div>
     <ul className="divide-y divide-slate-100">
       {subOrder.items.map((item) => (
@@ -113,10 +105,17 @@ export const OrderConfirmationPage = (): JSX.Element => {
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8">
       <header className="flex flex-col gap-1">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">Order placed</h1>
-        <p className="text-sm text-slate-600">
-          Order <span className="font-mono">{order.id}</span>
-        </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-bold tracking-tight text-slate-900">Order placed</h1>
+            <p className="text-sm text-slate-600">
+              Order <span className="font-mono">{order.id}</span>
+            </p>
+          </div>
+          {(order.status === 'PENDING_PAYMENT' || order.status === 'CONFIRMED') && (
+            <CancelOrderButton orderId={order.id} />
+          )}
+        </div>
       </header>
 
       {order.status === 'PENDING_PAYMENT' && <TestPaymentPanel orderId={order.id} />}
@@ -130,7 +129,7 @@ export const OrderConfirmationPage = (): JSX.Element => {
 
       <section className="flex flex-col gap-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Items ({STATUS_LABEL[order.status]})
+          Items ({ORDER_STATUS_LABEL[order.status]})
         </h2>
         <div className="flex flex-col gap-3">
           {order.subOrders.map((subOrder) => (

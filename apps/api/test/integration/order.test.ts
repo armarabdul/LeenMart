@@ -47,6 +47,14 @@ interface ErrorBody {
 interface PaymentInitiationBody {
   readonly data: { orderId: string; status: string };
 }
+interface OrderSummaryListBody {
+  readonly data: {
+    id: string;
+    status: string;
+    totalAmount: { amount: string };
+    createdAt: string;
+  }[];
+}
 
 describe('order', () => {
   let harness: IntegrationHarness;
@@ -410,6 +418,64 @@ describe('order', () => {
         key,
       ).expect(409);
       expect((response.body as ErrorBody).error.code).toBe('IDEMPOTENCY_KEY_REUSED');
+    });
+  });
+
+  describe('GET /api/v1/orders — My Orders (S3-4)', () => {
+    it('returns the caller’s own orders, newest first', async () => {
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'list-basic');
+      const { variantId } = await seedVendorWithStock('shared');
+      const addressId = await addAddress(customer);
+
+      await addToCart(customer, variantId, 1).expect(201);
+      const first = await placeOrder(customer, { addressId, paymentMethod: 'ONLINE' }).expect(201);
+      await addToCart(customer, variantId, 1).expect(201);
+      const second = await placeOrder(customer, { addressId, paymentMethod: 'ONLINE' }).expect(201);
+
+      const response = await request(app)
+        .get('/api/v1/orders')
+        .set('Authorization', auth(customer))
+        .expect(200);
+      const body = (response.body as OrderSummaryListBody).data;
+
+      const firstId = (first.body as OrderBody).data.id;
+      const secondId = (second.body as OrderBody).data.id;
+      expect(body[0]?.id).toBe(secondId);
+      expect(body[1]?.id).toBe(firstId);
+      expect(body.every((row) => row.status === 'PENDING_PAYMENT')).toBe(true);
+      expect(body[0]?.totalAmount.amount).toBe('19900');
+      expect(typeof body[0]?.createdAt).toBe('string');
+    });
+
+    it('returns an empty list for a customer with no orders', async () => {
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'list-empty');
+
+      const response = await request(app)
+        .get('/api/v1/orders')
+        .set('Authorization', auth(customer))
+        .expect(200);
+
+      expect((response.body as OrderSummaryListBody).data).toEqual([]);
+    });
+
+    it('never returns another customer’s orders (SEC-06)', async () => {
+      const owner = await signUpCustomer(app, EMAIL_PREFIX, 'list-owner');
+      const attacker = await signUpCustomer(app, EMAIL_PREFIX, 'list-attacker');
+      const { variantId } = await seedVendorWithStock('shared');
+      await addToCart(owner, variantId, 1).expect(201);
+      const addressId = await addAddress(owner);
+      await placeOrder(owner, { addressId, paymentMethod: 'ONLINE' }).expect(201);
+
+      const response = await request(app)
+        .get('/api/v1/orders')
+        .set('Authorization', auth(attacker))
+        .expect(200);
+
+      expect((response.body as OrderSummaryListBody).data).toEqual([]);
+    });
+
+    it('requires authentication', async () => {
+      await request(app).get('/api/v1/orders').expect(401);
     });
   });
 

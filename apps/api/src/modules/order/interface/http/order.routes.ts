@@ -56,6 +56,17 @@ export const createOrderRouter = (controller: OrderController, deps: OrderRouter
     asyncHandler(controller.placeOrder),
   );
 
+  // S3-4: "My Orders" — no params to validate, the same shape `GET /me/cart`
+  // already uses for a no-resource-id read. Mounted before `GET /:id` for
+  // readability; Express treats `/` and `/:id` as distinct patterns, so
+  // there is no ordering ambiguity between the two.
+  router.get(
+    '/',
+    authenticate(accessTokenService, sessionDenylist),
+    requirePermission('VIEW_OWN_ORDERS'),
+    asyncHandler(controller.listOrders),
+  );
+
   router.get(
     '/:id',
     authenticate(accessTokenService, sessionDenylist),

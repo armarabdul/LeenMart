@@ -3,6 +3,7 @@ import type {
   ConfirmPaymentRequest,
   OrderItemResponse,
   OrderResponse,
+  OrderSummaryResponse,
   PaymentInitiationResponse,
   PlaceOrderRequest,
   SubOrderResponse,
@@ -13,17 +14,20 @@ import type { Order } from '../../domain/entities/order.entity.js';
 import type { OrderItem } from '../../domain/entities/order-item.entity.js';
 import type { PaymentAttempt } from '../../domain/entities/payment-attempt.entity.js';
 import type { SubOrder } from '../../domain/entities/sub-order.entity.js';
+import type { OrderSummary } from '../../domain/repositories/order.repository.js';
 import { toAddressId } from '../../../customer/index.js';
 import { toOrderId } from '../../domain/value-objects/order-id.value-object.js';
 import type { CancelOrderUseCase } from '../../application/use-cases/cancel-order.use-case.js';
 import type { ConfirmPaymentUseCase } from '../../application/use-cases/confirm-payment.use-case.js';
 import type { GetOrderUseCase } from '../../application/use-cases/get-order.use-case.js';
 import type { InitiatePaymentUseCase } from '../../application/use-cases/initiate-payment.use-case.js';
+import type { ListOrdersUseCase } from '../../application/use-cases/list-orders.use-case.js';
 import type { PlaceOrderUseCase } from '../../application/use-cases/place-order.use-case.js';
 
 export interface OrderController {
   readonly placeOrder: (req: Request, res: Response) => Promise<void>;
   readonly getOrder: (req: Request, res: Response) => Promise<void>;
+  readonly listOrders: (req: Request, res: Response) => Promise<void>;
   readonly cancelOrder: (req: Request, res: Response) => Promise<void>;
   readonly initiatePayment: (req: Request, res: Response) => Promise<void>;
   readonly confirmPayment: (req: Request, res: Response) => Promise<void>;
@@ -32,6 +36,7 @@ export interface OrderController {
 export interface OrderControllerDeps {
   readonly placeOrderUseCase: PlaceOrderUseCase;
   readonly getOrderUseCase: GetOrderUseCase;
+  readonly listOrdersUseCase: ListOrdersUseCase;
   readonly cancelOrderUseCase: CancelOrderUseCase;
   readonly initiatePaymentUseCase: InitiatePaymentUseCase;
   readonly confirmPaymentUseCase: ConfirmPaymentUseCase;
@@ -100,6 +105,14 @@ const toPaymentInitiationResponse = (attempt: PaymentAttempt): PaymentInitiation
   status: 'PAYMENT_PENDING',
 });
 
+/** S3-4 "My Orders" row — mapped from the repository's own narrow `OrderSummary`, never a full `Order`. */
+const toOrderSummaryResponse = (summary: OrderSummary): OrderSummaryResponse => ({
+  id: summary.id,
+  status: summary.status.name,
+  totalAmount: summary.totalAmount.toJSON(),
+  createdAt: summary.createdAt.toISOString(),
+});
+
 /**
  * Every handler below is split out of `createOrderController` purely to keep
  * that composition root under this file's max-lines-per-function budget —
@@ -143,6 +156,22 @@ const getOrderHandler =
     });
 
     res.status(200).json({ data: toOrderResponse(order), meta: { requestId: getRequestId() } });
+  };
+
+const listOrdersHandler =
+  (deps: OrderControllerDeps) =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'GET /orders reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+
+    const orders = await deps.listOrdersUseCase.execute({ principal: req.principal });
+
+    res
+      .status(200)
+      .json({ data: orders.map(toOrderSummaryResponse), meta: { requestId: getRequestId() } });
   };
 
 const cancelOrderHandler =
@@ -205,6 +234,7 @@ const confirmPaymentHandler =
 export const createOrderController = (deps: OrderControllerDeps): OrderController => ({
   placeOrder: placeOrderHandler(deps),
   getOrder: getOrderHandler(deps),
+  listOrders: listOrdersHandler(deps),
   cancelOrder: cancelOrderHandler(deps),
   initiatePayment: initiatePaymentHandler(deps),
   confirmPayment: confirmPaymentHandler(deps),
