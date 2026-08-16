@@ -31,16 +31,23 @@ export interface SubOrderProps {
 }
 
 /**
- * Same four-state model as `Order` (S3-3A decision D-S3-06: "use the same
- * state model consistently for Order and SubOrder"). `PROCESSING` is a
- * genuinely per-vendor fact here (SDD 6.3: "N independent fulfilment
- * lifecycles") — this is the level a real "vendor starts processing"
- * action would eventually transition, though no HTTP caller reaches it in
- * S3-3A (vendor-portal/fulfilment work, out of this milestone's scope).
+ * Same shared state model as `Order` (S3-3A decision D-S3-06: "use the same
+ * state model consistently for Order and SubOrder"; widened S3-6). Every
+ * transition here is a genuinely per-vendor fact (SDD 6.3: "N independent
+ * fulfilment lifecycles") — `PROCESSING`/`SHIPPED`/`DELIVERED` are all
+ * vendor-initiated, delivery-mode-only transitions (S3-6 locked decision #1:
+ * no pickup mode exists in this codebase).
+ *
+ * `SHIP`/`DELIVER` only accept their single immediate predecessor
+ * (`PROCESSING`/`SHIPPED` respectively) — S3-6 locked decision #11
+ * explicitly forbids skip-state transitions such as `CONFIRMED -> SHIPPED`
+ * or `PROCESSING -> DELIVERED`.
  */
 const TRANSITIONS = {
   CONFIRM: { from: ['PENDING_PAYMENT'], to: OrderStatus.CONFIRMED },
   START_PROCESSING: { from: ['CONFIRMED'], to: OrderStatus.PROCESSING },
+  SHIP: { from: ['PROCESSING'], to: OrderStatus.SHIPPED },
+  DELIVER: { from: ['SHIPPED'], to: OrderStatus.DELIVERED },
   CANCEL: { from: ['PENDING_PAYMENT', 'CONFIRMED'], to: OrderStatus.CANCELLED },
 } satisfies Record<string, { from: readonly OrderStatusName[]; to: OrderStatus }>;
 
@@ -137,6 +144,16 @@ export class SubOrder {
   /** Vendor-initiated (S3-5): `POST /api/v1/vendor/orders/:id/process`, via `StartProcessingUseCase`. */
   startProcessing(now: Date): SubOrder {
     return this.transition('START_PROCESSING', now);
+  }
+
+  /** Vendor-initiated (S3-6): `POST /api/v1/vendor/orders/:id/ship`, via `ShipSubOrderUseCase`. */
+  ship(now: Date): SubOrder {
+    return this.transition('SHIP', now);
+  }
+
+  /** Vendor-initiated (S3-6): `POST /api/v1/vendor/orders/:id/deliver`, via `DeliverSubOrderUseCase`. */
+  deliver(now: Date): SubOrder {
+    return this.transition('DELIVER', now);
   }
 
   cancel(now: Date): SubOrder {

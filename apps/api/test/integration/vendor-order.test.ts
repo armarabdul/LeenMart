@@ -52,7 +52,7 @@ interface VendorSubOrderBody {
   };
 }
 
-describe('vendor order (S3-5)', () => {
+describe('vendor order (S3-5, extended S3-6: ship/deliver)', () => {
   let harness: IntegrationHarness;
   let app: Express;
   let db: PrismaClient;
@@ -67,6 +67,27 @@ describe('vendor order (S3-5)', () => {
     const vendor = await signUpVendorOwner(app, EMAIL_PREFIX, label);
     vendorCache.set(label, vendor);
     return vendor;
+  };
+
+  /**
+   * S3-6: same caching idea as `vendorFor`, for customers. The original
+   * S3-5 tests each mint a fresh customer per test — fine at 18 tests, but
+   * S3-6's ship/deliver additions roughly double the suite, and each
+   * `signUpCustomer`/`signUpVendorOwner` call costs a login against the
+   * shared `LOGIN_PER_IP` budget (20/min) every integration test in this
+   * process shares. A single cached actor per role, reused across every new
+   * S3-6 test, is correct here: each test still gets its own fresh
+   * product/order/sub-order (the actual thing under test), and nothing in
+   * S3-6 tests actor *identity* uniqueness the way `list-isolation`/
+   * `get-isolation`'s own distinct-attacker tests genuinely need to.
+   */
+  const customerCache = new Map<string, Actor>();
+  const customerFor = async (label: string): Promise<Actor> => {
+    const cached = customerCache.get(label);
+    if (cached) return cached;
+    const customer = await signUpCustomer(app, EMAIL_PREFIX, label);
+    customerCache.set(label, customer);
+    return customer;
   };
 
   /** ACTIVE vendor, APPROVED product with stock — mirrors `order.test.ts`'s own `seedVendorWithStock`. */
@@ -144,6 +165,32 @@ describe('vendor order (S3-5)', () => {
 
     const subOrderRow = await db.subOrder.findFirstOrThrow({ where: { orderId } });
     return { orderId, subOrderId: subOrderRow.id, vendor };
+  };
+
+  /** `placeConfirmedOrder` + `POST .../process` — the shared starting point for S3-6's ship/deliver tests. */
+  const placeProcessingOrder = async (
+    customer: Actor,
+    vendorLabel: string,
+  ): Promise<{ orderId: string; subOrderId: string; vendor: VendorActor }> => {
+    const result = await placeConfirmedOrder(customer, vendorLabel);
+    await request(app)
+      .post(`/api/v1/vendor/orders/${result.subOrderId}/process`)
+      .set('Authorization', auth(result.vendor))
+      .expect(200);
+    return result;
+  };
+
+  /** `placeProcessingOrder` + `POST .../ship` — the shared starting point for S3-6's deliver tests. */
+  const placeShippedOrder = async (
+    customer: Actor,
+    vendorLabel: string,
+  ): Promise<{ orderId: string; subOrderId: string; vendor: VendorActor }> => {
+    const result = await placeProcessingOrder(customer, vendorLabel);
+    await request(app)
+      .post(`/api/v1/vendor/orders/${result.subOrderId}/ship`)
+      .set('Authorization', auth(result.vendor))
+      .expect(200);
+    return result;
   };
 
   beforeAll(async () => {
@@ -400,13 +447,257 @@ describe('vendor order (S3-5)', () => {
     });
   });
 
+  describe('POST /api/v1/vendor/orders/:id/ship (S3-6)', () => {
+    it('moves a PROCESSING sub-order to SHIPPED, without touching the parent Order or inventory', async () => {
+      const customer = await customerFor('s36-shared-customer');
+      const { orderId, subOrderId, vendor } = await placeProcessingOrder(customer, 's36-owner');
+      const variantRow = await db.orderItem.findFirstOrThrow({ where: { subOrderId } });
+      const inventoryBefore = await db.inventory.findUniqueOrThrow({
+        where: { variantId: variantRow.variantId },
+      });
+
+      const response = await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/ship`)
+        .set('Authorization', auth(vendor))
+        .expect(200);
+
+      expect((response.body as VendorSubOrderBody).data.status).toBe('SHIPPED');
+
+      const subOrderRow = await db.subOrder.findUniqueOrThrow({ where: { id: subOrderId } });
+      expect(subOrderRow.status).toBe('SHIPPED');
+      // version 1 at creation, +1 ConfirmPaymentUseCase (CONFIRMED), +1
+      // process (PROCESSING), +1 this ship call.
+      expect(subOrderRow.version).toBe(4);
+
+      // Locked decision #7: the parent Order.status is untouched.
+      const orderRow = await db.order.findUniqueOrThrow({ where: { id: orderId } });
+      expect(orderRow.status).toBe('CONFIRMED');
+
+      // Locked decision #17: inventory is untouched by fulfilment transitions.
+      const inventoryAfter = await db.inventory.findUniqueOrThrow({
+        where: { variantId: variantRow.variantId },
+      });
+      expect(inventoryAfter.available).toBe(inventoryBefore.available);
+      expect(inventoryAfter.reserved).toBe(inventoryBefore.reserved);
+    });
+
+    it('writes exactly one sub_order.shipped outbox event', async () => {
+      const customer = await customerFor('s36-shared-customer');
+      const { subOrderId, vendor } = await placeProcessingOrder(customer, 's36-owner');
+
+      await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/ship`)
+        .set('Authorization', auth(vendor))
+        .expect(200);
+
+      const events = await db.outboxEvent.findMany({
+        where: { aggregateId: subOrderId, eventType: 'sub_order.shipped' },
+      });
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ aggregateType: 'SubOrder' });
+    });
+
+    it('writes an audit log entry for the transition', async () => {
+      const customer = await customerFor('s36-shared-customer');
+      const { subOrderId, vendor } = await placeProcessingOrder(customer, 's36-owner');
+
+      await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/ship`)
+        .set('Authorization', auth(vendor))
+        .expect(200);
+
+      const entries = await db.auditLog.findMany({
+        where: { entityId: subOrderId, action: 'sub_order.shipped' },
+      });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ actorId: vendor.userId, entityType: 'SubOrder' });
+    });
+
+    it('404s for another vendor’s sub-order — never reveals it exists', async () => {
+      const customer = await customerFor('s36-shared-customer');
+      const { subOrderId } = await placeProcessingOrder(customer, 's36-owner');
+      const attacker = await vendorFor('s36-attacker');
+      await db.vendorProfile.update({
+        where: { id: attacker.vendorId },
+        data: { status: 'ACTIVE' },
+      });
+
+      await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/ship`)
+        .set('Authorization', auth(attacker))
+        .expect(404);
+
+      const row = await db.subOrder.findUniqueOrThrow({ where: { id: subOrderId } });
+      expect(row.status).toBe('PROCESSING');
+    });
+
+    it('422s for a sub-order still CONFIRMED (skip-state, not yet processing)', async () => {
+      const customer = await customerFor('s36-shared-customer');
+      const { subOrderId, vendor } = await placeConfirmedOrder(customer, 's36-owner');
+
+      const response = await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/ship`)
+        .set('Authorization', auth(vendor))
+        .expect(422);
+
+      expect((response.body as ErrorBody).error.code).toBe('ORDER_INVALID_STATUS_TRANSITION');
+    });
+
+    it('422s on a second, repeated ship call — cannot re-ship an already-SHIPPED sub-order', async () => {
+      const customer = await customerFor('s36-shared-customer');
+      const { subOrderId, vendor } = await placeProcessingOrder(customer, 's36-owner');
+
+      await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/ship`)
+        .set('Authorization', auth(vendor))
+        .expect(200);
+
+      const response = await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/ship`)
+        .set('Authorization', auth(vendor))
+        .expect(422);
+      expect((response.body as ErrorBody).error.code).toBe('ORDER_INVALID_STATUS_TRANSITION');
+    });
+
+    it('422s VENDOR_NOT_ACTIVE for a vendor who has not been activated', async () => {
+      const inactiveVendor = await vendorFor('s36-inactive');
+
+      await request(app)
+        .post(`/api/v1/vendor/orders/${randomUUID()}/ship`)
+        .set('Authorization', auth(inactiveVendor))
+        .expect(422)
+        .expect((res) => {
+          expect((res.body as ErrorBody).error.code).toBe('VENDOR_NOT_ACTIVE');
+        });
+    });
+  });
+
+  describe('POST /api/v1/vendor/orders/:id/deliver (S3-6)', () => {
+    it('moves a SHIPPED sub-order to DELIVERED, without touching the parent Order or inventory', async () => {
+      const customer = await customerFor('s36-shared-customer');
+      const { orderId, subOrderId, vendor } = await placeShippedOrder(customer, 's36-owner');
+      const variantRow = await db.orderItem.findFirstOrThrow({ where: { subOrderId } });
+      const inventoryBefore = await db.inventory.findUniqueOrThrow({
+        where: { variantId: variantRow.variantId },
+      });
+
+      const response = await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/deliver`)
+        .set('Authorization', auth(vendor))
+        .expect(200);
+
+      expect((response.body as VendorSubOrderBody).data.status).toBe('DELIVERED');
+
+      const subOrderRow = await db.subOrder.findUniqueOrThrow({ where: { id: subOrderId } });
+      expect(subOrderRow.status).toBe('DELIVERED');
+      // version 1 at creation, +1 confirm, +1 process, +1 ship, +1 this deliver call.
+      expect(subOrderRow.version).toBe(5);
+
+      const orderRow = await db.order.findUniqueOrThrow({ where: { id: orderId } });
+      expect(orderRow.status).toBe('CONFIRMED');
+
+      const inventoryAfter = await db.inventory.findUniqueOrThrow({
+        where: { variantId: variantRow.variantId },
+      });
+      expect(inventoryAfter.available).toBe(inventoryBefore.available);
+      expect(inventoryAfter.reserved).toBe(inventoryBefore.reserved);
+    });
+
+    it('writes exactly one sub_order.delivered outbox event', async () => {
+      const customer = await customerFor('s36-shared-customer');
+      const { subOrderId, vendor } = await placeShippedOrder(customer, 's36-owner');
+
+      await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/deliver`)
+        .set('Authorization', auth(vendor))
+        .expect(200);
+
+      const events = await db.outboxEvent.findMany({
+        where: { aggregateId: subOrderId, eventType: 'sub_order.delivered' },
+      });
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ aggregateType: 'SubOrder' });
+    });
+
+    it('writes an audit log entry for the transition', async () => {
+      const customer = await customerFor('s36-shared-customer');
+      const { subOrderId, vendor } = await placeShippedOrder(customer, 's36-owner');
+
+      await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/deliver`)
+        .set('Authorization', auth(vendor))
+        .expect(200);
+
+      const entries = await db.auditLog.findMany({
+        where: { entityId: subOrderId, action: 'sub_order.delivered' },
+      });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ actorId: vendor.userId, entityType: 'SubOrder' });
+    });
+
+    it('404s for another vendor’s sub-order — never reveals it exists', async () => {
+      const customer = await customerFor('s36-shared-customer');
+      const { subOrderId } = await placeShippedOrder(customer, 's36-owner');
+      const attacker = await vendorFor('s36-attacker');
+      await db.vendorProfile.update({
+        where: { id: attacker.vendorId },
+        data: { status: 'ACTIVE' },
+      });
+
+      await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/deliver`)
+        .set('Authorization', auth(attacker))
+        .expect(404);
+
+      const row = await db.subOrder.findUniqueOrThrow({ where: { id: subOrderId } });
+      expect(row.status).toBe('SHIPPED');
+    });
+
+    it('422s for a sub-order still PROCESSING (skip-state, not yet shipped)', async () => {
+      const customer = await customerFor('s36-shared-customer');
+      const { subOrderId, vendor } = await placeProcessingOrder(customer, 's36-owner');
+
+      const response = await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/deliver`)
+        .set('Authorization', auth(vendor))
+        .expect(422);
+
+      expect((response.body as ErrorBody).error.code).toBe('ORDER_INVALID_STATUS_TRANSITION');
+    });
+
+    it('422s on a second, repeated deliver call — DELIVERED is terminal', async () => {
+      const customer = await customerFor('s36-shared-customer');
+      const { subOrderId, vendor } = await placeShippedOrder(customer, 's36-owner');
+
+      await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/deliver`)
+        .set('Authorization', auth(vendor))
+        .expect(200);
+
+      const response = await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/deliver`)
+        .set('Authorization', auth(vendor))
+        .expect(422);
+      expect((response.body as ErrorBody).error.code).toBe('ORDER_INVALID_STATUS_TRANSITION');
+    });
+
+    it('422s VENDOR_NOT_ACTIVE for a vendor who has not been activated', async () => {
+      const inactiveVendor = await vendorFor('s36-inactive');
+
+      await request(app)
+        .post(`/api/v1/vendor/orders/${randomUUID()}/deliver`)
+        .set('Authorization', auth(inactiveVendor))
+        .expect(422)
+        .expect((res) => {
+          expect((res.body as ErrorBody).error.code).toBe('VENDOR_NOT_ACTIVE');
+        });
+    });
+  });
+
   describe('customer cancellation vs. vendor processing (locked decision — invariant check)', () => {
     it('blocks the customer’s cancel once the vendor has started processing', async () => {
-      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'invariant-customer');
-      const { orderId, subOrderId, vendor } = await placeConfirmedOrder(
-        customer,
-        'invariant-owner',
-      );
+      const customer = await customerFor('s36-shared-customer');
+      const { orderId, subOrderId, vendor } = await placeConfirmedOrder(customer, 's36-owner');
 
       await request(app)
         .post(`/api/v1/vendor/orders/${subOrderId}/process`)
@@ -424,8 +715,8 @@ describe('vendor order (S3-5)', () => {
     });
 
     it('still allows cancellation while the sub-order is only CONFIRMED (not yet processing)', async () => {
-      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'invariant-precheck-customer');
-      const { orderId } = await placeConfirmedOrder(customer, 'invariant-precheck-owner');
+      const customer = await customerFor('s36-shared-customer');
+      const { orderId } = await placeConfirmedOrder(customer, 's36-owner');
 
       const response = await request(app)
         .post(`/api/v1/orders/${orderId}/cancel`)
@@ -433,12 +724,70 @@ describe('vendor order (S3-5)', () => {
         .expect(200);
       expect((response.body as OrderBody).data.status).toBe('CANCELLED');
     });
+
+    // S3-6 locked decision #16 — the allow-list fix in
+    // `Order.canBeCancelledByCustomer()` must keep refusing cancellation past
+    // PROCESSING for the two new terminal-ward states too, and must never
+    // restore inventory when it refuses.
+    it('blocks the customer’s cancel once the vendor has shipped, and never restores inventory', async () => {
+      const customer = await customerFor('s36-shared-customer');
+      const { orderId, subOrderId, vendor } = await placeProcessingOrder(customer, 's36-owner');
+      const variantRow = await db.orderItem.findFirstOrThrow({ where: { subOrderId } });
+      const inventoryBefore = await db.inventory.findUniqueOrThrow({
+        where: { variantId: variantRow.variantId },
+      });
+
+      await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/ship`)
+        .set('Authorization', auth(vendor))
+        .expect(200);
+
+      const response = await request(app)
+        .post(`/api/v1/orders/${orderId}/cancel`)
+        .set('Authorization', auth(customer))
+        .expect(422);
+      expect((response.body as ErrorBody).error.code).toBe('ORDER_CANCELLATION_NOT_ALLOWED');
+
+      const order = await db.order.findUniqueOrThrow({ where: { id: orderId } });
+      expect(order.status).toBe('CONFIRMED');
+      const inventoryAfter = await db.inventory.findUniqueOrThrow({
+        where: { variantId: variantRow.variantId },
+      });
+      expect(inventoryAfter.available).toBe(inventoryBefore.available);
+    });
+
+    it('blocks the customer’s cancel once the vendor has delivered, and never restores inventory', async () => {
+      const customer = await customerFor('s36-shared-customer');
+      const { orderId, subOrderId, vendor } = await placeShippedOrder(customer, 's36-owner');
+      const variantRow = await db.orderItem.findFirstOrThrow({ where: { subOrderId } });
+      const inventoryBefore = await db.inventory.findUniqueOrThrow({
+        where: { variantId: variantRow.variantId },
+      });
+
+      await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/deliver`)
+        .set('Authorization', auth(vendor))
+        .expect(200);
+
+      const response = await request(app)
+        .post(`/api/v1/orders/${orderId}/cancel`)
+        .set('Authorization', auth(customer))
+        .expect(422);
+      expect((response.body as ErrorBody).error.code).toBe('ORDER_CANCELLATION_NOT_ALLOWED');
+
+      const order = await db.order.findUniqueOrThrow({ where: { id: orderId } });
+      expect(order.status).toBe('CONFIRMED');
+      const inventoryAfter = await db.inventory.findUniqueOrThrow({
+        where: { variantId: variantRow.variantId },
+      });
+      expect(inventoryAfter.available).toBe(inventoryBefore.available);
+    });
   });
 
   describe('concurrency guard — the database-level mechanism StartProcessingUseCase relies on', () => {
     it('the version-guarded UPDATE rejects a stale expectedVersion', async () => {
-      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'concurrency-customer');
-      const { subOrderId } = await placeConfirmedOrder(customer, 'concurrency-owner');
+      const customer = await customerFor('s36-shared-customer');
+      const { subOrderId } = await placeConfirmedOrder(customer, 's36-owner');
       const row = await db.subOrder.findUniqueOrThrow({ where: { id: subOrderId } });
 
       // First writer: succeeds, and — like `StartProcessingUseCase` — bumps the version.

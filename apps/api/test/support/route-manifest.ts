@@ -1189,6 +1189,35 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
       authed(request(ctx.app).post(`/api/v1/vendor/orders/${resourceId}/process`), actor),
     snapshot: snapshotVendorSubOrder,
   },
+  // S3-6: same seed/actor/snapshot as `/:id/process` above — the matrix only
+  // ever exercises the attacker path (see `twoOwners()`), which is refused
+  // before any status-transition logic runs, so the seeded sub-order's
+  // PENDING_PAYMENT state (not yet PROCESSING/SHIPPED) is irrelevant here,
+  // exactly as it already was for `/:id/process`.
+  {
+    method: 'POST',
+    prefix: '/api/v1/vendor/orders',
+    path: '/:id/ship',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied sub-order id and marks it shipped.',
+    actor: activeVendorActor,
+    seed: seedVendorSubOrder,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).post(`/api/v1/vendor/orders/${resourceId}/ship`), actor),
+    snapshot: snapshotVendorSubOrder,
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/vendor/orders',
+    path: '/:id/deliver',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied sub-order id and marks it delivered.',
+    actor: activeVendorActor,
+    seed: seedVendorSubOrder,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).post(`/api/v1/vendor/orders/${resourceId}/deliver`), actor),
+    snapshot: snapshotVendorSubOrder,
+  },
 ];
 
 export const isTenantOwned = (route: ManifestRoute): route is TenantOwnedRoute =>

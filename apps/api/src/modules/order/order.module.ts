@@ -21,6 +21,7 @@ import { IdempotencyKeyRepository } from '../../shared/infrastructure/persistenc
 import { PrismaOutboxWriter } from '../../shared/infrastructure/persistence/prisma-outbox-writer.js';
 import type { VendorTenantResolver } from '../../shared/interface/http/middleware/tenant-context.js';
 import { PlaceOrderUseCase } from './application/use-cases/place-order.use-case.js';
+import { DeliverSubOrderUseCase } from './application/use-cases/deliver-sub-order.use-case.js';
 import { GetOrderUseCase } from './application/use-cases/get-order.use-case.js';
 import { GetVendorOrderUseCase } from './application/use-cases/get-vendor-order.use-case.js';
 import { ListOrdersUseCase } from './application/use-cases/list-orders.use-case.js';
@@ -28,6 +29,7 @@ import { ListVendorOrdersUseCase } from './application/use-cases/list-vendor-ord
 import { CancelOrderUseCase } from './application/use-cases/cancel-order.use-case.js';
 import { InitiatePaymentUseCase } from './application/use-cases/initiate-payment.use-case.js';
 import { ConfirmPaymentUseCase } from './application/use-cases/confirm-payment.use-case.js';
+import { ShipSubOrderUseCase } from './application/use-cases/ship-sub-order.use-case.js';
 import { StartProcessingUseCase } from './application/use-cases/start-processing.use-case.js';
 import { PrismaOrderRepository } from './infrastructure/persistence/prisma-order.repository.js';
 import { PrismaPaymentAttemptRepository } from './infrastructure/persistence/prisma-payment-attempt.repository.js';
@@ -222,6 +224,62 @@ const buildOrderUseCases = (deps: BuildOrderUseCasesDeps): OrderUseCases => ({
   ...buildPaymentUseCases(deps),
 });
 
+interface VendorOrderUseCases {
+  readonly listVendorOrdersUseCase: ListVendorOrdersUseCase;
+  readonly getVendorOrderUseCase: GetVendorOrderUseCase;
+  readonly startProcessingUseCase: StartProcessingUseCase;
+  readonly shipSubOrderUseCase: ShipSubOrderUseCase;
+  readonly deliverSubOrderUseCase: DeliverSubOrderUseCase;
+}
+
+/**
+ * Every vendor-facing use case (S3-5's `startProcessingUseCase`, S3-6's
+ * `shipSubOrderUseCase`/`deliverSubOrderUseCase`), split out of
+ * `buildVendorOrderRouter` purely to keep it under this file's
+ * function-length budget — same reasoning as `buildCheckoutUseCases`/
+ * `buildPaymentUseCases` above. All three mutating use cases share the exact
+ * same dependency shape (S3-6 reuses S3-5's, not a new one).
+ */
+const buildVendorOrderUseCases = (deps: {
+  vendorRepository: PrismaVendorRepository;
+  vendorOrderRepository: PrismaVendorOrderRepository;
+  outboxWriter: PrismaOutboxWriter;
+  auditWriter: AuditWriter;
+  transactionRunner: PrismaTransactionRunner;
+  clock: Clock;
+  logger: Logger;
+}): VendorOrderUseCases => {
+  const {
+    vendorRepository,
+    vendorOrderRepository,
+    outboxWriter,
+    auditWriter,
+    transactionRunner,
+    clock,
+    logger,
+  } = deps;
+  const mutatingDeps = {
+    vendorRepository,
+    vendorOrderRepository,
+    outboxWriter,
+    auditWriter,
+    transactionRunner,
+    clock,
+    logger,
+  };
+
+  return {
+    listVendorOrdersUseCase: new ListVendorOrdersUseCase({
+      vendorRepository,
+      vendorOrderRepository,
+    }),
+    getVendorOrderUseCase: new GetVendorOrderUseCase({ vendorRepository, vendorOrderRepository }),
+    startProcessingUseCase: new StartProcessingUseCase(mutatingDeps),
+    shipSubOrderUseCase: new ShipSubOrderUseCase(mutatingDeps),
+    deliverSubOrderUseCase: new DeliverSubOrderUseCase(mutatingDeps),
+  };
+};
+
 /**
  * The vendor-facing surface (S3-5) — deliberately built on the *tenant-scoped*
  * `prisma` client (`leenmart_app`), never `checkoutPrisma`, per locked
@@ -262,29 +320,17 @@ const buildVendorOrderRouter = (params: {
     clock,
   });
 
-  const listVendorOrdersUseCase = new ListVendorOrdersUseCase({
-    vendorRepository,
-    vendorOrderRepository,
-  });
-  const getVendorOrderUseCase = new GetVendorOrderUseCase({
-    vendorRepository,
-    vendorOrderRepository,
-  });
-  const startProcessingUseCase = new StartProcessingUseCase({
-    vendorRepository,
-    vendorOrderRepository,
-    outboxWriter,
-    auditWriter,
-    transactionRunner,
-    clock,
-    logger,
-  });
-
-  const controller = createVendorOrderController({
-    listVendorOrdersUseCase,
-    getVendorOrderUseCase,
-    startProcessingUseCase,
-  });
+  const controller = createVendorOrderController(
+    buildVendorOrderUseCases({
+      vendorRepository,
+      vendorOrderRepository,
+      outboxWriter,
+      auditWriter,
+      transactionRunner,
+      clock,
+      logger,
+    }),
+  );
   return createVendorOrderRouter(controller, {
     accessTokenService,
     sessionDenylist,

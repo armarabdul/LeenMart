@@ -12,20 +12,26 @@ import type {
   VendorSubOrderSummary,
 } from '../../domain/repositories/vendor-order.repository.js';
 import { toSubOrderId } from '../../domain/value-objects/sub-order-id.value-object.js';
+import type { DeliverSubOrderUseCase } from '../../application/use-cases/deliver-sub-order.use-case.js';
 import type { GetVendorOrderUseCase } from '../../application/use-cases/get-vendor-order.use-case.js';
 import type { ListVendorOrdersUseCase } from '../../application/use-cases/list-vendor-orders.use-case.js';
+import type { ShipSubOrderUseCase } from '../../application/use-cases/ship-sub-order.use-case.js';
 import type { StartProcessingUseCase } from '../../application/use-cases/start-processing.use-case.js';
 
 export interface VendorOrderController {
   readonly listVendorOrders: (req: Request, res: Response) => Promise<void>;
   readonly getVendorOrder: (req: Request, res: Response) => Promise<void>;
   readonly startProcessing: (req: Request, res: Response) => Promise<void>;
+  readonly shipSubOrder: (req: Request, res: Response) => Promise<void>;
+  readonly deliverSubOrder: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface VendorOrderControllerDeps {
   readonly listVendorOrdersUseCase: ListVendorOrdersUseCase;
   readonly getVendorOrderUseCase: GetVendorOrderUseCase;
   readonly startProcessingUseCase: StartProcessingUseCase;
+  readonly shipSubOrderUseCase: ShipSubOrderUseCase;
+  readonly deliverSubOrderUseCase: DeliverSubOrderUseCase;
 }
 
 const toVendorSubOrderSummaryResponse = (
@@ -146,10 +152,54 @@ const startProcessingHandler =
     });
   };
 
+const shipSubOrderHandler =
+  (deps: VendorOrderControllerDeps) =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'POST /vendor/orders/:id/ship reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+    const { params } = validatedData<unknown, unknown, { id: string }>(req);
+
+    const detail = await deps.shipSubOrderUseCase.execute({
+      principal: req.principal,
+      subOrderId: toSubOrderId(params.id),
+    });
+
+    res.status(200).json({
+      data: toVendorSubOrderResponse(detail),
+      meta: { requestId: getRequestId() },
+    });
+  };
+
+const deliverSubOrderHandler =
+  (deps: VendorOrderControllerDeps) =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'POST /vendor/orders/:id/deliver reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+    const { params } = validatedData<unknown, unknown, { id: string }>(req);
+
+    const detail = await deps.deliverSubOrderUseCase.execute({
+      principal: req.principal,
+      subOrderId: toSubOrderId(params.id),
+    });
+
+    res.status(200).json({
+      data: toVendorSubOrderResponse(detail),
+      meta: { requestId: getRequestId() },
+    });
+  };
+
 export const createVendorOrderController = (
   deps: VendorOrderControllerDeps,
 ): VendorOrderController => ({
   listVendorOrders: listVendorOrdersHandler(deps),
   getVendorOrder: getVendorOrderHandler(deps),
   startProcessing: startProcessingHandler(deps),
+  shipSubOrder: shipSubOrderHandler(deps),
+  deliverSubOrder: deliverSubOrderHandler(deps),
 });

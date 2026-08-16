@@ -2,11 +2,17 @@ import { z } from 'zod';
 import { isoDateTimeSchema, moneySchema, uuidSchema } from '../common/primitives.js';
 import { addressResponseSchema } from '../customer/address.contract.js';
 
-/** Mirrors the domain `OrderStatus` value object (S3-3A, decision D-S3-06) — shared by `Order` and `SubOrder`. */
+/**
+ * Mirrors the domain `OrderStatus` value object (S3-3A, decision D-S3-06;
+ * widened S3-6, locked decision #2) — shared by `Order` and `SubOrder`.
+ * `SHIPPED`/`DELIVERED` are delivery-mode-only, vendor-initiated, S3-6.
+ */
 export const orderStatusSchema = z.enum([
   'PENDING_PAYMENT',
   'CONFIRMED',
   'PROCESSING',
+  'SHIPPED',
+  'DELIVERED',
   'CANCELLED',
 ]);
 

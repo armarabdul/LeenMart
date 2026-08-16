@@ -1108,30 +1108,35 @@ model TaxRate {
   @@map("tax_rates")
 }
 
-/// Order/SubOrder lifecycle (S3-3A, approved decision D-S3-06). Deliberately
-/// only the four states approved for this milestone — no SHIPPED, DELIVERED,
-/// REFUNDED, FAILED or COMPLETED, and no fulfilment-specific states
-/// (READY_FOR_PICKUP/REDEEMED/PICKUP_MISSED), which remain Stage 4.
+/// Order/SubOrder lifecycle (S3-3A, approved decision D-S3-06; widened S3-6,
+/// locked decision #2). `SHIPPED`/`DELIVERED` are delivery-mode-only — S3-6
+/// locked decision #1 explicitly excludes pickup mode, QR pickup, and every
+/// pickup-specific state (READY_FOR_PICKUP/REDEEMED/PICKUP_MISSED), which
+/// remain Stage 4. Also still deliberately excluded: ACCEPTED, REJECTED,
+/// COMPLETED, FAILED, REFUNDED — none of these were approved by S3-6 either.
 ///
 /// One enum, not two: the approved decision is to "use the same state model
 /// consistently for Order and SubOrder," so `Order.status` and
 /// `SubOrder.status` both use this type rather than two structurally
-/// identical enums drifting apart later.
+/// identical enums drifting apart later. S3-6 locked decision #7: `Order`
+/// itself never reaches `SHIPPED`/`DELIVERED` — those are `SubOrder`-only
+/// facts; the parent `Order.status` stays independent of individual vendor
+/// fulfilment transitions, exactly as it already did for `PROCESSING`.
 ///
-/// Only `PENDING_PAYMENT` is ever produced by S3-3A's own code paths.
-/// `CONFIRMED` and `PROCESSING` are fully modelled on the domain entities
-/// (`Order.confirm()`, `SubOrder.startProcessing()`) so the state machine and
-/// the cancellation-eligibility rule ("customer may cancel until PROCESSING")
-/// are real and tested, but neither transition has an HTTP caller yet —
-/// confirming payment is S3-3B's scope (a real or mock payment rail), and
-/// marking a sub-order as processing is vendor-portal/fulfilment scope, named
-/// nowhere in S3-3A's functional list. This mirrors `VendorProfile.activate()`'s
+/// `PENDING_PAYMENT`/`CONFIRMED`/`PROCESSING` are produced by S3-3A/S3-3B/S3-5
+/// respectively. `SHIPPED`/`DELIVERED` are S3-6: two more `SubOrder`-only,
+/// vendor-initiated transitions (`SubOrder.ship()`/`SubOrder.deliver()`),
+/// each accepting only its single immediate predecessor — no skip-state
+/// transition (`CONFIRMED -> SHIPPED`, `PROCESSING -> DELIVERED`, etc.) is
+/// permitted (S3-6 locked decision #11). This mirrors `VendorProfile.activate()`'s
 /// own history: a fully-built transition with no caller until the milestone
 /// that needs one arrives.
 enum OrderStatus {
   PENDING_PAYMENT
   CONFIRMED
   PROCESSING
+  SHIPPED
+  DELIVERED
   CANCELLED
 }
 

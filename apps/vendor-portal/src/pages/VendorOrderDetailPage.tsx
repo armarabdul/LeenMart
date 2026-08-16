@@ -5,6 +5,8 @@ import { formatMoney } from '@/shared/lib/format-money';
 import { ORDER_STATUS_LABEL } from '@/shared/lib/order-status-label';
 import { useGetVendorOrderQuery } from '@/features/vendor-order/vendor-order.api';
 import { StartProcessingButton } from '@/features/vendor-order/components/StartProcessingButton';
+import { MarkShippedButton } from '@/features/vendor-order/components/MarkShippedButton';
+import { MarkDeliveredButton } from '@/features/vendor-order/components/MarkDeliveredButton';
 
 const OrderSkeleton = (): JSX.Element => (
   <div className="flex flex-col gap-4">
@@ -51,7 +53,14 @@ const AddressSummary = ({
   </div>
 );
 
-/** "Vendor Order Detail" (S3-5). Start Processing is visible only while CONFIRMED — the accept/process-only path, no reject/cancel action anywhere on this page. */
+/**
+ * "Vendor Order Detail" (S3-5, extended S3-6). Exactly one fulfilment
+ * action is ever visible, gated strictly on the sub-order's current status:
+ * Start Processing (CONFIRMED), Mark Shipped (PROCESSING), Mark Delivered
+ * (SHIPPED). DELIVERED shows no action at all — it is this milestone's
+ * terminal state (locked decision #4). No reject/cancel action exists
+ * anywhere on this page.
+ */
 export const VendorOrderDetailPage = (): JSX.Element => {
   const { id } = useParams<{ id: string }>();
   const {
@@ -100,6 +109,8 @@ export const VendorOrderDetailPage = (): JSX.Element => {
           <p className="text-sm font-medium text-slate-700">{ORDER_STATUS_LABEL[order.status]}</p>
         </div>
         {order.status === 'CONFIRMED' && <StartProcessingButton subOrderId={order.id} />}
+        {order.status === 'PROCESSING' && <MarkShippedButton subOrderId={order.id} />}
+        {order.status === 'SHIPPED' && <MarkDeliveredButton subOrderId={order.id} />}
       </header>
 
       <section className="flex flex-col gap-3">

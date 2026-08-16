@@ -172,6 +172,23 @@ export const PERMISSION_MATRIX: Readonly<
     RISK_ANALYST: 'NONE',
     SUPER_ADMIN: 'FULL',
   },
+  /**
+   * S3-6, not an SDD 8.2 row (see `Permission`'s own doc comment). Same
+   * shape as `ACCEPT_OR_REJECT_ORDER` immediately above — the same three
+   * vendor roles, `OWN`-scoped, that already act on a sub-order they own;
+   * no other role gets fulfilment-mutation capability (locked decision #8).
+   */
+  UPDATE_ORDER_FULFILMENT: {
+    CUSTOMER: 'NONE',
+    VENDOR_OWNER: 'OWN',
+    VENDOR_MANAGER: 'OWN',
+    VENDOR_STAFF: 'OWN',
+    SUPPORT_AGENT: 'NONE',
+    CATALOGUE_MODERATOR: 'NONE',
+    FINANCE_ADMIN: 'NONE',
+    RISK_ANALYST: 'NONE',
+    SUPER_ADMIN: 'FULL',
+  },
   SCAN_PICKUP_QR: {
     CUSTOMER: 'NONE',
     VENDOR_OWNER: 'OWN',

@@ -22,6 +22,10 @@ export const ORDER_AUDIT_ACTIONS = {
    * decisions already treat as audit-worthy.
    */
   PROCESSING_STARTED: 'sub_order.processing_started',
+  /** S3-6: a vendor moved their own sub-order PROCESSING -> SHIPPED. Same reasoning as `PROCESSING_STARTED`. */
+  SHIPPED: 'sub_order.shipped',
+  /** S3-6: a vendor moved their own sub-order SHIPPED -> DELIVERED. Same reasoning as `PROCESSING_STARTED`. */
+  DELIVERED: 'sub_order.delivered',
 } as const;
 
 export type OrderAuditAction = (typeof ORDER_AUDIT_ACTIONS)[keyof typeof ORDER_AUDIT_ACTIONS];

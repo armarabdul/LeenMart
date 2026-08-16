@@ -222,6 +222,45 @@ describe('Order', () => {
 
       expect(order.canBeCancelledByCustomer()).toBe(true);
     });
+
+    // S3-6 locked decision #6 (mandatory correctness fix): the rule is now
+    // an explicit allow-list (PENDING_PAYMENT/CONFIRMED only), not a
+    // deny-list that named PROCESSING/CANCELLED specifically. These three
+    // cases prove SHIPPED and DELIVERED are refused without either name ever
+    // being mentioned by the implementation — exactly the property a
+    // deny-list could not have guaranteed.
+    it('is NOT cancellable once a sub-order has reached SHIPPED', () => {
+      expect(
+        orderInState(OrderStatus.CONFIRMED, [
+          subOrderInState(OrderStatus.SHIPPED),
+        ]).canBeCancelledByCustomer(),
+      ).toBe(false);
+    });
+
+    it('is NOT cancellable once a sub-order has reached DELIVERED', () => {
+      expect(
+        orderInState(OrderStatus.CONFIRMED, [
+          subOrderInState(OrderStatus.DELIVERED),
+        ]).canBeCancelledByCustomer(),
+      ).toBe(false);
+    });
+
+    it('is NOT cancellable if even one of several sub-orders has reached SHIPPED (conservative, whole-order rule)', () => {
+      const order = orderInState(OrderStatus.CONFIRMED, [
+        subOrderInState(
+          OrderStatus.CONFIRMED,
+          vendorAId,
+          toSubOrderId('00000000-0000-7000-8000-000000000b14'),
+        ),
+        subOrderInState(
+          OrderStatus.SHIPPED,
+          vendorBId,
+          toSubOrderId('00000000-0000-7000-8000-000000000b15'),
+        ),
+      ]);
+
+      expect(order.canBeCancelledByCustomer()).toBe(false);
+    });
   });
 
   describe('cancel()', () => {
@@ -250,6 +289,18 @@ describe('Order', () => {
 
     it('refuses to cancel once PROCESSING has been reached', () => {
       const order = orderInState(OrderStatus.PROCESSING, [subOrderInState(OrderStatus.PROCESSING)]);
+
+      expect(() => order.cancel(later)).toThrow(OrderCancellationNotAllowedError);
+    });
+
+    it('refuses to cancel once SHIPPED (S3-6, locked decision #16)', () => {
+      const order = orderInState(OrderStatus.CONFIRMED, [subOrderInState(OrderStatus.SHIPPED)]);
+
+      expect(() => order.cancel(later)).toThrow(OrderCancellationNotAllowedError);
+    });
+
+    it('refuses to cancel once DELIVERED (S3-6, locked decision #16)', () => {
+      const order = orderInState(OrderStatus.CONFIRMED, [subOrderInState(OrderStatus.DELIVERED)]);
 
       expect(() => order.cancel(later)).toThrow(OrderCancellationNotAllowedError);
     });
@@ -325,6 +376,85 @@ describe('SubOrder', () => {
       OrderStatus.CANCELLED,
     );
     expect(subOrderInState(OrderStatus.CONFIRMED).cancel(later).status).toBe(OrderStatus.CANCELLED);
+  });
+
+  describe('ship() (S3-6)', () => {
+    it('moves PROCESSING -> SHIPPED', () => {
+      const shipped = subOrderInState(OrderStatus.PROCESSING).ship(later);
+      expect(shipped.status).toBe(OrderStatus.SHIPPED);
+      expect(shipped.updatedAt).toEqual(later);
+    });
+
+    it.each([
+      OrderStatus.PENDING_PAYMENT,
+      OrderStatus.CONFIRMED,
+      OrderStatus.SHIPPED,
+      OrderStatus.DELIVERED,
+      OrderStatus.CANCELLED,
+    ])('refuses from every state other than PROCESSING — refused from %s', (from) => {
+      expect(() => subOrderInState(from).ship(later)).toThrow(InvalidOrderStatusTransitionError);
+    });
+
+    it('never mutates the receiver', () => {
+      const original = subOrderInState(OrderStatus.PROCESSING);
+      const shipped = original.ship(later);
+      expect(shipped).not.toBe(original);
+      expect(original.status).toBe(OrderStatus.PROCESSING);
+    });
+  });
+
+  describe('deliver() (S3-6)', () => {
+    it('moves SHIPPED -> DELIVERED', () => {
+      const delivered = subOrderInState(OrderStatus.SHIPPED).deliver(later);
+      expect(delivered.status).toBe(OrderStatus.DELIVERED);
+      expect(delivered.updatedAt).toEqual(later);
+    });
+
+    it.each([
+      OrderStatus.PENDING_PAYMENT,
+      OrderStatus.CONFIRMED,
+      OrderStatus.PROCESSING,
+      OrderStatus.DELIVERED,
+      OrderStatus.CANCELLED,
+    ])('refuses from every state other than SHIPPED — refused from %s', (from) => {
+      expect(() => subOrderInState(from).deliver(later)).toThrow(InvalidOrderStatusTransitionError);
+    });
+
+    it('never mutates the receiver', () => {
+      const original = subOrderInState(OrderStatus.SHIPPED);
+      const delivered = original.deliver(later);
+      expect(delivered).not.toBe(original);
+      expect(original.status).toBe(OrderStatus.SHIPPED);
+    });
+
+    // S3-6 locked decision #11: no skip-state transitions. `deliver()`'s own
+    // `it.each` above already proves PROCESSING -> DELIVERED is refused;
+    // these cover the remaining named skip-state cases explicitly.
+    it('refuses the skip-state transition CONFIRMED -> SHIPPED', () => {
+      expect(() => subOrderInState(OrderStatus.CONFIRMED).ship(later)).toThrow(
+        InvalidOrderStatusTransitionError,
+      );
+    });
+
+    it('refuses the skip-state transition PENDING_PAYMENT -> SHIPPED', () => {
+      expect(() => subOrderInState(OrderStatus.PENDING_PAYMENT).ship(later)).toThrow(
+        InvalidOrderStatusTransitionError,
+      );
+    });
+
+    it('refuses the skip-state transition CONFIRMED -> DELIVERED', () => {
+      expect(() => subOrderInState(OrderStatus.CONFIRMED).deliver(later)).toThrow(
+        InvalidOrderStatusTransitionError,
+      );
+    });
+
+    it('DELIVERED accepts no further transition (terminal state)', () => {
+      const delivered = subOrderInState(OrderStatus.DELIVERED);
+      expect(() => delivered.ship(later)).toThrow(InvalidOrderStatusTransitionError);
+      expect(() => delivered.deliver(later)).toThrow(InvalidOrderStatusTransitionError);
+      expect(() => delivered.cancel(later)).toThrow(InvalidOrderStatusTransitionError);
+      expect(() => delivered.startProcessing(later)).toThrow(InvalidOrderStatusTransitionError);
+    });
   });
 
   describe('version (S3-5 optimistic-concurrency guard)', () => {

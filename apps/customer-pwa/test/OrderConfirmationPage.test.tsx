@@ -181,9 +181,14 @@ describe('OrderConfirmationPage', () => {
     expect(screen.getByText(/221B Baker Street/)).toBeInTheDocument();
   });
 
-  describe('cancel order (S3-4)', () => {
+  describe('cancel order (S3-4, extended S3-6: fulfilment blocks cancellation)', () => {
     const cancellableStatuses: OrderStatusDto[] = ['PENDING_PAYMENT', 'CONFIRMED'];
-    const nonCancellableStatuses: OrderStatusDto[] = ['PROCESSING', 'CANCELLED'];
+    const nonCancellableStatuses: OrderStatusDto[] = [
+      'PROCESSING',
+      'SHIPPED',
+      'DELIVERED',
+      'CANCELLED',
+    ];
 
     it.each(cancellableStatuses)('shows the cancel button while the order is %s', (status) => {
       renderOrderPage(order({ status }));
@@ -250,5 +255,37 @@ describe('OrderConfirmationPage', () => {
       await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
       expect(screen.getByRole('alert')).toHaveTextContent('This order can no longer be cancelled.');
     });
+  });
+});
+
+// Top-level sibling, not nested under `describe('OrderConfirmationPage', ...)`
+// above — that describe is already close to this file's own
+// `max-lines-per-function` budget (120, the React preset's own override of
+// the base test-file exemption).
+describe('sub-order fulfilment status display (S3-6, observe-only — no new mutation controls)', () => {
+  it('renders Processing for a PROCESSING sub-order', () => {
+    renderOrderPage(order({ subOrders: [subOrder({ status: 'PROCESSING' })] }));
+
+    expect(screen.getByText('Processing')).toBeInTheDocument();
+  });
+
+  it('renders Shipped for a SHIPPED sub-order', () => {
+    renderOrderPage(order({ subOrders: [subOrder({ status: 'SHIPPED' })] }));
+
+    expect(screen.getByText('Shipped')).toBeInTheDocument();
+  });
+
+  it('renders Delivered for a DELIVERED sub-order', () => {
+    renderOrderPage(order({ subOrders: [subOrder({ status: 'DELIVERED' })] }));
+
+    expect(screen.getByText('Delivered')).toBeInTheDocument();
+  });
+
+  it('never renders a fulfilment mutation control for the customer at any fulfilment status', () => {
+    renderOrderPage(order({ subOrders: [subOrder({ status: 'SHIPPED' })] }));
+
+    expect(screen.queryByRole('button', { name: 'Start processing' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Mark shipped' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Mark delivered' })).not.toBeInTheDocument();
   });
 });

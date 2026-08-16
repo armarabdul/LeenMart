@@ -72,5 +72,24 @@ export const createVendorOrderRouter = (
     asyncHandler(controller.startProcessing),
   );
 
+  // S3-6: PROCESSING -> SHIPPED -> DELIVERED. `UPDATE_ORDER_FULFILMENT`, not
+  // `ACCEPT_OR_REJECT_ORDER` — locked decision #8 explicitly refuses to
+  // stretch that permission a second time.
+  router.post(
+    '/:id/ship',
+    ...authenticated,
+    requirePermission('UPDATE_ORDER_FULFILMENT'),
+    validate({ params: subOrderParamsSchema }),
+    asyncHandler(controller.shipSubOrder),
+  );
+
+  router.post(
+    '/:id/deliver',
+    ...authenticated,
+    requirePermission('UPDATE_ORDER_FULFILMENT'),
+    validate({ params: subOrderParamsSchema }),
+    asyncHandler(controller.deliverSubOrder),
+  );
+
   return router;
 };

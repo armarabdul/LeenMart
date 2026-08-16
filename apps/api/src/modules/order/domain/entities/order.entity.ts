@@ -33,12 +33,15 @@ export interface OrderProps {
 }
 
 /**
- * Same four-state model as `SubOrder` (S3-3A decision D-S3-06). Only
- * `PENDING_PAYMENT` is ever produced by this milestone's own code paths —
- * `CONFIRMED`/`PROCESSING` are fully modelled (so the state machine and the
- * cancellation rule are real and tested) but reachable only from S3-3B/
- * vendor-portal work, not from anything in S3-3A's own scope. See
- * `schema.prisma`'s `OrderStatus` doc comment for the full reasoning.
+ * Same shared `OrderStatus` model as `SubOrder` (S3-3A decision D-S3-06;
+ * widened S3-6). `Order` itself never gains `SHIP`/`DELIVER` transitions —
+ * S3-6 locked decision #7 keeps the parent `Order.status` independent of
+ * individual vendor fulfilment transitions, which are `SubOrder`-only facts.
+ * This table is therefore unchanged from S3-3A: `CONFIRM`/`CANCEL` are the
+ * only transitions `Order` itself ever performs (`START_PROCESSING` is
+ * declared for symmetry with `SubOrder`'s table but has no caller here,
+ * exactly as before S3-6 — see `schema.prisma`'s `OrderStatus` doc comment
+ * for the full reasoning).
  */
 const TRANSITIONS = {
   CONFIRM: { from: ['PENDING_PAYMENT'], to: OrderStatus.CONFIRMED },
@@ -140,14 +143,26 @@ export class Order {
    * starting processing locks the *whole* order from customer
    * cancellation, rather than inventing partial-order cancellation
    * semantics no approved decision describes.
+   *
+   * S3-6 locked decision #6 (mandatory correctness fix): this is now an
+   * **allow-list**, not a deny-list. Before S3-6 the check excluded
+   * `PROCESSING`/`CANCELLED` by name — safe only because those were the two
+   * non-cancellable states that existed. Adding `SHIPPED`/`DELIVERED`
+   * without this change would have left them uncaught (neither name is
+   * excluded by the old deny-list), letting a customer "cancel" — and
+   * `CancelOrderUseCase` restore inventory for — an order that has already
+   * shipped or been delivered. An allow-list of exactly the two
+   * pre-fulfilment states cannot make the same mistake again if a future
+   * milestone adds yet another state.
    */
   canBeCancelledByCustomer(): boolean {
-    if (this.props.status.name === 'PROCESSING' || this.props.status.name === 'CANCELLED') {
+    const isPreFulfilment = (status: OrderStatusName): boolean =>
+      status === 'PENDING_PAYMENT' || status === 'CONFIRMED';
+
+    if (!isPreFulfilment(this.props.status.name)) {
       return false;
     }
-    return this.props.subOrders.every(
-      (subOrder) => subOrder.status.name !== 'PROCESSING' && subOrder.status.name !== 'CANCELLED',
-    );
+    return this.props.subOrders.every((subOrder) => isPreFulfilment(subOrder.status.name));
   }
 
   cancel(now: Date): Order {

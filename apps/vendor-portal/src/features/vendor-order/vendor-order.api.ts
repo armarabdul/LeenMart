@@ -31,8 +31,33 @@ export const vendorOrderApi = baseApi.injectEndpoints({
       // already relies on for `placeOrder`/`cancelOrder` (S3-3A/S3-4).
       invalidatesTags: ['VendorOrder'],
     }),
+    // S3-6: PROCESSING -> SHIPPED -> DELIVERED. Same shape as `startProcessing`
+    // above — no optimistic update, the mutation's tag invalidation is what
+    // drives the page's `useGetVendorOrderQuery` to refetch and show the
+    // real, backend-confirmed status.
+    shipSubOrder: builder.mutation<VendorSubOrderResponse, string>({
+      query: (subOrderId) => ({
+        url: `/vendor/orders/${encodeURIComponent(subOrderId)}/ship`,
+        method: 'POST',
+      }),
+      transformResponse: (response: SuccessEnvelope<VendorSubOrderResponse>) => response.data,
+      invalidatesTags: ['VendorOrder'],
+    }),
+    deliverSubOrder: builder.mutation<VendorSubOrderResponse, string>({
+      query: (subOrderId) => ({
+        url: `/vendor/orders/${encodeURIComponent(subOrderId)}/deliver`,
+        method: 'POST',
+      }),
+      transformResponse: (response: SuccessEnvelope<VendorSubOrderResponse>) => response.data,
+      invalidatesTags: ['VendorOrder'],
+    }),
   }),
 });
 
-export const { useListVendorOrdersQuery, useGetVendorOrderQuery, useStartProcessingMutation } =
-  vendorOrderApi;
+export const {
+  useListVendorOrdersQuery,
+  useGetVendorOrderQuery,
+  useStartProcessingMutation,
+  useShipSubOrderMutation,
+  useDeliverSubOrderMutation,
+} = vendorOrderApi;

@@ -4,6 +4,15 @@
  * identifier allows. `PERMISSION_LABELS` carries the literal SDD wording for
  * each identifier, so `permission-matrix.ts` can be reviewed cell-by-cell
  * against the SDD table.
+ *
+ * `UPDATE_ORDER_FULFILMENT` is the one exception to "one identifier per SDD
+ * 8.2 row": S3-6's own discovery report found no SDD 8.2 permission covering
+ * "vendor marks a sub-order shipped/delivered" — `SCAN_PICKUP_QR` is
+ * pickup-mode-specific (S3-6 is delivery-mode only), and `ACCEPT_OR_REJECT_ORDER`
+ * was already stretched once for "start processing" in S3-5; the locked S3-6
+ * decision was to introduce a dedicated permission rather than stretch that
+ * one a second time. Its `PERMISSION_LABELS` entry is therefore this
+ * project's own wording, not a transcription of the SDD.
  */
 export type Permission =
   | 'BROWSE_CATALOGUE'
@@ -20,6 +29,7 @@ export type Permission =
   | 'CREATE_PREORDER_CAMPAIGN'
   | 'VIEW_VENDOR_ORDERS'
   | 'ACCEPT_OR_REJECT_ORDER'
+  | 'UPDATE_ORDER_FULFILMENT'
   | 'SCAN_PICKUP_QR'
   | 'CONFIGURE_DELIVERY_SLOTS'
   | 'VIEW_VENDOR_PAYOUTS'
@@ -58,6 +68,8 @@ export const PERMISSION_LABELS: Readonly<Record<Permission, string>> = {
   CREATE_PREORDER_CAMPAIGN: 'Create preorder campaign',
   VIEW_VENDOR_ORDERS: 'View vendor orders',
   ACCEPT_OR_REJECT_ORDER: 'Accept/reject order',
+  /** S3-6: not an SDD 8.2 row — see this type's own doc comment. */
+  UPDATE_ORDER_FULFILMENT: 'Update order fulfilment (ship/deliver)',
   SCAN_PICKUP_QR: 'Scan pickup QR',
   CONFIGURE_DELIVERY_SLOTS: 'Configure delivery/slots',
   VIEW_VENDOR_PAYOUTS: 'View vendor payouts',

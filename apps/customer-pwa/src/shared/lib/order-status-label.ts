@@ -5,5 +5,7 @@ export const ORDER_STATUS_LABEL: Record<OrderStatusDto, string> = {
   PENDING_PAYMENT: 'Payment pending',
   CONFIRMED: 'Confirmed',
   PROCESSING: 'Processing',
+  SHIPPED: 'Shipped',
+  DELIVERED: 'Delivered',
   CANCELLED: 'Cancelled',
 };
