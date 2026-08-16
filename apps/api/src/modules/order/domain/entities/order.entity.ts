@@ -46,8 +46,6 @@ const TRANSITIONS = {
   CANCEL: { from: ['PENDING_PAYMENT', 'CONFIRMED'], to: OrderStatus.CANCELLED },
 } satisfies Record<string, { from: readonly OrderStatusName[]; to: OrderStatus }>;
 
-type OrderTransition = keyof typeof TRANSITIONS;
-
 /**
  * A customer's order (S3-3A, SDD 5 module 8, SDD 6.3 "Order 1..N SubOrder").
  * Always constructed whole, by `PlaceOrderUseCase` — id, address snapshot
@@ -114,17 +112,23 @@ export class Order {
     return this.props.updatedAt;
   }
 
-  private transition(name: OrderTransition, now: Date): Order {
-    const { from, to } = TRANSITIONS[name];
+  /**
+   * S3-3B: payment confirmation. One payment covers the whole multi-vendor
+   * order, so — exactly like `cancel()` — this cascades to every `SubOrder`
+   * rather than leaving them stranded at `PENDING_PAYMENT` under a
+   * `CONFIRMED` parent.
+   */
+  confirm(now: Date): Order {
+    const { from, to } = TRANSITIONS.CONFIRM;
     if (!(from as readonly OrderStatusName[]).includes(this.props.status.name)) {
       throw new InvalidOrderStatusTransitionError(this.props.status.name, to.name);
     }
-    return new Order({ ...this.props, status: to, updatedAt: now });
-  }
-
-  /** No HTTP caller in S3-3A — arrives with S3-3B's payment confirmation. */
-  confirm(now: Date): Order {
-    return this.transition('CONFIRM', now);
+    return new Order({
+      ...this.props,
+      status: to,
+      subOrders: this.props.subOrders.map((subOrder) => subOrder.confirm(now)),
+      updatedAt: now,
+    });
   }
 
   /**

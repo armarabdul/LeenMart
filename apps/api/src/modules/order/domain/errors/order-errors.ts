@@ -1,5 +1,11 @@
-import { type AppErrorOptions, DomainRuleError, NotFoundError } from '@leen-mart/domain-kit';
+import {
+  type AppErrorOptions,
+  ConflictError,
+  DomainRuleError,
+  NotFoundError,
+} from '@leen-mart/domain-kit';
 import type { OrderStatusName } from '../value-objects/order-status.value-object.js';
+import type { PaymentAttemptStatusName } from '../value-objects/payment-attempt-status.value-object.js';
 
 /**
  * A move `Order`/`SubOrder`'s shared transition table does not draw — valid
@@ -89,5 +95,77 @@ export class OrderAddressNotFoundError extends NotFoundError {
       ...options,
       code: 'ORDER_ADDRESS_NOT_FOUND',
     });
+  }
+}
+
+/** S3-3B: `InitiatePaymentUseCase`'s own precondition — only a `PENDING_PAYMENT` order can start a payment attempt. */
+export class OrderNotPendingPaymentError extends DomainRuleError {
+  constructor(status: OrderStatusName, options: AppErrorOptions = {}) {
+    super('ORDER_NOT_PENDING_PAYMENT', 'This order is not awaiting payment.', {
+      ...options,
+      details: options.details ?? [
+        { field: 'status', issue: `Order is ${status}, not PENDING_PAYMENT` },
+      ],
+    });
+  }
+}
+
+/**
+ * `InitiatePaymentUseCase`'s own precondition: an order may have at most one
+ * `INITIATED` attempt at a time (`uq_payment_attempts_order_initiated`).
+ * Mirrors `AddCartItemUseCase`'s own "read-then-write, the unique index is
+ * the actual arbiter" reasoning for the ordinary (non-racing) path — a
+ * second, concurrent `initiate` call is out of scope for this check to
+ * gracefully handle, the same acceptance that codebase precedent already
+ * makes for `uq_cart_items_cart_variant`.
+ */
+export class PaymentAlreadyInitiatedError extends ConflictError {
+  constructor(options: AppErrorOptions = {}) {
+    super('A payment is already awaiting confirmation for this order.', {
+      ...options,
+      code: 'ORDER_PAYMENT_ALREADY_INITIATED',
+    });
+  }
+}
+
+/** `PaymentAttempt`'s own transition table refuses the edge — mirrors `InvalidOrderStatusTransitionError`'s own reasoning. */
+export class InvalidPaymentAttemptTransitionError extends DomainRuleError {
+  constructor(
+    from: PaymentAttemptStatusName,
+    to: PaymentAttemptStatusName,
+    options: AppErrorOptions = {},
+  ) {
+    super(
+      'PAYMENT_ATTEMPT_INVALID_TRANSITION',
+      `A payment attempt cannot move from ${from} to ${to}.`,
+      {
+        ...options,
+        details: options.details ?? [
+          { field: 'status', issue: `${from} → ${to} is not a permitted transition` },
+        ],
+      },
+    );
+  }
+}
+
+/** Ownership-scoped lookup miss — `ConfirmPaymentUseCase` needs an `INITIATED` attempt for the order and finds none (never initiated, or already resolved). */
+export class PaymentAttemptNotFoundError extends NotFoundError {
+  constructor(options: AppErrorOptions = {}) {
+    super('No payment is currently awaiting confirmation for this order.', {
+      ...options,
+      code: 'PAYMENT_ATTEMPT_NOT_FOUND',
+    });
+  }
+}
+
+/**
+ * The mock gateway reported failure for this attempt (S3-3B). The order
+ * itself is untouched — it stays `PENDING_PAYMENT` so the customer can
+ * initiate a fresh attempt (SDD 10.4's own "unresolved payments" precedent,
+ * narrowed to a synchronous decision instead of a reconciliation job).
+ */
+export class PaymentFailedError extends DomainRuleError {
+  constructor(options: AppErrorOptions = {}) {
+    super('PAYMENT_FAILED', 'The payment could not be completed. Please try again.', options);
   }
 }

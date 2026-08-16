@@ -8,6 +8,10 @@ export const ORDER_AUDIT_ACTIONS = {
   PLACED: 'order.placed',
   /** A customer cancelled their own order. */
   CANCELLED: 'order.cancelled',
+  /** S3-3B: a payment attempt succeeded and the order moved PENDING_PAYMENT -> CONFIRMED. */
+  CONFIRMED: 'order.confirmed',
+  /** S3-3B: a payment attempt failed. The order itself is untouched — still PENDING_PAYMENT. */
+  PAYMENT_FAILED: 'order.payment_failed',
 } as const;
 
 export type OrderAuditAction = (typeof ORDER_AUDIT_ACTIONS)[keyof typeof ORDER_AUDIT_ACTIONS];

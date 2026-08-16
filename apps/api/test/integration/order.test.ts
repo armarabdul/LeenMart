@@ -44,6 +44,9 @@ interface AddressBody {
 interface ErrorBody {
   readonly error: { code: string };
 }
+interface PaymentInitiationBody {
+  readonly data: { orderId: string; status: string };
+}
 
 describe('order', () => {
   let harness: IntegrationHarness;
@@ -139,6 +142,43 @@ describe('order', () => {
       .set('Authorization', auth(customer))
       .set('Idempotency-Key', idempotencyKey)
       .send(body);
+
+  const initiatePayment = (
+    customer: Actor,
+    orderId: string,
+    idempotencyKey: string = randomUUID(),
+  ): request.Test =>
+    request(app)
+      .post(`/api/v1/orders/${orderId}/payment/initiate`)
+      .set('Authorization', auth(customer))
+      .set('Idempotency-Key', idempotencyKey);
+
+  const confirmPayment = (
+    customer: Actor,
+    orderId: string,
+    testScenario: 'SUCCEEDED' | 'FAILED',
+    idempotencyKey: string = randomUUID(),
+  ): request.Test =>
+    request(app)
+      .post(`/api/v1/orders/${orderId}/payment/confirm`)
+      .set('Authorization', auth(customer))
+      .set('Idempotency-Key', idempotencyKey)
+      .send({ testScenario });
+
+  /** Cart -> address -> `POST /orders`, ending PENDING_PAYMENT — the shared starting point every payment test needs. */
+  const placeReadyOrder = async (
+    customer: Actor,
+    options: { available?: number; priceMinor?: string; quantity?: number } = {},
+  ): Promise<{ orderId: string; variantId: string }> => {
+    const { quantity = 1, ...stockOptions } = options;
+    const { variantId } = await seedVendorWithStock('shared', stockOptions);
+    await addToCart(customer, variantId, quantity).expect(201);
+    const addressId = await addAddress(customer);
+    const placeResponse = await placeOrder(customer, { addressId, paymentMethod: 'ONLINE' }).expect(
+      201,
+    );
+    return { orderId: (placeResponse.body as OrderBody).data.id, variantId };
+  };
 
   beforeAll(async () => {
     harness = createIntegrationHarness();
@@ -488,6 +528,221 @@ describe('order', () => {
 
       const inventory = await db.inventory.findUnique({ where: { variantId } });
       expect(inventory?.available).toBe(8);
+    });
+  });
+
+  describe('POST /api/v1/orders/:id/payment/initiate', () => {
+    it('starts a payment attempt for a valid PENDING_PAYMENT order', async () => {
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'pay-init-basic');
+      const { orderId } = await placeReadyOrder(customer);
+
+      const response = await initiatePayment(customer, orderId).expect(201);
+      const body = (response.body as PaymentInitiationBody).data;
+
+      expect(body.orderId).toBe(orderId);
+      expect(body.status).toBe('PAYMENT_PENDING');
+
+      const attempt = await db.paymentAttempt.findFirst({ where: { orderId } });
+      expect(attempt?.status).toBe('INITIATED');
+      expect(attempt?.provider).toBe('MOCK');
+      expect(attempt?.providerReference).toMatch(/^MOCK-/);
+    });
+
+    it('404s for another customer’s order', async () => {
+      const owner = await signUpCustomer(app, EMAIL_PREFIX, 'pay-init-owner');
+      const attacker = await signUpCustomer(app, EMAIL_PREFIX, 'pay-init-attacker');
+      const { orderId } = await placeReadyOrder(owner);
+
+      await initiatePayment(attacker, orderId).expect(404);
+
+      const attempts = await db.paymentAttempt.findMany({ where: { orderId } });
+      expect(attempts).toHaveLength(0);
+    });
+
+    it('404s for an order id that never existed', async () => {
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'pay-init-missing');
+
+      await initiatePayment(customer, randomUUID()).expect(404);
+    });
+
+    it('rejects initiating a second attempt while one is already INITIATED', async () => {
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'pay-init-twice');
+      const { orderId } = await placeReadyOrder(customer);
+
+      await initiatePayment(customer, orderId).expect(201);
+      const response = await initiatePayment(customer, orderId).expect(409);
+      expect((response.body as ErrorBody).error.code).toBe('ORDER_PAYMENT_ALREADY_INITIATED');
+
+      const attempts = await db.paymentAttempt.findMany({ where: { orderId } });
+      expect(attempts).toHaveLength(1);
+    });
+
+    it('requires the Idempotency-Key header', async () => {
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'pay-init-idem-missing');
+      const { orderId } = await placeReadyOrder(customer);
+
+      await request(app)
+        .post(`/api/v1/orders/${orderId}/payment/initiate`)
+        .set('Authorization', auth(customer))
+        .expect(400);
+    });
+
+    it('replays the original attempt for a repeated key — no second row created', async () => {
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'pay-init-idem-replay');
+      const { orderId } = await placeReadyOrder(customer);
+      const key = `pay-init-replay-${randomUUID()}`;
+
+      const first = await initiatePayment(customer, orderId, key).expect(201);
+      const second = await initiatePayment(customer, orderId, key).expect(201);
+
+      expect((second.body as PaymentInitiationBody).data).toEqual(
+        (first.body as PaymentInitiationBody).data,
+      );
+      const attempts = await db.paymentAttempt.findMany({ where: { orderId } });
+      expect(attempts).toHaveLength(1);
+    });
+  });
+
+  describe('POST /api/v1/orders/:id/payment/confirm', () => {
+    it('confirms a successful mock payment and flips the order to CONFIRMED', async () => {
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'pay-confirm-success');
+      const { orderId } = await placeReadyOrder(customer);
+      await initiatePayment(customer, orderId).expect(201);
+
+      const response = await confirmPayment(customer, orderId, 'SUCCEEDED').expect(200);
+      const body = (response.body as OrderBody).data;
+
+      expect(body.id).toBe(orderId);
+      expect(body.status).toBe('CONFIRMED');
+      expect(body.subOrders.every((s) => s.status === 'CONFIRMED')).toBe(true);
+
+      const order = await db.order.findUnique({ where: { id: orderId } });
+      expect(order?.status).toBe('CONFIRMED');
+      const attempt = await db.paymentAttempt.findFirst({ where: { orderId } });
+      expect(attempt?.status).toBe('SUCCEEDED');
+    });
+
+    it('does not confirm the order on a failed mock payment, and records the attempt as FAILED', async () => {
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'pay-confirm-fail');
+      const { orderId } = await placeReadyOrder(customer);
+      await initiatePayment(customer, orderId).expect(201);
+
+      const response = await confirmPayment(customer, orderId, 'FAILED').expect(422);
+      expect((response.body as ErrorBody).error.code).toBe('PAYMENT_FAILED');
+
+      const order = await db.order.findUnique({ where: { id: orderId } });
+      expect(order?.status).toBe('PENDING_PAYMENT');
+      const attempt = await db.paymentAttempt.findFirst({ where: { orderId } });
+      expect(attempt?.status).toBe('FAILED');
+    });
+
+    it('allows a fresh attempt after a failure, and that retry can succeed', async () => {
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'pay-confirm-retry');
+      const { orderId } = await placeReadyOrder(customer);
+      await initiatePayment(customer, orderId).expect(201);
+      await confirmPayment(customer, orderId, 'FAILED').expect(422);
+
+      await initiatePayment(customer, orderId).expect(201);
+      const response = await confirmPayment(customer, orderId, 'SUCCEEDED').expect(200);
+      expect((response.body as OrderBody).data.status).toBe('CONFIRMED');
+
+      const attempts = await db.paymentAttempt.findMany({
+        where: { orderId },
+        orderBy: { createdAt: 'asc' },
+      });
+      expect(attempts).toHaveLength(2);
+      expect(attempts.map((a) => a.status)).toEqual(['FAILED', 'SUCCEEDED']);
+    });
+
+    it('rejects confirmation when no attempt was ever initiated', async () => {
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'pay-confirm-noattempt');
+      const { orderId } = await placeReadyOrder(customer);
+
+      const response = await confirmPayment(customer, orderId, 'SUCCEEDED').expect(404);
+      expect((response.body as ErrorBody).error.code).toBe('PAYMENT_ATTEMPT_NOT_FOUND');
+    });
+
+    it('404s for another customer’s order, regardless of whether a payment was ever initiated', async () => {
+      const owner = await signUpCustomer(app, EMAIL_PREFIX, 'pay-confirm-owner');
+      const attacker = await signUpCustomer(app, EMAIL_PREFIX, 'pay-confirm-attacker');
+      const { orderId } = await placeReadyOrder(owner);
+      await initiatePayment(owner, orderId).expect(201);
+
+      await confirmPayment(attacker, orderId, 'SUCCEEDED').expect(404);
+
+      const order = await db.order.findUnique({ where: { id: orderId } });
+      expect(order?.status).toBe('PENDING_PAYMENT');
+    });
+
+    it('404s for an order id that never existed', async () => {
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'pay-confirm-missing');
+
+      await confirmPayment(customer, randomUUID(), 'SUCCEEDED').expect(404);
+    });
+
+    it('cannot confirm an order that is already CONFIRMED (no double-confirmation)', async () => {
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'pay-confirm-twice');
+      const { orderId } = await placeReadyOrder(customer);
+      await initiatePayment(customer, orderId).expect(201);
+      await confirmPayment(customer, orderId, 'SUCCEEDED').expect(200);
+
+      const response = await confirmPayment(customer, orderId, 'SUCCEEDED').expect(422);
+      expect((response.body as ErrorBody).error.code).toBe('ORDER_NOT_PENDING_PAYMENT');
+    });
+
+    it('requires the Idempotency-Key header', async () => {
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'pay-confirm-idem-missing');
+      const { orderId } = await placeReadyOrder(customer);
+      await initiatePayment(customer, orderId).expect(201);
+
+      await request(app)
+        .post(`/api/v1/orders/${orderId}/payment/confirm`)
+        .set('Authorization', auth(customer))
+        .send({ testScenario: 'SUCCEEDED' })
+        .expect(400);
+    });
+
+    it('replays the original confirmation for a repeated key — order confirmed exactly once', async () => {
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'pay-confirm-idem-replay');
+      const { orderId } = await placeReadyOrder(customer);
+      await initiatePayment(customer, orderId).expect(201);
+      const key = `pay-confirm-replay-${randomUUID()}`;
+
+      const first = await confirmPayment(customer, orderId, 'SUCCEEDED', key).expect(200);
+      const second = await confirmPayment(customer, orderId, 'SUCCEEDED', key).expect(200);
+
+      expect((second.body as OrderBody).data).toEqual((first.body as OrderBody).data);
+      const attempts = await db.paymentAttempt.findMany({ where: { orderId } });
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]?.status).toBe('SUCCEEDED');
+    });
+
+    it('rejects a confirm request carrying an amount/status field the contract does not define', async () => {
+      // `confirmPaymentRequestSchema` is `.strict()` (SEC-02): there is no
+      // field on this request the client could use to smuggle an amount,
+      // a status, or anything else — a request that tries is rejected by
+      // validation before the use case ever runs, never silently ignored.
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'pay-confirm-strict');
+      const { orderId } = await placeReadyOrder(customer);
+      await initiatePayment(customer, orderId).expect(201);
+
+      await request(app)
+        .post(`/api/v1/orders/${orderId}/payment/confirm`)
+        .set('Authorization', auth(customer))
+        .set('Idempotency-Key', randomUUID())
+        .send({ testScenario: 'SUCCEEDED', amount: '1' })
+        .expect(400);
+    });
+
+    it('confirms using the order’s own persisted total, regardless of the price at confirmation time', async () => {
+      const customer = await signUpCustomer(app, EMAIL_PREFIX, 'pay-confirm-amount');
+      const { orderId } = await placeReadyOrder(customer, { priceMinor: '12345', quantity: 2 });
+      await initiatePayment(customer, orderId).expect(201);
+
+      const response = await confirmPayment(customer, orderId, 'SUCCEEDED').expect(200);
+
+      const body = (response.body as OrderBody).data;
+      expect(body.totalAmount.amount).toBe('24690'); // 2 * 12345, the order's own persisted total
     });
   });
 });

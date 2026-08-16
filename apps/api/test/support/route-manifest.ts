@@ -1025,6 +1025,35 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
       authed(request(ctx.app).post(`/api/v1/orders/${resourceId}/cancel`), actor),
     snapshot: snapshotOrder,
   },
+
+  // --- orders: payment (S3-3B) ---
+  {
+    method: 'POST',
+    prefix: '/api/v1/orders',
+    path: '/:id/payment/initiate',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied order id and starts a payment attempt for it.',
+    seed: seedOrder,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).post(`/api/v1/orders/${resourceId}/payment/initiate`), actor).set(
+        'Idempotency-Key',
+        `matrix-${randomUUID()}`,
+      ),
+    snapshot: snapshotOrder,
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/orders',
+    path: '/:id/payment/confirm',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied order id and confirms payment for it — ownership is checked before any payment attempt lookup, so this refuses a non-owner regardless of whether one was ever initiated.',
+    seed: seedOrder,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).post(`/api/v1/orders/${resourceId}/payment/confirm`), actor)
+        .set('Idempotency-Key', `matrix-${randomUUID()}`)
+        .send({ testScenario: 'SUCCEEDED' }),
+    snapshot: snapshotOrder,
+  },
 ];
 
 export const isTenantOwned = (route: ManifestRoute): route is TenantOwnedRoute =>

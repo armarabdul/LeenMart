@@ -177,7 +177,7 @@ describe('CheckoutPage', () => {
   it('honestly labels the payment step as test mode, with no real gateway branding', () => {
     renderCheckout({ id: 'cart-1', items: [cartItem()] }, { knownVariant: true });
 
-    expect(screen.getByText('Payment (test mode)')).toBeInTheDocument();
+    expect(screen.getByText('Payment — TEST / DEMO mode')).toBeInTheDocument();
     expect(screen.queryByText(/razorpay/i)).not.toBeInTheDocument();
   });
 

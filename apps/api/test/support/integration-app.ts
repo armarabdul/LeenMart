@@ -82,6 +82,9 @@ export const disposeIntegrationHarness = async (
   const subOrderIds = subOrders.map((subOrder) => subOrder.id);
   await db.orderItem.deleteMany({ where: { subOrderId: { in: subOrderIds } } });
   await db.subOrder.deleteMany({ where: { id: { in: subOrderIds } } });
+  // `payment_attempts` is also RESTRICT against `orders` (S3-3B) — same
+  // child-first reasoning as `order_items`/`sub_orders` above.
+  await db.paymentAttempt.deleteMany({ where: { orderId: { in: orderIds } } });
   await db.order.deleteMany({ where: { id: { in: orderIds } } });
   await db.idempotencyKey.deleteMany({ where: { userId: { in: ids } } });
 

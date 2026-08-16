@@ -87,18 +87,31 @@ export const orderResponseSchema = z.object({
 });
 
 /**
- * Named by the approved decision as a likely-required contract. S3-3A's
- * payment scope stops at "the order flow reaches a payment-pending state"
- * (no gateway of any kind, real or mock) — `POST /orders`' own response
- * already conveys that via `OrderResponse.status: 'PENDING_PAYMENT'`, so
- * this schema is not behind a separate endpoint today. Defined now, ahead
- * of its first caller, so S3-3B's real/mock payment initiation step has an
- * agreed shape to extend rather than inventing one under time pressure.
+ * S3-3A defined this ahead of its first caller, exactly for S3-3B: the
+ * response of `POST /api/v1/orders/:id/payment/initiate`. Unchanged from
+ * its original shape — starting a payment attempt tells the caller nothing
+ * beyond "which order, still pending" until the attempt actually resolves
+ * (`POST .../payment/confirm`, which returns the full `OrderResponse`).
  */
 export const paymentInitiationResponseSchema = z.object({
   orderId: uuidSchema,
   status: z.literal('PAYMENT_PENDING'),
 });
+
+/**
+ * POST /api/v1/orders/:id/payment/confirm (S3-3B). `testScenario` selects
+ * which deterministic outcome the mock gateway returns — present only
+ * because this milestone's adapter is a mock (see `PaymentGateway`'s own
+ * doc comment). It is never an amount, a status, or anything else the
+ * backend would otherwise have to trust from the client (SEC-02): the order
+ * that gets confirmed, and the total it gets confirmed for, are always
+ * whatever the database already has on file.
+ */
+export const confirmPaymentRequestSchema = z
+  .object({
+    testScenario: z.enum(['SUCCEEDED', 'FAILED']),
+  })
+  .strict();
 
 export type OrderStatusDto = z.infer<typeof orderStatusSchema>;
 export type PlaceOrderRequest = z.infer<typeof placeOrderRequestSchema>;
@@ -108,3 +121,4 @@ export type OrderItemResponse = z.infer<typeof orderItemResponseSchema>;
 export type SubOrderResponse = z.infer<typeof subOrderResponseSchema>;
 export type OrderResponse = z.infer<typeof orderResponseSchema>;
 export type PaymentInitiationResponse = z.infer<typeof paymentInitiationResponseSchema>;
+export type ConfirmPaymentRequest = z.infer<typeof confirmPaymentRequestSchema>;

@@ -6,10 +6,20 @@ import type { OrderItemResponse, OrderResponse, SubOrderResponse } from '@leen-m
 import { createStore } from '@/app/store';
 import { OrderConfirmationPage } from '@/pages/OrderConfirmationPage';
 import { useGetOrderQuery } from '@/features/checkout/checkout.api';
+import {
+  useConfirmPaymentMutation,
+  useInitiatePaymentMutation,
+} from '@/features/payment/payment.api';
 
 vi.mock('@/features/checkout/checkout.api', () => ({ useGetOrderQuery: vi.fn() }));
+vi.mock('@/features/payment/payment.api', () => ({
+  useInitiatePaymentMutation: vi.fn(),
+  useConfirmPaymentMutation: vi.fn(),
+}));
 
 const mockedUseGetOrderQuery = vi.mocked(useGetOrderQuery);
+const mockedUseInitiatePaymentMutation = vi.mocked(useInitiatePaymentMutation);
+const mockedUseConfirmPaymentMutation = vi.mocked(useConfirmPaymentMutation);
 
 const orderItem = (overrides: Partial<OrderItemResponse> = {}): OrderItemResponse => ({
   id: 'item-1',
@@ -67,6 +77,14 @@ const renderOrderPage = (
     isError: options.isError ?? false,
     error: undefined,
   } as unknown as ReturnType<typeof useGetOrderQuery>);
+  mockedUseInitiatePaymentMutation.mockReturnValue([
+    vi.fn(),
+    { isLoading: false, error: undefined },
+  ] as unknown as ReturnType<typeof useInitiatePaymentMutation>);
+  mockedUseConfirmPaymentMutation.mockReturnValue([
+    vi.fn(),
+    { isLoading: false, error: undefined },
+  ] as unknown as ReturnType<typeof useConfirmPaymentMutation>);
 
   render(
     <Provider store={createStore()}>
@@ -122,16 +140,17 @@ describe('OrderConfirmationPage', () => {
     expect(screen.getByText(/GST: ₹9\.90/)).toBeInTheDocument();
   });
 
-  it('shows a payment-pending banner honestly labelled as test mode', () => {
+  it('shows the test payment panel, honestly labelled as test mode, while payment is pending', () => {
     renderOrderPage(order({ status: 'PENDING_PAYMENT' }));
 
-    expect(screen.getByText(/no real charge was made/)).toBeInTheDocument();
+    expect(screen.getByText('Payment — TEST / DEMO mode')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start test payment' })).toBeInTheDocument();
   });
 
-  it('does not show the payment-pending banner once the order is confirmed', () => {
+  it('does not show the payment panel once the order is confirmed', () => {
     renderOrderPage(order({ status: 'CONFIRMED' }));
 
-    expect(screen.queryByText(/no real charge was made/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Payment — TEST / DEMO mode')).not.toBeInTheDocument();
   });
 
   it("renders the order's delivery address snapshot", () => {

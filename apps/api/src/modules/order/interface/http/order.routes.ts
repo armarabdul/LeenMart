@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { placeOrderRequestSchema } from '@leen-mart/contracts';
+import { confirmPaymentRequestSchema, placeOrderRequestSchema } from '@leen-mart/contracts';
 import type { Clock, IdGenerator } from '@leen-mart/domain-kit';
 import { asyncHandler } from '../../../../shared/interface/http/middleware/async-handler.js';
 import { authenticate } from '../../../../shared/interface/http/middleware/authenticate.js';
@@ -15,6 +15,9 @@ const orderIdParamsSchema = z.object({ id: z.string().uuid() }).strict();
 
 /** The fixed idempotency scope key for this one route — see `idempotency()`'s own doc comment for why this is a plain string, not derived from the request path. */
 const PLACE_ORDER_ENDPOINT = 'POST /api/v1/orders';
+/** S3-3B: same reasoning, one fixed scope string per route — never derived from `:id`, so the key's own uniqueness is what disambiguates one caller's repeated calls from another's. */
+const INITIATE_PAYMENT_ENDPOINT = 'POST /api/v1/orders/:id/payment/initiate';
+const CONFIRM_PAYMENT_ENDPOINT = 'POST /api/v1/orders/:id/payment/confirm';
 
 /**
  * Mounted at `/api/v1/orders` (SDD 9.2). Every route here is
@@ -67,6 +70,32 @@ export const createOrderRouter = (controller: OrderController, deps: OrderRouter
     requirePermission('CANCEL_OWN_ORDER'),
     validate({ params: orderIdParamsSchema }),
     asyncHandler(controller.cancelOrder),
+  );
+
+  // S3-3B: `PLACE_ORDER`, not a new permission. SDD 4.2's own approved order-
+  // placement flow already folds "create the provider-side payment order"
+  // into `PlaceOrderUseCase`'s own steps (4g), under the same permission —
+  // splitting checkout into "place" then "pay" here is a shape difference
+  // from a mock/synchronous adapter having no webhook to drive confirmation,
+  // not a different capability needing its own row in SDD 8.2's matrix.
+  // Ownership (this order belongs to the caller) is still the use case's
+  // job, exactly like every other route in this file.
+  router.post(
+    '/:id/payment/initiate',
+    authenticate(accessTokenService, sessionDenylist),
+    requirePermission('PLACE_ORDER'),
+    validate({ params: orderIdParamsSchema }),
+    idempotency(idempotencyKeyRepository, INITIATE_PAYMENT_ENDPOINT, { clock, idGenerator }),
+    asyncHandler(controller.initiatePayment),
+  );
+
+  router.post(
+    '/:id/payment/confirm',
+    authenticate(accessTokenService, sessionDenylist),
+    requirePermission('PLACE_ORDER'),
+    validate({ params: orderIdParamsSchema, body: confirmPaymentRequestSchema }),
+    idempotency(idempotencyKeyRepository, CONFIRM_PAYMENT_ENDPOINT, { clock, idGenerator }),
+    asyncHandler(controller.confirmPayment),
   );
 
   return router;

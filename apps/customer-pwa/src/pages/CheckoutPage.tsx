@@ -180,11 +180,11 @@ export const CheckoutPage = (): JSX.Element => {
 
       <section className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-amber-800">
-          Payment (test mode)
+          Payment — TEST / DEMO mode
         </h2>
         <p className="text-sm text-amber-800">
-          This is a test environment. Placing your order does not process a real payment — your
-          order will show as payment pending until a real payment step is added.
+          This is a test environment — no real payment provider is contacted. After you place your
+          order you&apos;ll complete a simulated test payment on the next screen.
         </p>
       </section>
 

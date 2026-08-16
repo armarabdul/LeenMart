@@ -1,7 +1,9 @@
 import type { Request, Response } from 'express';
 import type {
+  ConfirmPaymentRequest,
   OrderItemResponse,
   OrderResponse,
+  PaymentInitiationResponse,
   PlaceOrderRequest,
   SubOrderResponse,
 } from '@leen-mart/contracts';
@@ -9,23 +11,30 @@ import { getRequestId } from '../../../../shared/interface/http/middleware/reque
 import { validatedData } from '../../../../shared/interface/http/middleware/validate.js';
 import type { Order } from '../../domain/entities/order.entity.js';
 import type { OrderItem } from '../../domain/entities/order-item.entity.js';
+import type { PaymentAttempt } from '../../domain/entities/payment-attempt.entity.js';
 import type { SubOrder } from '../../domain/entities/sub-order.entity.js';
 import { toAddressId } from '../../../customer/index.js';
 import { toOrderId } from '../../domain/value-objects/order-id.value-object.js';
 import type { CancelOrderUseCase } from '../../application/use-cases/cancel-order.use-case.js';
+import type { ConfirmPaymentUseCase } from '../../application/use-cases/confirm-payment.use-case.js';
 import type { GetOrderUseCase } from '../../application/use-cases/get-order.use-case.js';
+import type { InitiatePaymentUseCase } from '../../application/use-cases/initiate-payment.use-case.js';
 import type { PlaceOrderUseCase } from '../../application/use-cases/place-order.use-case.js';
 
 export interface OrderController {
   readonly placeOrder: (req: Request, res: Response) => Promise<void>;
   readonly getOrder: (req: Request, res: Response) => Promise<void>;
   readonly cancelOrder: (req: Request, res: Response) => Promise<void>;
+  readonly initiatePayment: (req: Request, res: Response) => Promise<void>;
+  readonly confirmPayment: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface OrderControllerDeps {
   readonly placeOrderUseCase: PlaceOrderUseCase;
   readonly getOrderUseCase: GetOrderUseCase;
   readonly cancelOrderUseCase: CancelOrderUseCase;
+  readonly initiatePaymentUseCase: InitiatePaymentUseCase;
+  readonly confirmPaymentUseCase: ConfirmPaymentUseCase;
 }
 
 /**
@@ -85,12 +94,23 @@ const toOrderResponse = (order: Order): OrderResponse => ({
   updatedAt: order.updatedAt.toISOString(),
 });
 
+/** `PaymentAttempt` never reaches the customer response beyond this — no `providerReference`, no internal attempt id (no approved contract needs either). */
+const toPaymentInitiationResponse = (attempt: PaymentAttempt): PaymentInitiationResponse => ({
+  orderId: attempt.orderId,
+  status: 'PAYMENT_PENDING',
+});
+
 /**
- * Thin HTTP adapter. Parses nothing itself (`validate()`'s job), translates
- * no errors (the global error handler's job, SDD 17.1).
+ * Every handler below is split out of `createOrderController` purely to keep
+ * that composition root under this file's max-lines-per-function budget —
+ * same reasoning as the DTO mappers above. Each is a plain
+ * `(deps) => (req, res) => Promise<void>` factory, still a thin HTTP adapter:
+ * parses nothing itself (`validate()`'s job), translates no errors (the
+ * global error handler's job, SDD 17.1).
  */
-export const createOrderController = (deps: OrderControllerDeps): OrderController => ({
-  placeOrder: async (req: Request, res: Response): Promise<void> => {
+const placeOrderHandler =
+  (deps: OrderControllerDeps) =>
+  async (req: Request, res: Response): Promise<void> => {
     if (!req.principal) {
       throw new Error(
         'POST /orders reached without authenticate() middleware — req.principal is unset.',
@@ -105,9 +125,11 @@ export const createOrderController = (deps: OrderControllerDeps): OrderControlle
     });
 
     res.status(201).json({ data: toOrderResponse(order), meta: { requestId: getRequestId() } });
-  },
+  };
 
-  getOrder: async (req: Request, res: Response): Promise<void> => {
+const getOrderHandler =
+  (deps: OrderControllerDeps) =>
+  async (req: Request, res: Response): Promise<void> => {
     if (!req.principal) {
       throw new Error(
         'GET /orders/:id reached without authenticate() middleware — req.principal is unset.',
@@ -121,9 +143,11 @@ export const createOrderController = (deps: OrderControllerDeps): OrderControlle
     });
 
     res.status(200).json({ data: toOrderResponse(order), meta: { requestId: getRequestId() } });
-  },
+  };
 
-  cancelOrder: async (req: Request, res: Response): Promise<void> => {
+const cancelOrderHandler =
+  (deps: OrderControllerDeps) =>
+  async (req: Request, res: Response): Promise<void> => {
     if (!req.principal) {
       throw new Error(
         'POST /orders/:id/cancel reached without authenticate() middleware — req.principal is unset.',
@@ -137,5 +161,51 @@ export const createOrderController = (deps: OrderControllerDeps): OrderControlle
     });
 
     res.status(200).json({ data: toOrderResponse(order), meta: { requestId: getRequestId() } });
-  },
+  };
+
+const initiatePaymentHandler =
+  (deps: OrderControllerDeps) =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'POST /orders/:id/payment/initiate reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+    const { params } = validatedData<unknown, unknown, { id: string }>(req);
+
+    const attempt = await deps.initiatePaymentUseCase.execute({
+      principal: req.principal,
+      orderId: toOrderId(params.id),
+    });
+
+    res
+      .status(201)
+      .json({ data: toPaymentInitiationResponse(attempt), meta: { requestId: getRequestId() } });
+  };
+
+const confirmPaymentHandler =
+  (deps: OrderControllerDeps) =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'POST /orders/:id/payment/confirm reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+    const { params, body } = validatedData<ConfirmPaymentRequest, unknown, { id: string }>(req);
+
+    const order = await deps.confirmPaymentUseCase.execute({
+      principal: req.principal,
+      orderId: toOrderId(params.id),
+      testScenario: body.testScenario,
+    });
+
+    res.status(200).json({ data: toOrderResponse(order), meta: { requestId: getRequestId() } });
+  };
+
+export const createOrderController = (deps: OrderControllerDeps): OrderController => ({
+  placeOrder: placeOrderHandler(deps),
+  getOrder: getOrderHandler(deps),
+  cancelOrder: cancelOrderHandler(deps),
+  initiatePayment: initiatePaymentHandler(deps),
+  confirmPayment: confirmPaymentHandler(deps),
 });

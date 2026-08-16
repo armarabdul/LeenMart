@@ -9,6 +9,7 @@ import { PrismaInventoryRepository } from '../catalogue/infrastructure/persisten
 import { PrismaAddressRepository } from '../customer/infrastructure/persistence/prisma-address.repository.js';
 import type { AccessTokenService, SessionDenylist } from '../identity/index.js';
 import { createPricingTaxModule } from '../pricing-tax/index.js';
+import type { ResolveCommissionUseCase, ResolveTaxUseCase } from '../pricing-tax/index.js';
 import { PrismaVendorRepository } from '../vendor/infrastructure/persistence/prisma-vendor.repository.js';
 import { CheckoutTransactionRunner } from '../../shared/infrastructure/persistence/tenant-prisma.js';
 import { IdempotencyKeyRepository } from '../../shared/infrastructure/persistence/idempotency-key.repository.js';
@@ -16,7 +17,11 @@ import { PrismaOutboxWriter } from '../../shared/infrastructure/persistence/pris
 import { PlaceOrderUseCase } from './application/use-cases/place-order.use-case.js';
 import { GetOrderUseCase } from './application/use-cases/get-order.use-case.js';
 import { CancelOrderUseCase } from './application/use-cases/cancel-order.use-case.js';
+import { InitiatePaymentUseCase } from './application/use-cases/initiate-payment.use-case.js';
+import { ConfirmPaymentUseCase } from './application/use-cases/confirm-payment.use-case.js';
 import { PrismaOrderRepository } from './infrastructure/persistence/prisma-order.repository.js';
+import { PrismaPaymentAttemptRepository } from './infrastructure/persistence/prisma-payment-attempt.repository.js';
+import { MockPaymentGateway } from './infrastructure/payment/mock-payment-gateway.js';
 import { createOrderController } from './interface/http/order.controller.js';
 import { createOrderRouter } from './interface/http/order.routes.js';
 
@@ -47,6 +52,7 @@ interface OrderRepositories {
   readonly vendorRepository: PrismaVendorRepository;
   readonly inventoryRepository: PrismaInventoryRepository;
   readonly orderRepository: PrismaOrderRepository;
+  readonly paymentAttemptRepository: PrismaPaymentAttemptRepository;
   readonly outboxWriter: PrismaOutboxWriter;
   readonly idempotencyKeyRepository: IdempotencyKeyRepository;
   readonly transactionRunner: CheckoutTransactionRunner;
@@ -73,23 +79,37 @@ const buildOrderRepositories = (
     vendorRepository: new PrismaVendorRepository(checkoutPrisma),
     inventoryRepository: new PrismaInventoryRepository(checkoutPrisma),
     orderRepository: new PrismaOrderRepository(checkoutPrisma),
+    paymentAttemptRepository: new PrismaPaymentAttemptRepository(checkoutPrisma),
     outboxWriter: new PrismaOutboxWriter(checkoutPrisma, idGenerator, clock),
     idempotencyKeyRepository: new IdempotencyKeyRepository(checkoutPrisma),
     transactionRunner: new CheckoutTransactionRunner(checkoutPrisma),
   };
 };
 
-/**
- * This module's own composition root (SDD 2.3), mirroring every other
- * module's shape. Constructs `pricing-tax` itself (S3-2's own doc comment
- * names this module as its "intended caller") on the plain client —
- * `commission_rules`/`tax_rates` carry no RLS, the same reasoning that
- * module's own `PricingTaxModuleDeps.prisma` comment already states.
- */
-export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
-  const { prisma, accessTokenService, sessionDenylist, clock, idGenerator, logger } = deps;
-  const moduleLogger = logger.child({ module: 'order' });
+interface OrderUseCases {
+  readonly placeOrderUseCase: PlaceOrderUseCase;
+  readonly getOrderUseCase: GetOrderUseCase;
+  readonly cancelOrderUseCase: CancelOrderUseCase;
+  readonly initiatePaymentUseCase: InitiatePaymentUseCase;
+  readonly confirmPaymentUseCase: ConfirmPaymentUseCase;
+}
 
+interface BuildOrderUseCasesDeps {
+  readonly repositories: OrderRepositories;
+  readonly paymentGateway: MockPaymentGateway;
+  readonly resolveCommissionUseCase: ResolveCommissionUseCase;
+  readonly resolveTaxUseCase: ResolveTaxUseCase;
+  readonly idGenerator: IdGenerator;
+  readonly clock: Clock;
+  readonly logger: Logger;
+}
+
+/** `PlaceOrderUseCase`/`GetOrderUseCase`/`CancelOrderUseCase` — split out of `buildOrderUseCases` purely to keep every function under this file's line budget. */
+const buildCheckoutUseCases = (
+  deps: BuildOrderUseCasesDeps,
+): Pick<OrderUseCases, 'placeOrderUseCase' | 'getOrderUseCase' | 'cancelOrderUseCase'> => {
+  const { repositories, resolveCommissionUseCase, resolveTaxUseCase, idGenerator, clock, logger } =
+    deps;
   const {
     cartRepository,
     cartItemRepository,
@@ -100,11 +120,8 @@ export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
     inventoryRepository,
     orderRepository,
     outboxWriter,
-    idempotencyKeyRepository,
     transactionRunner,
-  } = buildOrderRepositories(deps);
-
-  const { resolveCommissionUseCase, resolveTaxUseCase } = createPricingTaxModule({ prisma, clock });
+  } = repositories;
 
   const placeOrderUseCase = new PlaceOrderUseCase({
     cartRepository,
@@ -121,7 +138,7 @@ export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
     resolveTaxUseCase,
     idGenerator,
     clock,
-    logger: moduleLogger,
+    logger,
   });
   const getOrderUseCase = new GetOrderUseCase({ orderRepository });
   const cancelOrderUseCase = new CancelOrderUseCase({
@@ -130,18 +147,83 @@ export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
     outboxWriter,
     transactionRunner,
     clock,
+    logger,
+  });
+
+  return { placeOrderUseCase, getOrderUseCase, cancelOrderUseCase };
+};
+
+/** `InitiatePaymentUseCase`/`ConfirmPaymentUseCase` (S3-3B) — split out for the same reason as `buildCheckoutUseCases`. */
+const buildPaymentUseCases = (
+  deps: BuildOrderUseCasesDeps,
+): Pick<OrderUseCases, 'initiatePaymentUseCase' | 'confirmPaymentUseCase'> => {
+  const { repositories, paymentGateway, idGenerator, clock, logger } = deps;
+  const { orderRepository, paymentAttemptRepository, outboxWriter, transactionRunner } =
+    repositories;
+
+  const initiatePaymentUseCase = new InitiatePaymentUseCase({
+    orderRepository,
+    paymentAttemptRepository,
+    paymentGateway,
+    outboxWriter,
+    transactionRunner,
+    idGenerator,
+    clock,
+    logger,
+  });
+  const confirmPaymentUseCase = new ConfirmPaymentUseCase({
+    orderRepository,
+    paymentAttemptRepository,
+    paymentGateway,
+    outboxWriter,
+    transactionRunner,
+    clock,
+    logger,
+  });
+
+  return { initiatePaymentUseCase, confirmPaymentUseCase };
+};
+
+/**
+ * Every use case this module exposes. Split out of `createOrderModule`
+ * purely to keep it under this file's function-length budget — same
+ * reasoning as `buildOrderRepositories`.
+ */
+const buildOrderUseCases = (deps: BuildOrderUseCasesDeps): OrderUseCases => ({
+  ...buildCheckoutUseCases(deps),
+  ...buildPaymentUseCases(deps),
+});
+
+/**
+ * This module's own composition root (SDD 2.3), mirroring every other
+ * module's shape. Constructs `pricing-tax` itself (S3-2's own doc comment
+ * names this module as its "intended caller") on the plain client —
+ * `commission_rules`/`tax_rates` carry no RLS, the same reasoning that
+ * module's own `PricingTaxModuleDeps.prisma` comment already states.
+ */
+export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
+  const { prisma, accessTokenService, sessionDenylist, clock, idGenerator, logger } = deps;
+  const moduleLogger = logger.child({ module: 'order' });
+
+  const repositories = buildOrderRepositories(deps);
+  const paymentGateway = new MockPaymentGateway(idGenerator);
+  const { resolveCommissionUseCase, resolveTaxUseCase } = createPricingTaxModule({ prisma, clock });
+
+  const useCases = buildOrderUseCases({
+    repositories,
+    paymentGateway,
+    resolveCommissionUseCase,
+    resolveTaxUseCase,
+    idGenerator,
+    clock,
     logger: moduleLogger,
   });
 
-  const controller = createOrderController({
-    placeOrderUseCase,
-    getOrderUseCase,
-    cancelOrderUseCase,
-  });
+  const controller = createOrderController(useCases);
   const router = createOrderRouter(controller, {
     accessTokenService,
     sessionDenylist,
-    idempotencyKeyRepository,
+    idempotencyKeyRepository: repositories.idempotencyKeyRepository,
     clock,
     idGenerator,
   });

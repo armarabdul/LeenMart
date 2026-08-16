@@ -396,6 +396,18 @@ describe('database role separation', () => {
       await expect(checkout.idempotencyKey.count()).resolves.toBeGreaterThanOrEqual(0);
     });
 
+    it('can read and update payment_attempts (S3-3B) but never delete a row', async () => {
+      await expect(checkout.paymentAttempt.count()).resolves.toBeGreaterThanOrEqual(0);
+      await expect(
+        checkout.$executeRawUnsafe(
+          'UPDATE payment_attempts SET provider_reference = provider_reference WHERE false',
+        ),
+      ).resolves.toBe(0);
+      await expect(
+        checkout.$executeRawUnsafe('DELETE FROM payment_attempts WHERE false'),
+      ).rejects.toThrow(/permission denied for table payment_attempts/);
+    });
+
     it('can read vendors, and can read and decrement inventory', async () => {
       await expect(checkout.vendorProfile.count()).resolves.toBeGreaterThanOrEqual(0);
       await expect(checkout.inventory.count()).resolves.toBeGreaterThanOrEqual(0);
@@ -482,7 +494,7 @@ describe('database role separation', () => {
       ).rejects.toThrow(/row-level security policy for table "inventory"/);
     });
 
-    it('has no table grants beyond the ones S3-3A issues', async () => {
+    it('has no table grants beyond the ones S3-3A/S3-3B issue', async () => {
       const rows = await owner.$queryRaw<{ relname: string }[]>`
         SELECT DISTINCT c.relname
         FROM pg_class c
@@ -497,6 +509,7 @@ describe('database role separation', () => {
         'order_items',
         'orders',
         'outbox_events',
+        'payment_attempts',
         'sub_orders',
         'vendors',
       ]);

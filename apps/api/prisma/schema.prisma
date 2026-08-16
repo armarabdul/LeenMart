@@ -1189,8 +1189,9 @@ model Order {
   /// `Restrict`, not `Cascade` like `Cart.user`: an order is retained
   /// financial/audit history (SDD 22.5: 8 years), not disposable per-session
   /// state, so it must not vanish if its owning `User` row ever did.
-  customer  User       @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  subOrders SubOrder[]
+  customer        User             @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  subOrders       SubOrder[]
+  paymentAttempts PaymentAttempt[]
 
   @@index([customerId, createdAt(sort: Desc)], map: "idx_orders_customer_created")
   @@index([status, createdAt], map: "idx_orders_status_created")
@@ -1278,9 +1279,9 @@ model OrderItem {
   hsnCodeSnapshot String? @map("hsn_code_snapshot") @db.VarChar(8)
 
   taxResolved        Boolean @default(false) @map("tax_resolved")
-  taxRateBasisPoints  Int?    @map("tax_rate_basis_points")
-  taxAmount           BigInt? @map("tax_amount")
-  taxCurrency         String? @map("tax_currency") @db.VarChar(3)
+  taxRateBasisPoints Int?    @map("tax_rate_basis_points")
+  taxAmount          BigInt? @map("tax_amount")
+  taxCurrency        String? @map("tax_currency") @db.VarChar(3)
 
   commissionRateBasisPoints Int    @map("commission_rate_basis_points")
   commissionAmount          BigInt @map("commission_amount")
@@ -1293,6 +1294,61 @@ model OrderItem {
   @@index([subOrderId], map: "idx_order_items_sub_order")
   @@index([variantId, createdAt], map: "idx_order_items_variant_created")
   @@map("order_items")
+}
+
+/// S3-3B's own three-state lifecycle — a deliberately narrowed subset of SDD
+/// 10.4's full gateway lifecycle (`CREATED/PENDING/AUTHORIZED/CAPTURED/
+/// SETTLED`, plus refund states). That fuller lifecycle exists to model an
+/// asynchronous real gateway with webhooks, partial capture and settlement —
+/// none of which S3-3B builds (real payment integration, refunds and
+/// settlement are explicitly out of scope). `INITIATED` covers everything up
+/// to a decision; `SUCCEEDED`/`FAILED` is that decision, returned
+/// synchronously by the mock gateway.
+enum PaymentAttemptStatus {
+  INITIATED
+  SUCCEEDED
+  FAILED
+}
+
+/// One attempt to pay for an `Order` (S3-3B). Not the full SDD 10.4
+/// `payments`/`payment_attempts` split — see the enum's own comment above for
+/// why a single table is enough at this milestone's scope. A failed attempt
+/// never mutates the order; a customer retries by initiating a fresh
+/// attempt, so more than one row per order is expected and rows are
+/// append-only once resolved (this schema's own §6.1 convention for
+/// financial-adjacent tables — no repository method ever updates a
+/// `SUCCEEDED`/`FAILED` row back to another state).
+///
+/// `provider` is always the literal `'MOCK'` this milestone — a real
+/// provider's own attempts would live in this same column once a real
+/// `PaymentGateway` adapter exists, so the column is a plain string, not an
+/// enum with one member.
+///
+/// Read and written through `leenmart_checkout` (S3-3A decision D-S3-07),
+/// the same credential `orders`/`sub_orders` already use — payment
+/// confirmation must flip both an attempt's and the order's status in the
+/// same transaction, which only this credential can reach.
+model PaymentAttempt {
+  id                String               @id @db.Uuid
+  orderId           String               @map("order_id") @db.Uuid
+  status            PaymentAttemptStatus @default(INITIATED)
+  amount            BigInt
+  currency          String               @default("INR") @db.VarChar(3)
+  provider          String               @db.VarChar(20)
+  providerReference String               @map("provider_reference") @db.VarChar(100)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  /// Prisma's schema DSL has no partial-index `WHERE` clause (the same gap
+  /// `cart_items`'s own `uq_cart_items_cart_variant` works around) — the real
+  /// `(order_id) WHERE status = 'INITIATED'` partial unique index, the thing
+  /// that actually makes "the" `INITIATED` attempt for an order singular, is
+  /// hand-added only in the migration.
+  @@index([orderId, createdAt(sort: Desc)], map: "idx_payment_attempts_order_created")
+  @@map("payment_attempts")
 }
 
 /// `Idempotency-Key` storage (S3-3A, SDD 9.2/9.4/10.5/17.1). Scoped by

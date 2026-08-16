@@ -8,6 +8,7 @@ import type {
 import { apiErrorMessage } from '@/shared/api/base-api';
 import { formatMoney } from '@/shared/lib/format-money';
 import { useGetOrderQuery } from '@/features/checkout/checkout.api';
+import { TestPaymentPanel } from '@/features/payment/components/TestPaymentPanel';
 
 const OrderSkeleton = (): JSX.Element => (
   <div className="flex flex-col gap-4">
@@ -118,12 +119,7 @@ export const OrderConfirmationPage = (): JSX.Element => {
         </p>
       </header>
 
-      {order.status === 'PENDING_PAYMENT' && (
-        <p className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          Payment pending — this is a test environment, so no real charge was made. A real payment
-          step will be added in a future release.
-        </p>
-      )}
+      {order.status === 'PENDING_PAYMENT' && <TestPaymentPanel orderId={order.id} />}
 
       <section className="flex flex-col gap-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">

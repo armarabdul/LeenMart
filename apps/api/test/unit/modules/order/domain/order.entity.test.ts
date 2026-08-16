@@ -106,6 +106,28 @@ describe('Order', () => {
       expect(confirmed).not.toBe(original);
       expect(original.status).toBe(OrderStatus.PENDING_PAYMENT);
     });
+
+    it('confirm() cascades to every sub-order, not just the order itself (S3-3B)', () => {
+      const subOrders = [
+        subOrderInState(
+          OrderStatus.PENDING_PAYMENT,
+          vendorAId,
+          toSubOrderId(toUuid('00000000-0000-7000-8000-000000000b05')),
+        ),
+        subOrderInState(
+          OrderStatus.PENDING_PAYMENT,
+          vendorBId,
+          toSubOrderId(toUuid('00000000-0000-7000-8000-000000000b06')),
+        ),
+      ];
+      const confirmed = orderInState(OrderStatus.PENDING_PAYMENT, subOrders).confirm(later);
+
+      expect(confirmed.status).toBe(OrderStatus.CONFIRMED);
+      expect(confirmed.subOrders).toHaveLength(2);
+      expect(
+        confirmed.subOrders.every((subOrder) => subOrder.status === OrderStatus.CONFIRMED),
+      ).toBe(true);
+    });
   });
 
   describe('illegal transitions', () => {
