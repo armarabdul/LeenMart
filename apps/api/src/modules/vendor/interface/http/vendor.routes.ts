@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   createKycUploadIntentRequestSchema,
   registerVendorRequestSchema,
+  setVendorBusinessHoursRequestSchema,
   setVendorPickupCapabilityRequestSchema,
   setVendorServiceablePincodesRequestSchema,
   setVendorShopAddressRequestSchema,
@@ -92,6 +93,29 @@ const mountShopAddressRoutes = (
     requirePermission('CONFIGURE_DELIVERY_SLOTS'),
     validate({ body: setVendorServiceablePincodesRequestSchema }),
     asyncHandler(controller.setServiceablePincodes),
+  );
+
+  // S4-HOURS. Same `CONFIGURE_DELIVERY_SLOTS` permission as the serviceable
+  // pincodes above — SDD 8.2's "Configure delivery/slots" row covers vendor
+  // delivery configuration, and business hours are that, so no new permission
+  // is introduced.
+  router.get(
+    '/me/business-hours',
+    authenticate(accessTokenService, sessionDenylist),
+    tenantContext(resolveVendorTenant),
+    requirePermission('CONFIGURE_DELIVERY_SLOTS'),
+    asyncHandler(controller.getBusinessHours),
+  );
+
+  // PUT, matching every sibling: the schedule is replaced wholesale, since a
+  // partial patch would need add/remove semantics nothing here requires.
+  router.put(
+    '/me/business-hours',
+    authenticate(accessTokenService, sessionDenylist),
+    tenantContext(resolveVendorTenant),
+    requirePermission('CONFIGURE_DELIVERY_SLOTS'),
+    validate({ body: setVendorBusinessHoursRequestSchema }),
+    asyncHandler(controller.setBusinessHours),
   );
 };
 

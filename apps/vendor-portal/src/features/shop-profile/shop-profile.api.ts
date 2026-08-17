@@ -1,6 +1,8 @@
 import type {
+  SetVendorBusinessHoursRequest,
   SetVendorServiceablePincodesRequest,
   SetVendorShopAddressRequest,
+  VendorBusinessHoursResponse,
   VendorServiceablePincodesResponse,
   VendorShopAddressResponse,
 } from '@leen-mart/contracts';
@@ -43,6 +45,16 @@ export const shopProfileApi = baseApi.injectEndpoints({
         response.data,
       invalidatesTags: ['ServiceablePincodes'],
     }),
+    getBusinessHours: builder.query<VendorBusinessHoursResponse, void>({
+      query: () => '/vendors/me/business-hours',
+      transformResponse: (response: SuccessEnvelope<VendorBusinessHoursResponse>) => response.data,
+      providesTags: ['BusinessHours'],
+    }),
+    setBusinessHours: builder.mutation<VendorBusinessHoursResponse, SetVendorBusinessHoursRequest>({
+      query: (body) => ({ url: '/vendors/me/business-hours', method: 'PUT', body }),
+      transformResponse: (response: SuccessEnvelope<VendorBusinessHoursResponse>) => response.data,
+      invalidatesTags: ['BusinessHours'],
+    }),
   }),
 });
 
@@ -51,4 +63,6 @@ export const {
   useSetShopAddressMutation,
   useGetServiceablePincodesQuery,
   useSetServiceablePincodesMutation,
+  useGetBusinessHoursQuery,
+  useSetBusinessHoursMutation,
 } = shopProfileApi;

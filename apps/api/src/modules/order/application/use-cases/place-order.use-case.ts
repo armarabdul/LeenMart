@@ -31,10 +31,12 @@ import {
   OrderAddressNotFoundError,
   PickupNotSupportedByVendorError,
   ProductNotEligibleForOrderError,
+  VendorClosedForDeliveryError,
   VendorNotEligibleForOrderError,
 } from '../../domain/errors/order-errors.js';
 import type { OrderRepository } from '../../domain/repositories/order.repository.js';
 import type { ResolveServiceabilityUseCase } from './resolve-serviceability.use-case.js';
+import type { ResolveBusinessHoursUseCase } from './resolve-business-hours.use-case.js';
 import { toOrderId } from '../../domain/value-objects/order-id.value-object.js';
 import { toOrderItemId } from '../../domain/value-objects/order-item-id.value-object.js';
 import { toSubOrderId } from '../../domain/value-objects/sub-order-id.value-object.js';
@@ -81,6 +83,12 @@ export interface PlaceOrderDeps {
    * `PlaceOrderUseCase` stays a policy caller rather than a policy owner.
    */
   readonly resolveServiceabilityUseCase: ResolveServiceabilityUseCase;
+  /**
+   * S4-HOURS. A use case rather than a repository, so the "unconfigured vendor
+   * is open" rule (H4-A) is applied in exactly one place and this stays a
+   * policy caller rather than a policy owner.
+   */
+  readonly resolveBusinessHoursUseCase: ResolveBusinessHoursUseCase;
   readonly resolveCommissionUseCase: ResolveCommissionUseCase;
   readonly resolveTaxUseCase: ResolveTaxUseCase;
   readonly idGenerator: IdGenerator;
@@ -208,6 +216,10 @@ export class PlaceOrderUseCase {
     // (steps 4d/4e) — there is no reason to compute money for an order that
     // cannot be delivered.
     await this.assertServiceable(address, vendors, pickupVendorIds);
+    // SDD 4.2 step 4c, the second half of what that step validates: hours are
+    // checked alongside serviceability and still ahead of steps 4d/4e, so a
+    // closed vendor costs no tax or commission work either.
+    await this.assertOpenForDelivery(vendors, pickupVendorIds);
     const pricedLines = await this.priceLines(resolvedLines, vendors);
 
     const order = await this.placeInTransaction(principal, address, pricedLines, pickupVendorIds);
@@ -335,6 +347,40 @@ export class PlaceOrderUseCase {
         'Order refused: one or more delivery vendors do not serve this pincode',
       );
       throw new AddressNotServiceableError();
+    }
+  }
+
+  /**
+   * SDD 4.2 step 4c — "Validate slot capacity + business hours" (FR-27),
+   * S4-HOURS. Slot capacity is S4-SLOTS and deliberately absent; this is the
+   * business-hours half.
+   *
+   * Evaluated **per vendor**, and only for the vendors whose sub-order will be
+   * `DELIVERY`: business hours govern delivery only, and a `PICKUP` sub-order
+   * is exempt outright (locked decision H2-A). Pickup vendors are filtered out
+   * before the lookup, so a pickup-only order performs no query at all.
+   *
+   * All-or-nothing (locked decision H1-A): one closed delivery vendor refuses
+   * the entire placement. Nothing is partially placed, nothing is deferred to
+   * a later window, and no sub-order is silently flipped to `PICKUP` to make
+   * the order fit.
+   */
+  private async assertOpenForDelivery(
+    vendors: ReadonlyMap<VendorId, VendorProfile>,
+    pickupVendorIds: ReadonlySet<VendorId>,
+  ): Promise<void> {
+    const deliveryVendorIds = [...vendors.keys()].filter(
+      (vendorId) => !pickupVendorIds.has(vendorId),
+    );
+
+    const closed = await this.deps.resolveBusinessHoursUseCase.execute({ deliveryVendorIds });
+
+    if (closed.length > 0) {
+      this.deps.logger.info(
+        { closedVendorCount: closed.length },
+        'Order refused: one or more delivery vendors are closed right now',
+      );
+      throw new VendorClosedForDeliveryError();
     }
   }
 

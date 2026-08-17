@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { SetVendorShopAddressRequest, VendorShopAddressResponse } from '@leen-mart/contracts';
 import { apiErrorMessage } from '@/shared/api/base-api';
+import { BusinessHoursSection } from '@/features/shop-profile/components/BusinessHoursSection';
 import {
   useGetServiceablePincodesQuery,
   useGetShopProfileQuery,
@@ -310,6 +311,13 @@ export const ShopProfilePage = (): JSX.Element => {
           Delivery areas
         </h2>
         <ServiceablePincodesSection />
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+          Business hours
+        </h2>
+        <BusinessHoursSection />
       </section>
     </main>
   );

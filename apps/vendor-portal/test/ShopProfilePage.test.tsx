@@ -4,8 +4,10 @@ import { Provider } from 'react-redux';
 import { createStore } from '@/app/store';
 import { ShopProfilePage } from '@/pages/ShopProfilePage';
 import {
+  useGetBusinessHoursQuery,
   useGetServiceablePincodesQuery,
   useGetShopProfileQuery,
+  useSetBusinessHoursMutation,
   useSetServiceablePincodesMutation,
   useSetShopAddressMutation,
 } from '@/features/shop-profile/shop-profile.api';
@@ -15,12 +17,45 @@ vi.mock('@/features/shop-profile/shop-profile.api', () => ({
   useSetShopAddressMutation: vi.fn(),
   useGetServiceablePincodesQuery: vi.fn(),
   useSetServiceablePincodesMutation: vi.fn(),
+  useGetBusinessHoursQuery: vi.fn(),
+  useSetBusinessHoursMutation: vi.fn(),
 }));
 
 const mockedUseGetShopProfileQuery = vi.mocked(useGetShopProfileQuery);
 const mockedUseSetShopAddressMutation = vi.mocked(useSetShopAddressMutation);
 const mockedUseGetServiceablePincodesQuery = vi.mocked(useGetServiceablePincodesQuery);
 const mockedUseSetServiceablePincodesMutation = vi.mocked(useSetServiceablePincodesMutation);
+const mockedUseGetBusinessHoursQuery = vi.mocked(useGetBusinessHoursQuery);
+const mockedUseSetBusinessHoursMutation = vi.mocked(useSetBusinessHoursMutation);
+
+/** S4-HOURS. Defaults keep every earlier expectation in this file unaffected. */
+const setBusinessHours = vi.fn();
+interface HoursStub {
+  configured?: boolean;
+  intervals?: { weekday: number; openMinute: number; closeMinute: number }[];
+  closures?: { weekday: number | null; date: string | null }[];
+}
+const stubHours = (options: HoursStub = {}): void => {
+  // Module-level spy shared across the file, so each render starts from zero
+  // and an assertion is about *this* test rather than the suite's history.
+  setBusinessHours.mockClear();
+  mockedUseGetBusinessHoursQuery.mockReturnValue({
+    data: {
+      id: 'vendor-1',
+      configured: options.configured ?? false,
+      intervals: options.intervals ?? [],
+      closures: options.closures ?? [],
+    },
+    isLoading: false,
+    isError: false,
+    error: undefined,
+  } as unknown as ReturnType<typeof useGetBusinessHoursQuery>);
+  setBusinessHours.mockReturnValue({ unwrap: () => Promise.resolve({}) });
+  mockedUseSetBusinessHoursMutation.mockReturnValue([
+    setBusinessHours,
+    { isLoading: false, error: undefined },
+  ] as unknown as ReturnType<typeof useSetBusinessHoursMutation>);
+};
 
 /** S4-SERV. Defaults keep every S4-ADDR expectation in this file unaffected. */
 const setServiceablePincodes = vi.fn();
@@ -64,6 +99,7 @@ const renderPage = (options: {
   isError?: boolean;
   saveRejects?: boolean;
   pincodes?: { configured?: boolean; pincodes?: string[] };
+  hours?: HoursStub;
 }): { setShopAddress: ReturnType<typeof vi.fn> } => {
   mockedUseGetShopProfileQuery.mockReturnValue({
     data: options.isError === true ? undefined : (options.profile ?? PROFILE),
@@ -84,6 +120,7 @@ const renderPage = (options: {
   ] as unknown as ReturnType<typeof useSetShopAddressMutation>);
 
   stubPincodes(options.pincodes);
+  stubHours(options.hours);
 
   render(
     <Provider store={createStore()}>
@@ -233,5 +270,128 @@ describe('ShopProfilePage', () => {
 
       expect(screen.getByText(/Pickup orders are never affected by this list/)).toBeInTheDocument();
     });
+  });
+});
+
+// A sibling top-level block rather than a nested one: the file's outer describe
+// would otherwise exceed this repository's function-length budget.
+describe('ShopProfilePage — business hours (S4-HOURS)', () => {
+  it('tells an unconfigured vendor they currently accept delivery at any time (H4-A)', () => {
+    renderPage({ hours: { configured: false } });
+
+    expect(
+      screen.getByText(/you currently accept delivery orders at any time/i),
+    ).toBeInTheDocument();
+  });
+
+  it('does not show that notice once hours are configured', () => {
+    renderPage({
+      hours: { configured: true, intervals: [{ weekday: 1, openMinute: 540, closeMinute: 1080 }] },
+    });
+
+    expect(
+      screen.queryByText(/you currently accept delivery orders at any time/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it('states that hours are IST and that pickup is unaffected', () => {
+    renderPage({});
+
+    expect(screen.getByText(/All times are IST/)).toBeInTheDocument();
+    expect(screen.getByText(/Pickup orders are never affected by these hours/)).toBeInTheDocument();
+  });
+
+  it('marks a weekday with no intervals as closed', () => {
+    renderPage({});
+
+    expect(screen.getByText(/Closed — no delivery on Monday/)).toBeInTheDocument();
+  });
+
+  it('prefills a stored interval as clock times', () => {
+    renderPage({
+      hours: { configured: true, intervals: [{ weekday: 1, openMinute: 540, closeMinute: 1080 }] },
+    });
+
+    expect(screen.getByLabelText('Monday opening time')).toHaveValue('09:00');
+    expect(screen.getByLabelText('Monday closing time')).toHaveValue('18:00');
+  });
+
+  it('shows a recurring weekly holiday as checked and explains it', () => {
+    renderPage({
+      hours: {
+        configured: true,
+        intervals: [{ weekday: 0, openMinute: 0, closeMinute: 1440 }],
+        closures: [{ weekday: 0, date: null }],
+      },
+    });
+
+    expect(screen.getByText(/Closed every Sunday/)).toBeInTheDocument();
+  });
+
+  it('prefills dated closures, one per line', () => {
+    renderPage({
+      hours: {
+        configured: true,
+        closures: [
+          { weekday: null, date: '2026-01-26' },
+          { weekday: null, date: '2026-08-15' },
+        ],
+      },
+    });
+
+    expect(screen.getByLabelText(/Closure dates/)).toHaveValue(
+      ['2026-01-26', '2026-08-15'].join(String.fromCharCode(10)),
+    );
+  });
+
+  it('submits intervals as minutes since midnight, with both closure kinds', async () => {
+    renderPage({
+      hours: {
+        configured: true,
+        intervals: [{ weekday: 2, openMinute: 420, closeMinute: 660 }],
+        closures: [{ weekday: 0, date: null }],
+      },
+    });
+
+    fireEvent.change(screen.getByLabelText(/Closure dates/), {
+      target: { value: '2026-01-26' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save business hours' }));
+
+    expect(setBusinessHours).toHaveBeenCalledWith({
+      intervals: [{ weekday: 2, openMinute: 420, closeMinute: 660 }],
+      closures: [
+        { weekday: 0, date: null },
+        { weekday: null, date: '2026-01-26' },
+      ],
+    });
+    // The mutation resolves after the click, and the success notice is the
+    // observable end of that update — awaiting it keeps the state change
+    // inside the test rather than leaking past it.
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Business hours saved.'),
+    );
+  });
+
+  it('refuses to submit an interval that closes before it opens', () => {
+    renderPage({
+      hours: { configured: true, intervals: [{ weekday: 1, openMinute: 540, closeMinute: 1080 }] },
+    });
+
+    fireEvent.change(screen.getByLabelText('Monday closing time'), { target: { value: '08:00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save business hours' }));
+
+    expect(screen.getByText(/must be a valid time before its closing time/i)).toBeInTheDocument();
+    expect(setBusinessHours).not.toHaveBeenCalled();
+  });
+
+  it('removes an interval, returning the day to closed', () => {
+    renderPage({
+      hours: { configured: true, intervals: [{ weekday: 1, openMinute: 540, closeMinute: 1080 }] },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+
+    expect(screen.getByText(/Closed — no delivery on Monday/)).toBeInTheDocument();
   });
 });

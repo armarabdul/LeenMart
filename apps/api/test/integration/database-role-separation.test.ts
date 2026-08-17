@@ -504,6 +504,10 @@ describe('database role separation', () => {
         WHERE n.nspname = 'public' AND r.rolname = 'leenmart_checkout'`;
 
       expect(rows.map((row) => row.relname).sort()).toEqual([
+        // S4-HOURS: SELECT only — checkout reads a vendor's operating schedule
+        // to validate placement, and never writes it.
+        'business_hour_closures',
+        'business_hours',
         'idempotency_keys',
         'inventory',
         // S3-7: the ledger's only writer. SELECT + INSERT only — the
@@ -546,6 +550,10 @@ describe('database role separation', () => {
       );
 
       expect(rows.map((row) => row.tablename)).toEqual([
+        // S4-HOURS: vendor operating schedule and closures, scoped by
+        // vendor_id like every other vendor-owned table.
+        'business_hour_closures',
+        'business_hours',
         'inventory',
         'kyc_documents',
         // S3-7: the ledger. Vendor-scoped SELECT for `leenmart_app`,

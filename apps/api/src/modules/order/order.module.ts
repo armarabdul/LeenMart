@@ -23,6 +23,7 @@ import { PrismaOutboxWriter } from '../../shared/infrastructure/persistence/pris
 import type { VendorTenantResolver } from '../../shared/interface/http/middleware/tenant-context.js';
 import { PlaceOrderUseCase } from './application/use-cases/place-order.use-case.js';
 import { ResolveServiceabilityUseCase } from './application/use-cases/resolve-serviceability.use-case.js';
+import { ResolveBusinessHoursUseCase } from './application/use-cases/resolve-business-hours.use-case.js';
 import { DeliverSubOrderUseCase } from './application/use-cases/deliver-sub-order.use-case.js';
 import { GetOrderUseCase } from './application/use-cases/get-order.use-case.js';
 import { GetOrIssuePickupTokenUseCase } from './application/use-cases/get-or-issue-pickup-token.use-case.js';
@@ -43,6 +44,7 @@ import { PrismaOrderRepository } from './infrastructure/persistence/prisma-order
 import { PrismaPaymentAttemptRepository } from './infrastructure/persistence/prisma-payment-attempt.repository.js';
 import { PrismaPickupTokenRepository } from './infrastructure/persistence/prisma-pickup-token.repository.js';
 import { PrismaServiceabilityRepository } from './infrastructure/persistence/prisma-serviceability.repository.js';
+import { PrismaBusinessHoursLookupRepository } from '../vendor/infrastructure/persistence/prisma-business-hours.repository.js';
 import { PrismaVendorOrderRepository } from './infrastructure/persistence/prisma-vendor-order.repository.js';
 import { MockPaymentGateway } from './infrastructure/payment/mock-payment-gateway.js';
 import { createOrderController } from './interface/http/order.controller.js';
@@ -103,6 +105,7 @@ interface OrderRepositories {
   readonly idempotencyKeyRepository: IdempotencyKeyRepository;
   readonly transactionRunner: CheckoutTransactionRunner;
   readonly serviceabilityRepository: PrismaServiceabilityRepository;
+  readonly businessHoursLookupRepository: PrismaBusinessHoursLookupRepository;
 }
 
 /**
@@ -136,6 +139,10 @@ const buildOrderRepositories = (
     // a multi-vendor cart must evaluate vendors this session has no tenant
     // context for, exactly as `vendorRepository` above already does.
     serviceabilityRepository: new PrismaServiceabilityRepository(checkoutPrisma),
+    // S4-HOURS. Same credential and same reasoning as serviceability above:
+    // checkout is the only role besides the owning vendor granted SELECT on
+    // the business-hours tables.
+    businessHoursLookupRepository: new PrismaBusinessHoursLookupRepository(checkoutPrisma),
   };
 };
 
@@ -169,6 +176,10 @@ const buildPlaceOrderUseCase = (deps: BuildOrderUseCasesDeps): PlaceOrderUseCase
     ...deps.repositories,
     resolveServiceabilityUseCase: new ResolveServiceabilityUseCase({
       serviceabilityRepository: deps.repositories.serviceabilityRepository,
+    }),
+    resolveBusinessHoursUseCase: new ResolveBusinessHoursUseCase({
+      businessHoursLookupRepository: deps.repositories.businessHoursLookupRepository,
+      clock: deps.clock,
     }),
     resolveCommissionUseCase: deps.resolveCommissionUseCase,
     resolveTaxUseCase: deps.resolveTaxUseCase,

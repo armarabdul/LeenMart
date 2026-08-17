@@ -147,8 +147,11 @@ describe('tenant context', () => {
   });
 
   describe('model registry', () => {
-    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a, S2-6b, S3-5, S3-8, S4-QR and S4-SERV protect', () => {
+    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a, S2-6b, S3-5, S3-8, S4-QR, S4-SERV and S4-HOURS protect', () => {
       expect([...TENANT_SCOPED_MODELS].sort()).toEqual([
+        // S4-HOURS: vendor operating schedule and closures, scoped by vendor_id.
+        'BusinessHour',
+        'BusinessHourClosure',
         'Inventory',
         'KycDocument',
         // S3-8: the vendor earnings statement's own read-only repository

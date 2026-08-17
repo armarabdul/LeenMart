@@ -20,6 +20,14 @@ import { usePlaceOrderMutation } from '@/features/checkout/checkout.api';
 const isNotServiceable = (error: unknown): boolean =>
   isApiError(error) && error.data.error.code === 'ORDER_ADDRESS_NOT_SERVICEABLE';
 
+/**
+ * S4-HOURS. Same convention: switched on `error.code`, never the message. The
+ * backend's wording is accurate but says nothing about what to do next, and
+ * "try later or switch to pickup" are the two actions that resolve it.
+ */
+const isVendorClosed = (error: unknown): boolean =>
+  isApiError(error) && error.data.error.code === 'ORDER_VENDOR_CLOSED';
+
 const CheckoutSkeleton = (): JSX.Element => (
   <div className="flex flex-col gap-4">
     {Array.from({ length: 3 }, (_, index) => (
@@ -227,7 +235,9 @@ export const CheckoutPage = (): JSX.Element => {
         >
           {isNotServiceable(placeError)
             ? 'One or more sellers in your cart do not deliver to this address. Choose a different delivery address, or remove those items to continue.'
-            : apiErrorMessage(placeError, 'Your order could not be placed. Please try again.')}
+            : isVendorClosed(placeError)
+              ? 'One or more sellers in your cart are closed for delivery right now. Try again during their opening hours, or choose pickup where it is offered.'
+              : apiErrorMessage(placeError, 'Your order could not be placed. Please try again.')}
         </p>
       )}
 

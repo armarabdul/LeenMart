@@ -142,6 +142,82 @@ export const vendorServiceablePincodesResponseSchema = z.object({
 });
 
 /**
+ * One trading interval (S4-HOURS). Minutes since local midnight, IST — an
+ * integer carries no timezone, which is why the wire format uses one rather
+ * than a timestamp that a client could reinterpret.
+ *
+ * `closeMinute` may reach 1440 (midnight); `openMinute` may not, since a
+ * zero-length interval is not an opening. No overnight spans: no authoritative
+ * requirement asks for one, so `open < close` is enforced rather than wrapped.
+ */
+export const businessHourIntervalSchema = z
+  .object({
+    /** 0 = Sunday … 6 = Saturday. */
+    weekday: z.number().int().min(0).max(6),
+    openMinute: z.number().int().min(0).max(1439),
+    closeMinute: z.number().int().min(1).max(1440),
+  })
+  .strict()
+  .refine((interval) => interval.openMinute < interval.closeMinute, {
+    message: 'openMinute must be before closeMinute',
+    path: ['closeMinute'],
+  });
+
+/**
+ * A day the vendor does not trade (S4-HOURS, FR-27's "holidays"). Exactly one
+ * of the two is supplied: `weekday` for a recurring weekly holiday, `date` for
+ * a one-off dated closure.
+ *
+ * Closures only — no "open override" exists, because no authoritative source
+ * distinguishes one.
+ */
+export const businessHourClosureSchema = z
+  .object({
+    weekday: z.number().int().min(0).max(6).nullable(),
+    /** `YYYY-MM-DD`, interpreted as an IST calendar day. */
+    date: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be a YYYY-MM-DD date')
+      .nullable(),
+  })
+  .strict()
+  .refine((closure) => (closure.weekday === null) !== (closure.date === null), {
+    message: 'Provide exactly one of weekday (recurring holiday) or date (one-off closure)',
+    path: ['weekday'],
+  });
+
+/**
+ * PUT /vendors/me/business-hours (S4-HOURS). A whole-schedule replace, the
+ * same reasoning `setVendorShopAddressRequestSchema` gives: the schedule is
+ * only meaningful as a whole, and a partial patch would need add/remove
+ * semantics nothing here requires.
+ *
+ * An **empty schedule is legal and meaningful**: it clears the configuration,
+ * which under locked decision H4-A returns the vendor to accepting delivery at
+ * any time.
+ */
+export const setVendorBusinessHoursRequestSchema = z
+  .object({
+    intervals: z.array(businessHourIntervalSchema).max(100),
+    closures: z.array(businessHourClosureSchema).max(365),
+  })
+  .strict();
+
+/** GET/PUT /vendors/me/business-hours. */
+export const vendorBusinessHoursResponseSchema = z.object({
+  id: uuidSchema,
+  /**
+   * S4-HOURS / H4-A. `false` means the vendor has declared no intervals and
+   * therefore currently accepts delivery at any time — surfaced explicitly so
+   * the portal can say so rather than showing an empty schedule that reads as
+   * "never open".
+   */
+  configured: z.boolean(),
+  intervals: z.array(businessHourIntervalSchema),
+  closures: z.array(businessHourClosureSchema),
+});
+
+/**
  * POST /admin/kyc/vendors/:vendorId/activate (S3-3A, decision D-S3-04).
  * Empty body — activation names no new fact beyond "this KYC-approved
  * vendor may now trade," which the URL's own `vendorId` already states.
@@ -171,5 +247,9 @@ export type SetVendorServiceablePincodesRequest = z.infer<
 export type VendorServiceablePincodesResponse = z.infer<
   typeof vendorServiceablePincodesResponseSchema
 >;
+export type BusinessHourInterval = z.infer<typeof businessHourIntervalSchema>;
+export type BusinessHourClosureDto = z.infer<typeof businessHourClosureSchema>;
+export type SetVendorBusinessHoursRequest = z.infer<typeof setVendorBusinessHoursRequestSchema>;
+export type VendorBusinessHoursResponse = z.infer<typeof vendorBusinessHoursResponseSchema>;
 export type ActivateVendorRequest = z.infer<typeof activateVendorRequestSchema>;
 export type ActivateVendorResponse = z.infer<typeof activateVendorResponseSchema>;

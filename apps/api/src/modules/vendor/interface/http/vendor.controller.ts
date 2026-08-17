@@ -3,12 +3,14 @@ import type {
   CreateKycUploadIntentRequest,
   CreateKycUploadIntentResponse,
   RegisterVendorResponse,
+  SetVendorBusinessHoursRequest,
   SetVendorPickupCapabilityRequest,
   SetVendorServiceablePincodesRequest,
   SetVendorShopAddressRequest,
   SetVendorShopNameRequest,
   SubmitVendorKycRequest,
   SubmitVendorKycResponse,
+  VendorBusinessHoursResponse,
   VendorPickupCapabilityResponse,
   VendorServiceablePincodesResponse,
   VendorShopAddressResponse,
@@ -22,6 +24,11 @@ import type { SetVendorPickupCapabilityUseCase } from '../../application/use-cas
 import type { SetVendorShopAddressUseCase } from '../../application/use-cases/set-vendor-shop-address.use-case.js';
 import type { SetVendorShopNameUseCase } from '../../application/use-cases/set-vendor-shop-name.use-case.js';
 import type { GetVendorShopProfileUseCase } from '../../application/use-cases/get-vendor-shop-profile.use-case.js';
+import type {
+  GetVendorBusinessHoursUseCase,
+  SetVendorBusinessHoursUseCase,
+  VendorBusinessHoursResult,
+} from '../../application/use-cases/manage-vendor-business-hours.use-case.js';
 import type {
   GetVendorServiceablePincodesUseCase,
   SetVendorServiceablePincodesUseCase,
@@ -40,6 +47,8 @@ export interface VendorController {
   readonly getShopProfile: (req: Request, res: Response) => Promise<void>;
   readonly getServiceablePincodes: (req: Request, res: Response) => Promise<void>;
   readonly setServiceablePincodes: (req: Request, res: Response) => Promise<void>;
+  readonly getBusinessHours: (req: Request, res: Response) => Promise<void>;
+  readonly setBusinessHours: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface VendorControllerDeps {
@@ -52,6 +61,8 @@ export interface VendorControllerDeps {
   readonly getVendorShopProfileUseCase: GetVendorShopProfileUseCase;
   readonly getVendorServiceablePincodesUseCase: GetVendorServiceablePincodesUseCase;
   readonly setVendorServiceablePincodesUseCase: SetVendorServiceablePincodesUseCase;
+  readonly getVendorBusinessHoursUseCase: GetVendorBusinessHoursUseCase;
+  readonly setVendorBusinessHoursUseCase: SetVendorBusinessHoursUseCase;
 }
 
 const toShopProfileResponse = (vendor: VendorProfile): VendorShopProfileResponse => ({
@@ -81,6 +92,19 @@ const toServiceablePincodesResponse = (
   id: result.vendorId,
   configured: result.configured,
   pincodes: [...result.pincodes],
+});
+
+/** S4-HOURS. `configured` is carried explicitly so an empty schedule is never mistaken for "never open" (H4-A). */
+const toBusinessHoursResponse = (
+  result: VendorBusinessHoursResult,
+): VendorBusinessHoursResponse => ({
+  id: result.vendorId,
+  configured: result.configured,
+  intervals: result.hours.intervals.map((interval) => ({ ...interval })),
+  closures: result.hours.closures.map((closure) => ({
+    weekday: closure.weekday,
+    date: closure.closedOn,
+  })),
 });
 
 const toPickupCapabilityResponse = (vendor: VendorProfile): VendorPickupCapabilityResponse => ({
@@ -244,8 +268,66 @@ const createSetServiceablePincodesHandler =
       .json({ data: toServiceablePincodesResponse(result), meta: { requestId: getRequestId() } });
   };
 
-export const createVendorController = (deps: VendorControllerDeps): VendorController => ({
-  register: async (req: Request, res: Response): Promise<void> => {
+/** Mirrors `createSetShopAddressHandler` — same "split out for the length budget" reasoning. */
+const createGetBusinessHoursHandler =
+  (
+    getVendorBusinessHoursUseCase: GetVendorBusinessHoursUseCase,
+  ): VendorController['getBusinessHours'] =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'GET /vendors/me/business-hours reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+    const result = await getVendorBusinessHoursUseCase.execute({ principal: req.principal });
+    res
+      .status(200)
+      .json({ data: toBusinessHoursResponse(result), meta: { requestId: getRequestId() } });
+  };
+
+/**
+ * The wire shape uses `date` for a dated closure; the domain calls it
+ * `closedOn`. Mapped here rather than inline, so the handler stays inside the
+ * function-length budget.
+ */
+const toDomainHours = (
+  body: SetVendorBusinessHoursRequest,
+): {
+  intervals: { weekday: number; openMinute: number; closeMinute: number }[];
+  closures: { weekday: number | null; closedOn: string | null }[];
+} => ({
+  intervals: body.intervals.map((interval) => ({ ...interval })),
+  closures: body.closures.map((closure) => ({
+    weekday: closure.weekday,
+    closedOn: closure.date,
+  })),
+});
+
+/** Mirrors `createSetShopAddressHandler` — same "split out for the length budget" reasoning. */
+const createSetBusinessHoursHandler =
+  (
+    setVendorBusinessHoursUseCase: SetVendorBusinessHoursUseCase,
+  ): VendorController['setBusinessHours'] =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'PUT /vendors/me/business-hours reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+    const { body } = validatedData<SetVendorBusinessHoursRequest>(req);
+    const result = await setVendorBusinessHoursUseCase.execute({
+      principal: req.principal,
+      hours: toDomainHours(body),
+    });
+    res
+      .status(200)
+      .json({ data: toBusinessHoursResponse(result), meta: { requestId: getRequestId() } });
+  };
+
+/** Split out alongside its siblings so `createVendorController` stays within the length budget. */
+const createRegisterHandler =
+  (registerVendorUseCase: RegisterVendorUseCase): VendorController['register'] =>
+  async (req: Request, res: Response): Promise<void> => {
     // `authenticate()` guarantees `req.principal` is set before this handler
     // runs — reachability without it means the route was wired without the
     // middleware, a programming error, not a client-facing 401 case.
@@ -255,10 +337,13 @@ export const createVendorController = (deps: VendorControllerDeps): VendorContro
       );
     }
 
-    const vendor = await deps.registerVendorUseCase.execute({ principal: req.principal });
+    const vendor = await registerVendorUseCase.execute({ principal: req.principal });
     const data: RegisterVendorResponse = { id: vendor.id, status: vendor.status.name };
     res.status(201).json({ data, meta: { requestId: getRequestId() } });
-  },
+  };
+
+export const createVendorController = (deps: VendorControllerDeps): VendorController => ({
+  register: createRegisterHandler(deps.registerVendorUseCase),
 
   createKycUploadIntent: async (req: Request, res: Response): Promise<void> => {
     if (!req.principal) {
@@ -316,4 +401,6 @@ export const createVendorController = (deps: VendorControllerDeps): VendorContro
   setServiceablePincodes: createSetServiceablePincodesHandler(
     deps.setVendorServiceablePincodesUseCase,
   ),
+  getBusinessHours: createGetBusinessHoursHandler(deps.getVendorBusinessHoursUseCase),
+  setBusinessHours: createSetBusinessHoursHandler(deps.setVendorBusinessHoursUseCase),
 });

@@ -64,6 +64,9 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'PickupToken',
   // S4-SERV: vendor-declared delivery serviceability, RLS-scoped by vendor_id.
   'ServiceablePincode',
+  // S4-HOURS: vendor operating schedule and closures, RLS-scoped by vendor_id.
+  'BusinessHour',
+  'BusinessHourClosure',
 ]);
 
 /**

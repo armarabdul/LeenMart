@@ -31,6 +31,7 @@ import type {
   ResolveTaxUseCase,
 } from '../../../../../src/modules/pricing-tax/index.js';
 import type { ResolveServiceabilityUseCase } from '../../../../../src/modules/order/application/use-cases/resolve-serviceability.use-case.js';
+import type { ResolveBusinessHoursUseCase } from '../../../../../src/modules/order/application/use-cases/resolve-business-hours.use-case.js';
 import { PlaceOrderUseCase } from '../../../../../src/modules/order/application/use-cases/place-order.use-case.js';
 import {
   EmptyCartError,
@@ -39,6 +40,7 @@ import {
   AddressNotServiceableError,
   PickupNotSupportedByVendorError,
   ProductNotEligibleForOrderError,
+  VendorClosedForDeliveryError,
   VendorNotEligibleForOrderError,
 } from '../../../../../src/modules/order/domain/errors/order-errors.js';
 import { FulfilmentMode } from '../../../../../src/modules/order/domain/value-objects/fulfilment-mode.value-object.js';
@@ -273,6 +275,13 @@ const resolveTaxUseCase = {
  * S4-SERV. Default: nothing is unserviceable, so every pre-existing
  * expectation in this file is unaffected. Tests that care override it.
  */
+/**
+ * S4-HOURS. Default: nothing is closed, so every pre-existing expectation in
+ * this file is unaffected. Tests that care override it.
+ */
+const businessHoursUseCase = (closed: readonly unknown[] = []): ResolveBusinessHoursUseCase =>
+  ({ execute: vi.fn().mockResolvedValue(closed) }) as unknown as ResolveBusinessHoursUseCase;
+
 const serviceabilityUseCase = (
   unserviceable: readonly unknown[] = [],
 ): ResolveServiceabilityUseCase =>
@@ -293,6 +302,7 @@ interface BuildOverrides {
   transactionRunner?: TransactionRunner;
   resolveCommissionUseCase?: ResolveCommissionUseCase;
   resolveServiceabilityUseCase?: ResolveServiceabilityUseCase;
+  resolveBusinessHoursUseCase?: ResolveBusinessHoursUseCase;
   resolveTaxUseCase?: ResolveTaxUseCase;
 }
 
@@ -309,6 +319,7 @@ const defaultDeps = (): Required<BuildOverrides> => ({
   transactionRunner: runner(),
   resolveCommissionUseCase,
   resolveServiceabilityUseCase: serviceabilityUseCase(),
+  resolveBusinessHoursUseCase: businessHoursUseCase(),
   resolveTaxUseCase,
 });
 
@@ -730,6 +741,118 @@ describe('PlaceOrderUseCase', () => {
       expect(resolveServiceabilityUseCase.execute).toHaveBeenCalledWith(
         expect.objectContaining({ deliveryVendorIds: [vendorId] }),
       );
+    });
+  });
+  describe('business hours (S4-HOURS)', () => {
+    it('places the order when every delivery vendor is open', async () => {
+      const useCase = buildUseCase({ resolveBusinessHoursUseCase: businessHoursUseCase([]) });
+
+      const order = await useCase.execute(input);
+
+      expect(order.subOrders).toHaveLength(1);
+    });
+
+    it('rejects the whole order when a delivery vendor is closed (H1-A)', async () => {
+      const orderRepository = orderRepo();
+      const useCase = buildUseCase({
+        orderRepository,
+        resolveBusinessHoursUseCase: businessHoursUseCase([vendorId]),
+      });
+
+      await expect(useCase.execute(input)).rejects.toThrow(VendorClosedForDeliveryError);
+      // All-or-nothing: nothing written, nothing deferred, no mode flipped.
+      expect(orderRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('checks hours before pricing, so a closed vendor costs no tax or commission work', async () => {
+      vi.mocked(resolveTaxUseCase.execute).mockClear();
+      vi.mocked(resolveCommissionUseCase.execute).mockClear();
+      const useCase = buildUseCase({
+        resolveBusinessHoursUseCase: businessHoursUseCase([vendorId]),
+      });
+
+      await expect(useCase.execute(input)).rejects.toThrow(VendorClosedForDeliveryError);
+
+      // SDD 4.2 puts step 4c ahead of steps 4d/4e.
+      expect(resolveTaxUseCase.execute).not.toHaveBeenCalled();
+      expect(resolveCommissionUseCase.execute).not.toHaveBeenCalled();
+    });
+
+    it('excludes a PICKUP vendor from the hours check entirely (H2-A)', async () => {
+      const resolveBusinessHoursUseCase = businessHoursUseCase([]);
+      const useCase = buildUseCase({
+        cartItemRepository: cartItemRepo({
+          listByCartId: vi.fn().mockResolvedValue([pickupCartItem]),
+        }),
+        productRepository: twoVendorProductRepo(),
+        productVariantRepository: twoVendorVariantRepo(),
+        vendorRepository: twoVendorVendorRepo(),
+        resolveBusinessHoursUseCase,
+      });
+
+      await useCase.execute({ ...input, pickupVendorIds: [pickupVendorId] });
+
+      expect(resolveBusinessHoursUseCase.execute).toHaveBeenCalledWith({ deliveryVendorIds: [] });
+    });
+
+    it('checks only the DELIVERY half of a mixed-fulfilment cart', async () => {
+      const resolveBusinessHoursUseCase = businessHoursUseCase([]);
+      const useCase = buildUseCase({
+        cartItemRepository: cartItemRepo({
+          listByCartId: vi.fn().mockResolvedValue([cartItem, pickupCartItem]),
+        }),
+        productRepository: twoVendorProductRepo(),
+        productVariantRepository: twoVendorVariantRepo(),
+        vendorRepository: twoVendorVendorRepo(),
+        resolveBusinessHoursUseCase,
+      });
+
+      await useCase.execute({ ...input, pickupVendorIds: [pickupVendorId] });
+
+      expect(resolveBusinessHoursUseCase.execute).toHaveBeenCalledWith({
+        deliveryVendorIds: [vendorId],
+      });
+    });
+
+    it('rejects a mixed cart when the DELIVERY half is closed, even though the PICKUP half is exempt', async () => {
+      const orderRepository = orderRepo();
+      const useCase = buildUseCase({
+        cartItemRepository: cartItemRepo({
+          listByCartId: vi.fn().mockResolvedValue([cartItem, pickupCartItem]),
+        }),
+        productRepository: twoVendorProductRepo(),
+        productVariantRepository: twoVendorVariantRepo(),
+        vendorRepository: twoVendorVendorRepo(),
+        orderRepository,
+        resolveBusinessHoursUseCase: businessHoursUseCase([vendorId]),
+      });
+
+      await expect(
+        useCase.execute({ ...input, pickupVendorIds: [pickupVendorId] }),
+      ).rejects.toThrow(VendorClosedForDeliveryError);
+      expect(orderRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('runs the hours check after serviceability, per SDD 4.2', async () => {
+      const calls: string[] = [];
+      const resolveServiceabilityUseCase = {
+        execute: vi.fn().mockImplementation(() => {
+          calls.push('serviceability');
+          return Promise.resolve([]);
+        }),
+      } as unknown as ResolveServiceabilityUseCase;
+      const resolveBusinessHoursUseCase = {
+        execute: vi.fn().mockImplementation(() => {
+          calls.push('hours');
+          return Promise.resolve([]);
+        }),
+      } as unknown as ResolveBusinessHoursUseCase;
+
+      await buildUseCase({ resolveServiceabilityUseCase, resolveBusinessHoursUseCase }).execute(
+        input,
+      );
+
+      expect(calls).toEqual(['serviceability', 'hours']);
     });
   });
 });

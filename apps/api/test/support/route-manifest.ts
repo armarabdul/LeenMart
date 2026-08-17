@@ -628,6 +628,20 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     classification: 'SELF_SCOPED',
     why: 'Replaces the caller’s own delivery serviceability set (S4-SERV); RLS additionally confines every row to app.vendor_id, and isolation is asserted directly in serviceability.test.ts.',
   },
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendors',
+    path: '/me/business-hours',
+    classification: 'SELF_SCOPED',
+    why: 'Reads the caller’s own operating schedule (S4-HOURS); resolved from the principal, with no vendor id in the request to swap for another owner’s.',
+  },
+  {
+    method: 'PUT',
+    prefix: '/api/v1/vendors',
+    path: '/me/business-hours',
+    classification: 'SELF_SCOPED',
+    why: 'Replaces the caller’s own operating schedule (S4-HOURS); RLS additionally confines every row to app.vendor_id, and isolation is asserted directly in business-hours.test.ts.',
+  },
 
   // --- admin KYC: /api/v1/admin/kyc ---
   {

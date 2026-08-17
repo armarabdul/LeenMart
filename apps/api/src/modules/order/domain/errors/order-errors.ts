@@ -281,6 +281,35 @@ export class AddressNotServiceableError extends DomainRuleError {
 }
 
 /**
+ * `PlaceOrderUseCase`'s business-hours precondition (S4-HOURS, SDD 4.2 step
+ * 4c, FR-27): at least one vendor with a `DELIVERY` sub-order is closed at the
+ * moment of placement — outside its configured hours, on a recurring weekly
+ * holiday, or on a dated closure.
+ *
+ * The whole order is refused rather than partially placed or deferred (locked
+ * decision H1-A), and the fulfilment mode is never quietly switched to
+ * `PICKUP` to make the order fit — the same "never silently downgrade" rule
+ * `PickupNotSupportedByVendorError` states, applied again.
+ *
+ * `PICKUP` sub-orders never reach this error: business hours govern delivery
+ * only (H2-A).
+ *
+ * The message names no vendor, no weekday and no opening time, matching the
+ * deliberately non-specific wording of its siblings — a customer needs to know
+ * the order cannot proceed now, and publishing each seller's trading pattern to
+ * anyone willing to retry hourly is not required for that.
+ */
+export class VendorClosedForDeliveryError extends DomainRuleError {
+  constructor(options: AppErrorOptions = {}) {
+    super(
+      'ORDER_VENDOR_CLOSED',
+      'One or more sellers in your cart are closed for delivery right now.',
+      options,
+    );
+  }
+}
+
+/**
  * `GetOrIssuePickupTokenUseCase`'s own precondition (S4-QR): a pickup
  * credential only means anything once the vendor has actually marked the
  * sub-order `READY_FOR_PICKUP` — issuing one earlier (or after `COMPLETED`)

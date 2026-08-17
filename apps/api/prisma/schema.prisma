@@ -321,8 +321,78 @@ model VendorProfile {
   products            Product[]
   subOrders           SubOrder[]
   serviceablePincodes ServiceablePincode[]
+  businessHours       BusinessHour[]
+  businessHourClosures BusinessHourClosure[]
 
   @@map("vendors")
+}
+
+/// One interval a vendor trades on one weekday (S4-HOURS, SDD 5 module 3
+/// `business_hours` — the vendor module owns this, not fulfilment).
+///
+/// **Times are minutes since local midnight, never timestamps.** An `Int`
+/// cannot carry a timezone, which is the point: FR-28/ASM-01 fix the platform
+/// to IST, and a `timestamptz` here would invite exactly the UTC
+/// reinterpretation this milestone must not permit. 0 = 00:00, 1440 = 24:00.
+///
+/// Several rows may share a weekday, which is how split shifts (07:00–11:00
+/// and 16:00–20:00) are represented. A weekday with **no rows** is a day the
+/// vendor does not trade.
+///
+/// No overnight intervals: `open_minute < close_minute` is enforced by a CHECK,
+/// because no authoritative requirement asks for a span crossing midnight and
+/// the wrap-around semantics would be invented rather than specified.
+///
+/// No timezone column (ASM-01), no per-outlet schedule (one outlet in v1, per
+/// S4-ADDR), and nothing about slots or capacity — that is S4-SLOTS.
+model BusinessHour {
+  vendorId String @map("vendor_id") @db.Uuid
+  /// 0 = Sunday … 6 = Saturday, matching `Date.getUTCDay()` so the IST
+  /// conversion needs no lookup table.
+  weekday     Int
+  openMinute  Int @map("open_minute")
+  closeMinute Int @map("close_minute")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  vendor VendorProfile @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  /// The triple is the identity — a vendor cannot declare the same opening
+  /// time twice on one weekday, so duplicates are impossible by construction.
+  @@id([vendorId, weekday, openMinute])
+  @@index([vendorId, weekday], map: "idx_business_hours_vendor_weekday")
+  @@map("business_hours")
+}
+
+/// A day a vendor does not trade despite its weekly hours (S4-HOURS, FR-27's
+/// "holidays").
+///
+/// Two kinds, discriminated by which column is populated rather than by an
+/// enum, with a CHECK enforcing exactly one:
+///   * `weekday`   — a **recurring weekly holiday** (closed every Sunday)
+///   * `closedOn`  — a **dated closure** (closed on 2026-01-26)
+///
+/// Closures only. No "open override" exists, because no authoritative source
+/// distinguishes one — FR-27 names "holidays" and nothing more, so inventing
+/// an exception that *opens* a vendor would be adding a rule the documents do
+/// not contain.
+model BusinessHourClosure {
+  id       String @id @db.Uuid
+  vendorId String @map("vendor_id") @db.Uuid
+  /// Set for a recurring weekly holiday; null for a dated closure.
+  weekday  Int?
+  /// Set for a one-off dated closure; null for a recurring holiday. A `date`
+  /// column, not a timestamp — a closure is a calendar day in IST, not an
+  /// instant.
+  closedOn DateTime? @map("closed_on") @db.Date
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  vendor VendorProfile @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([vendorId, weekday], map: "idx_business_hour_closures_vendor_weekday")
+  @@index([vendorId, closedOn], map: "idx_business_hour_closures_vendor_date")
+  @@map("business_hour_closures")
 }
 
 /// One pincode a vendor will deliver to (S4-SERV, SDD 5 module 10

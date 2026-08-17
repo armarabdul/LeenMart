@@ -41,6 +41,11 @@ import {
   SetVendorServiceablePincodesUseCase,
 } from './application/use-cases/manage-vendor-serviceable-pincodes.use-case.js';
 import { PrismaServiceablePincodeRepository } from './infrastructure/persistence/prisma-serviceable-pincode.repository.js';
+import {
+  GetVendorBusinessHoursUseCase,
+  SetVendorBusinessHoursUseCase,
+} from './application/use-cases/manage-vendor-business-hours.use-case.js';
+import { PrismaBusinessHoursRepository } from './infrastructure/persistence/prisma-business-hours.repository.js';
 import { SetVendorShopNameUseCase } from './application/use-cases/set-vendor-shop-name.use-case.js';
 import { ActivateVendorUseCase } from './application/use-cases/activate-vendor.use-case.js';
 import { createVendorController } from './interface/http/vendor.controller.js';
@@ -326,6 +331,7 @@ const buildSetVendorShopAddressUseCase = (params: {
 const buildShopProfileUseCases = (params: {
   vendorRepository: PrismaVendorRepository;
   serviceablePincodeRepository: PrismaServiceablePincodeRepository;
+  businessHoursRepository: PrismaBusinessHoursRepository;
   transactionRunner: PrismaTransactionRunner;
   clock: Clock;
   logger: Logger;
@@ -336,6 +342,8 @@ const buildShopProfileUseCases = (params: {
   getVendorShopProfileUseCase: GetVendorShopProfileUseCase;
   getVendorServiceablePincodesUseCase: GetVendorServiceablePincodesUseCase;
   setVendorServiceablePincodesUseCase: SetVendorServiceablePincodesUseCase;
+  getVendorBusinessHoursUseCase: GetVendorBusinessHoursUseCase;
+  setVendorBusinessHoursUseCase: SetVendorBusinessHoursUseCase;
 } => ({
   setVendorShopNameUseCase: buildSetVendorShopNameUseCase(params),
   setVendorPickupCapabilityUseCase: buildSetVendorPickupCapabilityUseCase(params),
@@ -345,6 +353,8 @@ const buildShopProfileUseCases = (params: {
   }),
   getVendorServiceablePincodesUseCase: new GetVendorServiceablePincodesUseCase(params),
   setVendorServiceablePincodesUseCase: new SetVendorServiceablePincodesUseCase(params),
+  getVendorBusinessHoursUseCase: new GetVendorBusinessHoursUseCase(params),
+  setVendorBusinessHoursUseCase: new SetVendorBusinessHoursUseCase(params),
 });
 
 interface VendorFacingUseCasesParams {
@@ -370,6 +380,8 @@ interface VendorFacingUseCasesResult {
   getVendorShopProfileUseCase: GetVendorShopProfileUseCase;
   getVendorServiceablePincodesUseCase: GetVendorServiceablePincodesUseCase;
   setVendorServiceablePincodesUseCase: SetVendorServiceablePincodesUseCase;
+  getVendorBusinessHoursUseCase: GetVendorBusinessHoursUseCase;
+  setVendorBusinessHoursUseCase: SetVendorBusinessHoursUseCase;
 }
 
 /**
@@ -428,6 +440,10 @@ const buildVendorFacingUseCases = (
       // S4-SERV: the tenant-scoped client, so `serviceable_pincodes_vendor_*`
       // confines every management statement to the caller's own vendor.
       serviceablePincodeRepository: new PrismaServiceablePincodeRepository(prisma),
+      // S4-HOURS: the tenant-scoped client, so `business_hours_vendor_*` and
+      // `business_hour_closures_vendor_*` confine every statement to the
+      // caller's own vendor.
+      businessHoursRepository: new PrismaBusinessHoursRepository(prisma),
       transactionRunner,
       clock,
       logger,
