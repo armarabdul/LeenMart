@@ -25,6 +25,7 @@ import { SubOrder, type PickupLocationSnapshot } from '../../domain/entities/sub
 import { FulfilmentMode } from '../../domain/value-objects/fulfilment-mode.value-object.js';
 import { ORDER_AUDIT_ACTIONS, ORDER_AUDIT_ENTITY_TYPES } from '../../domain/audit-actions.js';
 import {
+  AddressNotServiceableError,
   EmptyCartError,
   InsufficientStockError,
   OrderAddressNotFoundError,
@@ -33,6 +34,7 @@ import {
   VendorNotEligibleForOrderError,
 } from '../../domain/errors/order-errors.js';
 import type { OrderRepository } from '../../domain/repositories/order.repository.js';
+import type { ResolveServiceabilityUseCase } from './resolve-serviceability.use-case.js';
 import { toOrderId } from '../../domain/value-objects/order-id.value-object.js';
 import { toOrderItemId } from '../../domain/value-objects/order-item-id.value-object.js';
 import { toSubOrderId } from '../../domain/value-objects/sub-order-id.value-object.js';
@@ -73,6 +75,12 @@ export interface PlaceOrderDeps {
   readonly outboxWriter: OutboxWriter;
   /** `CheckoutTransactionRunner` — a plain transaction on the checkout credential, no tenant GUCs. */
   readonly transactionRunner: TransactionRunner;
+  /**
+   * S4-SERV. A use case rather than a repository here, so the "unconfigured
+   * vendor serves everywhere" rule (D7) is applied in exactly one place and
+   * `PlaceOrderUseCase` stays a policy caller rather than a policy owner.
+   */
+  readonly resolveServiceabilityUseCase: ResolveServiceabilityUseCase;
   readonly resolveCommissionUseCase: ResolveCommissionUseCase;
   readonly resolveTaxUseCase: ResolveTaxUseCase;
   readonly idGenerator: IdGenerator;
@@ -195,6 +203,11 @@ export class PlaceOrderUseCase {
     const address = await this.loadAddress(addressId, principal.userId);
     const resolvedLines = await this.resolveLines(cartItems);
     const vendors = await this.resolveVendors(resolvedLines, pickupVendorIds);
+    // SDD 4.2 step 4b, in its own position: serviceability is validated after
+    // the vendors are known and *before* any pricing, tax or commission work
+    // (steps 4d/4e) — there is no reason to compute money for an order that
+    // cannot be delivered.
+    await this.assertServiceable(address, vendors, pickupVendorIds);
     const pricedLines = await this.priceLines(resolvedLines, vendors);
 
     const order = await this.placeInTransaction(principal, address, pricedLines, pickupVendorIds);
@@ -280,6 +293,49 @@ export class PlaceOrderUseCase {
       vendors.set(vendorId, vendor);
     }
     return vendors;
+  }
+
+  /**
+   * SDD 4.2 step 4b — "Validate serviceability for each vendor" (ASM-17),
+   * S4-SERV.
+   *
+   * Evaluated **per vendor**, and only for the vendors whose sub-order will be
+   * `DELIVERY`: a `PICKUP` sub-order is collected at the shop, so the
+   * customer's delivery pincode says nothing about it (locked decision D6).
+   * Pickup vendors are filtered out before the lookup rather than resolved and
+   * then ignored, so a pickup-only order performs no serviceability query at
+   * all.
+   *
+   * The pincode comes from `address`, which `loadAddress` has already resolved
+   * by id **scoped to the caller** — never from the request body. A customer
+   * cannot state a pincode; they can only choose among addresses they own.
+   *
+   * All-or-nothing (locked decision D4): one unserviceable delivery vendor
+   * refuses the entire placement. Nothing is partially placed, and no
+   * sub-order is silently flipped between `DELIVERY` and `PICKUP` to make the
+   * order fit.
+   */
+  private async assertServiceable(
+    address: Address,
+    vendors: ReadonlyMap<VendorId, VendorProfile>,
+    pickupVendorIds: ReadonlySet<VendorId>,
+  ): Promise<void> {
+    const deliveryVendorIds = [...vendors.keys()].filter(
+      (vendorId) => !pickupVendorIds.has(vendorId),
+    );
+
+    const unserviceable = await this.deps.resolveServiceabilityUseCase.execute({
+      pincode: address.pincode,
+      deliveryVendorIds,
+    });
+
+    if (unserviceable.length > 0) {
+      this.deps.logger.info(
+        { pincode: address.pincode, unserviceableVendorCount: unserviceable.length },
+        'Order refused: one or more delivery vendors do not serve this pincode',
+      );
+      throw new AddressNotServiceableError();
+    }
   }
 
   /** Steps 4–5: tax and commission, per line, honestly (decision D-S3-02: never invent, never default to ₹0). */

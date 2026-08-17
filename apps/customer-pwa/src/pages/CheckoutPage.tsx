@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { CartItemResponse } from '@leen-mart/contracts';
 import { useAppSelector } from '@/app/hooks';
-import { apiErrorMessage } from '@/shared/api/base-api';
+import { apiErrorMessage, isApiError } from '@/shared/api/base-api';
 import { selectKnownVariants, type KnownVariantSummary } from '@/shared/state/known-variants.slice';
 import { formatMoney } from '@/shared/lib/format-money';
 import { useGetCartQuery } from '@/features/cart/cart.api';
@@ -10,6 +10,15 @@ import { AddressSelector } from '@/features/address/components/AddressSelector';
 import { FulfilmentModeSelector } from '@/features/checkout/components/FulfilmentModeSelector';
 import { groupCartByVendor } from '@/features/checkout/lib/group-cart-by-vendor';
 import { usePlaceOrderMutation } from '@/features/checkout/checkout.api';
+
+/**
+ * S4-SERV. Switched on `error.code`, never on the message — the code is the
+ * contract and the wording is not (see `apiErrorMessage`'s own doc comment).
+ * The backend's message is accurate but says nothing about what to do next;
+ * this adds the two actions that actually resolve it.
+ */
+const isNotServiceable = (error: unknown): boolean =>
+  isApiError(error) && error.data.error.code === 'ORDER_ADDRESS_NOT_SERVICEABLE';
 
 const CheckoutSkeleton = (): JSX.Element => (
   <div className="flex flex-col gap-4">
@@ -216,7 +225,9 @@ export const CheckoutPage = (): JSX.Element => {
           role="alert"
           className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700"
         >
-          {apiErrorMessage(placeError, 'Your order could not be placed. Please try again.')}
+          {isNotServiceable(placeError)
+            ? 'One or more sellers in your cart do not deliver to this address. Choose a different delivery address, or remove those items to continue.'
+            : apiErrorMessage(placeError, 'Your order could not be placed. Please try again.')}
         </p>
       )}
 

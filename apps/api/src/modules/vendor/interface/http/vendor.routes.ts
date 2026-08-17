@@ -3,6 +3,7 @@ import {
   createKycUploadIntentRequestSchema,
   registerVendorRequestSchema,
   setVendorPickupCapabilityRequestSchema,
+  setVendorServiceablePincodesRequestSchema,
   setVendorShopAddressRequestSchema,
   setVendorShopNameRequestSchema,
   submitVendorKycRequestSchema,
@@ -63,6 +64,34 @@ const mountShopAddressRoutes = (
     requirePermission('MANAGE_SHOP_PROFILE'),
     validate({ body: setVendorShopAddressRequestSchema }),
     asyncHandler(controller.setShopAddress),
+  );
+
+  // S4-SERV. Gated by `CONFIGURE_DELIVERY_SLOTS` rather than
+  // `MANAGE_SHOP_PROFILE`: SDD 8.2 has its own "Configure delivery/slots" row
+  // (VENDOR_OWNER/VENDOR_MANAGER `OWN`, SUPER_ADMIN read-only) and declaring
+  // where you deliver is that capability, not shop-profile presentation. The
+  // permission has existed unused since the matrix was transcribed; this is
+  // its first route.
+  //
+  // Same self-scoped shape as everything above — the vendor is resolved from
+  // the principal and no vendor id is accepted from the request.
+  router.get(
+    '/me/serviceable-pincodes',
+    authenticate(accessTokenService, sessionDenylist),
+    tenantContext(resolveVendorTenant),
+    requirePermission('CONFIGURE_DELIVERY_SLOTS'),
+    asyncHandler(controller.getServiceablePincodes),
+  );
+
+  // PUT, matching `/me/shop-address`: the set is replaced wholesale, since a
+  // partial patch would need add/remove semantics nothing here requires.
+  router.put(
+    '/me/serviceable-pincodes',
+    authenticate(accessTokenService, sessionDenylist),
+    tenantContext(resolveVendorTenant),
+    requirePermission('CONFIGURE_DELIVERY_SLOTS'),
+    validate({ body: setVendorServiceablePincodesRequestSchema }),
+    asyncHandler(controller.setServiceablePincodes),
   );
 };
 

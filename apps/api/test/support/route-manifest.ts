@@ -614,6 +614,20 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     classification: 'SELF_SCOPED',
     why: 'Replaces the shop address on the caller’s own vendor profile (S4-ADDR); same self-scoped shape as /me/shop-profile, and isolation is asserted directly in shop-address.test.ts.',
   },
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendors',
+    path: '/me/serviceable-pincodes',
+    classification: 'SELF_SCOPED',
+    why: 'Reads the caller’s own delivery serviceability set (S4-SERV); resolved from the principal, with no vendor id in the request to swap for another owner’s.',
+  },
+  {
+    method: 'PUT',
+    prefix: '/api/v1/vendors',
+    path: '/me/serviceable-pincodes',
+    classification: 'SELF_SCOPED',
+    why: 'Replaces the caller’s own delivery serviceability set (S4-SERV); RLS additionally confines every row to app.vendor_id, and isolation is asserted directly in serviceability.test.ts.',
+  },
 
   // --- admin KYC: /api/v1/admin/kyc ---
   {

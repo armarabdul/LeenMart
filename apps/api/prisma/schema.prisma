@@ -316,12 +316,53 @@ model VendorProfile {
   createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  user           User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  kycSubmissions VendorKycSubmission[]
-  products       Product[]
-  subOrders      SubOrder[]
+  user                User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kycSubmissions      VendorKycSubmission[]
+  products            Product[]
+  subOrders           SubOrder[]
+  serviceablePincodes ServiceablePincode[]
 
   @@map("vendors")
+}
+
+/// One pincode a vendor will deliver to (S4-SERV, SDD 5 module 10
+/// `serviceable_pincodes`; ASM-17/IMP-11 — the cheap fast path that resolves
+/// ~95% of serviceability checks without any geospatial work).
+///
+/// **Vendor-declared** (locked decision D1 = Option A). There is no
+/// platform-wide launch allowlist in this milestone, and the vendor's own
+/// shop pincode is *not* implicitly serviceable (D2) — a vendor states its
+/// delivery set explicitly or states nothing at all.
+///
+/// **An empty set means "serves everywhere" (D7)**, deliberately: every
+/// vendor predates this table, and a fail-closed reading would take the
+/// entire existing delivery fleet offline the moment this shipped. That rule
+/// lives in `ResolveServiceabilityUseCase`, not here — "has this vendor
+/// configured a set?" is currently answered by "does it have any rows?", and
+/// a future explicit `configured` flag can replace *that predicate alone*
+/// without reshaping this table.
+///
+/// No latitude/longitude, no radius, no distance: PostGIS is the *precise*
+/// check (SDD 6.4) and a separate capability blocked on AMB-16. This table is
+/// the fast path and nothing more.
+model ServiceablePincode {
+  vendorId  String   @map("vendor_id") @db.Uuid
+  /// Six digits, the same shape and width `addresses.pincode`,
+  /// `orders.address_pincode` and `vendors.shop_address_pincode` all use.
+  pincode   String   @db.VarChar(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  vendor VendorProfile @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  /// The pair *is* the identity — a vendor either serves a pincode or does
+  /// not, so there is no surrogate id and duplicates are impossible by
+  /// construction rather than by a check that could be forgotten.
+  @@id([vendorId, pincode])
+  /// Leading with `pincode`: the hot query is checkout's "for this delivery
+  /// pincode, which of these vendors serve it?", where the pincode is the
+  /// constant and the vendor list is the filter.
+  @@index([pincode, vendorId], map: "idx_serviceable_pincodes_pincode_vendor")
+  @@map("serviceable_pincodes")
 }
 
 /// A customer's saved delivery address (SDD Stage 1: "customer profile and

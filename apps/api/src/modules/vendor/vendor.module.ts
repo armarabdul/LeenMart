@@ -36,6 +36,11 @@ import { RegisterVendorUseCase } from './application/use-cases/register-vendor.u
 import { SetVendorPickupCapabilityUseCase } from './application/use-cases/set-vendor-pickup-capability.use-case.js';
 import { SetVendorShopAddressUseCase } from './application/use-cases/set-vendor-shop-address.use-case.js';
 import { GetVendorShopProfileUseCase } from './application/use-cases/get-vendor-shop-profile.use-case.js';
+import {
+  GetVendorServiceablePincodesUseCase,
+  SetVendorServiceablePincodesUseCase,
+} from './application/use-cases/manage-vendor-serviceable-pincodes.use-case.js';
+import { PrismaServiceablePincodeRepository } from './infrastructure/persistence/prisma-serviceable-pincode.repository.js';
 import { SetVendorShopNameUseCase } from './application/use-cases/set-vendor-shop-name.use-case.js';
 import { ActivateVendorUseCase } from './application/use-cases/activate-vendor.use-case.js';
 import { createVendorController } from './interface/http/vendor.controller.js';
@@ -320,6 +325,8 @@ const buildSetVendorShopAddressUseCase = (params: {
  */
 const buildShopProfileUseCases = (params: {
   vendorRepository: PrismaVendorRepository;
+  serviceablePincodeRepository: PrismaServiceablePincodeRepository;
+  transactionRunner: PrismaTransactionRunner;
   clock: Clock;
   logger: Logger;
 }): {
@@ -327,6 +334,8 @@ const buildShopProfileUseCases = (params: {
   setVendorPickupCapabilityUseCase: SetVendorPickupCapabilityUseCase;
   setVendorShopAddressUseCase: SetVendorShopAddressUseCase;
   getVendorShopProfileUseCase: GetVendorShopProfileUseCase;
+  getVendorServiceablePincodesUseCase: GetVendorServiceablePincodesUseCase;
+  setVendorServiceablePincodesUseCase: SetVendorServiceablePincodesUseCase;
 } => ({
   setVendorShopNameUseCase: buildSetVendorShopNameUseCase(params),
   setVendorPickupCapabilityUseCase: buildSetVendorPickupCapabilityUseCase(params),
@@ -334,6 +343,8 @@ const buildShopProfileUseCases = (params: {
   getVendorShopProfileUseCase: new GetVendorShopProfileUseCase({
     vendorRepository: params.vendorRepository,
   }),
+  getVendorServiceablePincodesUseCase: new GetVendorServiceablePincodesUseCase(params),
+  setVendorServiceablePincodesUseCase: new SetVendorServiceablePincodesUseCase(params),
 });
 
 interface VendorFacingUseCasesParams {
@@ -357,6 +368,8 @@ interface VendorFacingUseCasesResult {
   setVendorPickupCapabilityUseCase: SetVendorPickupCapabilityUseCase;
   setVendorShopAddressUseCase: SetVendorShopAddressUseCase;
   getVendorShopProfileUseCase: GetVendorShopProfileUseCase;
+  getVendorServiceablePincodesUseCase: GetVendorServiceablePincodesUseCase;
+  setVendorServiceablePincodesUseCase: SetVendorServiceablePincodesUseCase;
 }
 
 /**
@@ -410,7 +423,15 @@ const buildVendorFacingUseCases = (
     registerVendorUseCase,
     createKycUploadIntentUseCase,
     submitVendorKycUseCase,
-    ...buildShopProfileUseCases({ vendorRepository, clock, logger }),
+    ...buildShopProfileUseCases({
+      vendorRepository,
+      // S4-SERV: the tenant-scoped client, so `serviceable_pincodes_vendor_*`
+      // confines every management statement to the caller's own vendor.
+      serviceablePincodeRepository: new PrismaServiceablePincodeRepository(prisma),
+      transactionRunner,
+      clock,
+      logger,
+    }),
   };
 };
 

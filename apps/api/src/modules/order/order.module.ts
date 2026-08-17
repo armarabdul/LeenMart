@@ -22,6 +22,7 @@ import { IdempotencyKeyRepository } from '../../shared/infrastructure/persistenc
 import { PrismaOutboxWriter } from '../../shared/infrastructure/persistence/prisma-outbox-writer.js';
 import type { VendorTenantResolver } from '../../shared/interface/http/middleware/tenant-context.js';
 import { PlaceOrderUseCase } from './application/use-cases/place-order.use-case.js';
+import { ResolveServiceabilityUseCase } from './application/use-cases/resolve-serviceability.use-case.js';
 import { DeliverSubOrderUseCase } from './application/use-cases/deliver-sub-order.use-case.js';
 import { GetOrderUseCase } from './application/use-cases/get-order.use-case.js';
 import { GetOrIssuePickupTokenUseCase } from './application/use-cases/get-or-issue-pickup-token.use-case.js';
@@ -41,6 +42,7 @@ import { Ed25519PickupTokenSigner } from './infrastructure/crypto/ed25519-pickup
 import { PrismaOrderRepository } from './infrastructure/persistence/prisma-order.repository.js';
 import { PrismaPaymentAttemptRepository } from './infrastructure/persistence/prisma-payment-attempt.repository.js';
 import { PrismaPickupTokenRepository } from './infrastructure/persistence/prisma-pickup-token.repository.js';
+import { PrismaServiceabilityRepository } from './infrastructure/persistence/prisma-serviceability.repository.js';
 import { PrismaVendorOrderRepository } from './infrastructure/persistence/prisma-vendor-order.repository.js';
 import { MockPaymentGateway } from './infrastructure/payment/mock-payment-gateway.js';
 import { createOrderController } from './interface/http/order.controller.js';
@@ -100,6 +102,7 @@ interface OrderRepositories {
   readonly outboxWriter: PrismaOutboxWriter;
   readonly idempotencyKeyRepository: IdempotencyKeyRepository;
   readonly transactionRunner: CheckoutTransactionRunner;
+  readonly serviceabilityRepository: PrismaServiceabilityRepository;
 }
 
 /**
@@ -128,6 +131,11 @@ const buildOrderRepositories = (
     outboxWriter: new PrismaOutboxWriter(checkoutPrisma, idGenerator, clock),
     idempotencyKeyRepository: new IdempotencyKeyRepository(checkoutPrisma),
     transactionRunner: new CheckoutTransactionRunner(checkoutPrisma),
+    // S4-SERV. `checkoutPrisma` is the only credential granted SELECT on
+    // `serviceable_pincodes` besides the owning vendor's own tenant policy —
+    // a multi-vendor cart must evaluate vendors this session has no tenant
+    // context for, exactly as `vendorRepository` above already does.
+    serviceabilityRepository: new PrismaServiceabilityRepository(checkoutPrisma),
   };
 };
 
@@ -159,6 +167,9 @@ interface BuildOrderUseCasesDeps {
 const buildPlaceOrderUseCase = (deps: BuildOrderUseCasesDeps): PlaceOrderUseCase =>
   new PlaceOrderUseCase({
     ...deps.repositories,
+    resolveServiceabilityUseCase: new ResolveServiceabilityUseCase({
+      serviceabilityRepository: deps.repositories.serviceabilityRepository,
+    }),
     resolveCommissionUseCase: deps.resolveCommissionUseCase,
     resolveTaxUseCase: deps.resolveTaxUseCase,
     idGenerator: deps.idGenerator,

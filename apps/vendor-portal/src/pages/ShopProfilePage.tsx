@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import type { SetVendorShopAddressRequest } from '@leen-mart/contracts';
+import type { SetVendorShopAddressRequest, VendorShopAddressResponse } from '@leen-mart/contracts';
 import { apiErrorMessage } from '@/shared/api/base-api';
 import {
+  useGetServiceablePincodesQuery,
   useGetShopProfileQuery,
+  useSetServiceablePincodesMutation,
   useSetShopAddressMutation,
 } from '@/features/shop-profile/shop-profile.api';
 
@@ -37,22 +39,125 @@ const FIELDS: readonly {
   { name: 'pincode', label: 'Pincode', maxLength: 6 },
 ];
 
+/** Accepts commas, spaces and newlines so a vendor can paste a list from anywhere. */
+const parsePincodes = (raw: string): readonly string[] =>
+  raw
+    .split(/[\s,]+/)
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
 /**
- * "Shop profile" (S4-ADDR) — the vendor's own shop address, on the same
- * `MANAGE_SHOP_PROFILE` permission the backend already uses for the shop name
- * and pickup capability.
+ * Delivery serviceability (S4-SERV, locked decision D1).
  *
- * This page exists because the portal had no shop-profile surface at all: the
- * shop name and pickup capability were API-only. It is therefore the shop
- * profile surface the instruction refers to, extended with the address rather
- * than a competing one.
+ * Lives on the shop-profile page rather than in a page of its own — it is
+ * another self-service vendor setting, and S4-ADDR already established this
+ * page as where those live.
  *
- * Read-only fields (shop name, pickup capability) are shown for context but
- * not editable here — this milestone's scope is the address, and turning this
- * into a general profile editor would widen it.
+ * The empty state is stated explicitly rather than left to inference: an empty
+ * list means "delivers everywhere" (locked decision D7), and a vendor seeing a
+ * blank box could reasonably read the opposite.
  */
-export const ShopProfilePage = (): JSX.Element => {
-  const { data: profile, isLoading, isError, error } = useGetShopProfileQuery();
+const ServiceablePincodesSection = (): JSX.Element => {
+  const { data, isLoading, isError, error } = useGetServiceablePincodesQuery();
+  const [setServiceablePincodes, { isLoading: isSaving, error: saveError }] =
+    useSetServiceablePincodesMutation();
+  const [raw, setRaw] = useState('');
+  const [saved, setSaved] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!data) return;
+    setRaw(data.pincodes.join('\n'));
+  }, [data]);
+
+  const handleSubmit = async (event: React.FormEvent): Promise<void> => {
+    event.preventDefault();
+    setSaved(false);
+    setFailed(false);
+    try {
+      await setServiceablePincodes({ pincodes: [...parsePincodes(raw)] }).unwrap();
+      setSaved(true);
+    } catch {
+      setFailed(true);
+    }
+  };
+
+  if (isLoading) return <ProfileSkeleton />;
+
+  if (isError || !data) {
+    return (
+      <p
+        role="alert"
+        className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+      >
+        {apiErrorMessage(error, 'Your delivery areas could not be loaded.')}
+      </p>
+    );
+  }
+
+  return (
+    <form
+      onSubmit={(event) => void handleSubmit(event)}
+      className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4"
+    >
+      {!data.configured && (
+        <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          You have not set any delivery areas, so you currently receive delivery orders from
+          everywhere. Adding pincodes below will limit deliveries to only those areas.
+        </p>
+      )}
+      <label className="flex flex-col gap-1 text-sm text-slate-700">
+        <span>Delivery pincodes</span>
+        <span className="text-xs text-slate-500">
+          One per line, or separated by commas. Pickup orders are never affected by this list.
+        </span>
+        <textarea
+          name="pincodes"
+          value={raw}
+          onChange={(event) => {
+            setSaved(false);
+            setFailed(false);
+            setRaw(event.target.value);
+          }}
+          rows={6}
+          className="rounded-md border border-slate-300 px-3 py-2 font-mono text-sm"
+        />
+      </label>
+
+      {failed && (
+        <p role="alert" className="text-sm text-red-700">
+          {apiErrorMessage(saveError, 'Your delivery areas could not be saved.')}
+        </p>
+      )}
+      {saved && (
+        <p role="status" className="text-sm text-green-700">
+          Delivery areas saved.
+        </p>
+      )}
+
+      <div className="flex justify-end">
+        <button
+          type="submit"
+          disabled={isSaving}
+          className="rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50"
+        >
+          {isSaving ? 'Saving…' : 'Save delivery areas'}
+        </button>
+      </div>
+    </form>
+  );
+};
+
+/**
+ * The shop-address form (S4-ADDR). Split out of `ShopProfilePage` when
+ * S4-SERV added a second section, so neither the page nor either section
+ * exceeds this repository's function-length budget.
+ */
+const ShopAddressForm = ({
+  profile,
+}: {
+  readonly profile: VendorShopAddressResponse;
+}): JSX.Element => {
   const [setShopAddress, { isLoading: isSaving, error: saveError }] = useSetShopAddressMutation();
   const [form, setForm] = useState<AddressForm>(EMPTY_FORM);
   const [saved, setSaved] = useState(false);
@@ -96,6 +201,70 @@ export const ShopProfilePage = (): JSX.Element => {
     }
   };
 
+  return (
+    <>
+      <p className="text-sm text-slate-600">
+        Customers who choose pickup see this address on their order. Changing it here does not
+        affect orders that have already been placed.
+      </p>
+
+      <form
+        onSubmit={(event) => void handleSubmit(event)}
+        className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4"
+      >
+        {FIELDS.map((field) => (
+          <label key={field.name} className="flex flex-col gap-1 text-sm text-slate-700">
+            <span>
+              {field.label}
+              {field.optional ? <span className="text-slate-400"> (optional)</span> : ''}
+            </span>
+            <input
+              type="text"
+              name={field.name}
+              value={form[field.name]}
+              onChange={update(field.name)}
+              required={!field.optional}
+              maxLength={field.maxLength}
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            />
+          </label>
+        ))}
+
+        {failed && (
+          <p role="alert" className="text-sm text-red-700">
+            {apiErrorMessage(saveError, 'Your shop address could not be saved.')}
+          </p>
+        )}
+        {saved && (
+          <p role="status" className="text-sm text-green-700">
+            Shop address saved.
+          </p>
+        )}
+
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            disabled={isSaving}
+            className="rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50"
+          >
+            {isSaving ? 'Saving…' : 'Save shop address'}
+          </button>
+        </div>
+      </form>
+    </>
+  );
+};
+
+/**
+ * "Shop profile" — the vendor's own self-service settings surface.
+ *
+ * Created in S4-ADDR for the shop address (the portal had no shop-profile
+ * surface at all; shop name and pickup capability were API-only), and extended
+ * in S4-SERV with delivery areas rather than growing a competing page.
+ */
+export const ShopProfilePage = (): JSX.Element => {
+  const { data: profile, isLoading, isError, error } = useGetShopProfileQuery();
+
   if (isLoading) {
     return (
       <main className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8">
@@ -133,54 +302,14 @@ export const ShopProfilePage = (): JSX.Element => {
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
           Shop address
         </h2>
-        <p className="text-sm text-slate-600">
-          Customers who choose pickup see this address on their order. Changing it here does not
-          affect orders that have already been placed.
-        </p>
+        <ShopAddressForm profile={profile} />
+      </section>
 
-        <form
-          onSubmit={(event) => void handleSubmit(event)}
-          className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4"
-        >
-          {FIELDS.map((field) => (
-            <label key={field.name} className="flex flex-col gap-1 text-sm text-slate-700">
-              <span>
-                {field.label}
-                {field.optional ? <span className="text-slate-400"> (optional)</span> : ''}
-              </span>
-              <input
-                type="text"
-                name={field.name}
-                value={form[field.name]}
-                onChange={update(field.name)}
-                required={!field.optional}
-                maxLength={field.maxLength}
-                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-              />
-            </label>
-          ))}
-
-          {failed && (
-            <p role="alert" className="text-sm text-red-700">
-              {apiErrorMessage(saveError, 'Your shop address could not be saved.')}
-            </p>
-          )}
-          {saved && (
-            <p role="status" className="text-sm text-green-700">
-              Shop address saved.
-            </p>
-          )}
-
-          <div className="flex justify-end">
-            <button
-              type="submit"
-              disabled={isSaving}
-              className="rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50"
-            >
-              {isSaving ? 'Saving…' : 'Save shop address'}
-            </button>
-          </div>
-        </form>
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+          Delivery areas
+        </h2>
+        <ServiceablePincodesSection />
       </section>
     </main>
   );

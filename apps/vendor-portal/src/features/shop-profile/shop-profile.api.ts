@@ -1,4 +1,9 @@
-import type { SetVendorShopAddressRequest, VendorShopAddressResponse } from '@leen-mart/contracts';
+import type {
+  SetVendorServiceablePincodesRequest,
+  SetVendorShopAddressRequest,
+  VendorServiceablePincodesResponse,
+  VendorShopAddressResponse,
+} from '@leen-mart/contracts';
 import type { SuccessEnvelope } from '@/shared/api/base-api';
 import { baseApi } from '@/shared/api/base-api';
 
@@ -23,7 +28,27 @@ export const shopProfileApi = baseApi.injectEndpoints({
       transformResponse: (response: SuccessEnvelope<VendorShopAddressResponse>) => response.data,
       invalidatesTags: ['ShopProfile'],
     }),
+    getServiceablePincodes: builder.query<VendorServiceablePincodesResponse, void>({
+      query: () => '/vendors/me/serviceable-pincodes',
+      transformResponse: (response: SuccessEnvelope<VendorServiceablePincodesResponse>) =>
+        response.data,
+      providesTags: ['ServiceablePincodes'],
+    }),
+    setServiceablePincodes: builder.mutation<
+      VendorServiceablePincodesResponse,
+      SetVendorServiceablePincodesRequest
+    >({
+      query: (body) => ({ url: '/vendors/me/serviceable-pincodes', method: 'PUT', body }),
+      transformResponse: (response: SuccessEnvelope<VendorServiceablePincodesResponse>) =>
+        response.data,
+      invalidatesTags: ['ServiceablePincodes'],
+    }),
   }),
 });
 
-export const { useGetShopProfileQuery, useSetShopAddressMutation } = shopProfileApi;
+export const {
+  useGetShopProfileQuery,
+  useSetShopAddressMutation,
+  useGetServiceablePincodesQuery,
+  useSetServiceablePincodesMutation,
+} = shopProfileApi;

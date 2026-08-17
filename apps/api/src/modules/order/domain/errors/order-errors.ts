@@ -254,6 +254,33 @@ export class PickupNotSupportedByVendorError extends DomainRuleError {
 }
 
 /**
+ * `PlaceOrderUseCase`'s serviceability precondition (S4-SERV, SDD 4.2 step 4b,
+ * ASM-17): at least one vendor with a `DELIVERY` sub-order does not deliver to
+ * the chosen address's pincode.
+ *
+ * The whole order is refused rather than partially placed (locked decision
+ * D4), and the fulfilment mode is never quietly switched to `PICKUP` to make
+ * the order fit — the same "never silently downgrade" rule
+ * `PickupNotSupportedByVendorError` above already states, applied in the
+ * opposite direction.
+ *
+ * The message names no vendor, no pincode and no count. It mirrors the
+ * deliberately non-specific wording of its sibling above: the customer needs
+ * to know the order cannot proceed and why in general terms, and enumerating
+ * which sellers refuse which postcodes would publish a vendor's delivery
+ * footprint to anyone willing to iterate over addresses.
+ */
+export class AddressNotServiceableError extends DomainRuleError {
+  constructor(options: AppErrorOptions = {}) {
+    super(
+      'ORDER_ADDRESS_NOT_SERVICEABLE',
+      'One or more sellers in your cart do not deliver to this address.',
+      options,
+    );
+  }
+}
+
+/**
  * `GetOrIssuePickupTokenUseCase`'s own precondition (S4-QR): a pickup
  * credential only means anything once the vendor has actually marked the
  * sub-order `READY_FOR_PICKUP` — issuing one earlier (or after `COMPLETED`)

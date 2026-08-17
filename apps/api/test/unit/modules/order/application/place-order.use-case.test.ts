@@ -30,11 +30,13 @@ import type {
   ResolveCommissionUseCase,
   ResolveTaxUseCase,
 } from '../../../../../src/modules/pricing-tax/index.js';
+import type { ResolveServiceabilityUseCase } from '../../../../../src/modules/order/application/use-cases/resolve-serviceability.use-case.js';
 import { PlaceOrderUseCase } from '../../../../../src/modules/order/application/use-cases/place-order.use-case.js';
 import {
   EmptyCartError,
   InsufficientStockError,
   OrderAddressNotFoundError,
+  AddressNotServiceableError,
   PickupNotSupportedByVendorError,
   ProductNotEligibleForOrderError,
   VendorNotEligibleForOrderError,
@@ -267,6 +269,17 @@ const resolveTaxUseCase = {
   execute: vi.fn().mockResolvedValue({ resolved: false, hsnCode: '08045020' }),
 } as unknown as ResolveTaxUseCase;
 
+/**
+ * S4-SERV. Default: nothing is unserviceable, so every pre-existing
+ * expectation in this file is unaffected. Tests that care override it.
+ */
+const serviceabilityUseCase = (
+  unserviceable: readonly unknown[] = [],
+): ResolveServiceabilityUseCase =>
+  ({
+    execute: vi.fn().mockResolvedValue(unserviceable),
+  }) as unknown as ResolveServiceabilityUseCase;
+
 interface BuildOverrides {
   cartRepository?: CartRepository;
   cartItemRepository?: CartItemRepository;
@@ -279,6 +292,7 @@ interface BuildOverrides {
   outboxWriter?: OutboxWriter;
   transactionRunner?: TransactionRunner;
   resolveCommissionUseCase?: ResolveCommissionUseCase;
+  resolveServiceabilityUseCase?: ResolveServiceabilityUseCase;
   resolveTaxUseCase?: ResolveTaxUseCase;
 }
 
@@ -294,6 +308,7 @@ const defaultDeps = (): Required<BuildOverrides> => ({
   outboxWriter: outboxWriter(),
   transactionRunner: runner(),
   resolveCommissionUseCase,
+  resolveServiceabilityUseCase: serviceabilityUseCase(),
   resolveTaxUseCase,
 });
 
@@ -628,6 +643,93 @@ describe('PlaceOrderUseCase', () => {
       const byVendor = new Map(order.subOrders.map((so) => [so.vendorId, so.fulfilmentMode]));
       expect(byVendor.get(vendorId)).toBe(FulfilmentMode.DELIVERY);
       expect(byVendor.get(pickupVendorId)).toBe(FulfilmentMode.PICKUP);
+    });
+  });
+  describe('delivery serviceability (S4-SERV)', () => {
+    it('places the order when every delivery vendor serves the address', async () => {
+      const useCase = buildUseCase({ resolveServiceabilityUseCase: serviceabilityUseCase([]) });
+
+      const order = await useCase.execute(input);
+
+      expect(order.subOrders).toHaveLength(1);
+    });
+
+    it('rejects the whole order when a delivery vendor does not serve the address (D4)', async () => {
+      const orderRepository = orderRepo();
+      const useCase = buildUseCase({
+        orderRepository,
+        resolveServiceabilityUseCase: serviceabilityUseCase([vendorId]),
+      });
+
+      await expect(useCase.execute(input)).rejects.toThrow(AddressNotServiceableError);
+      // All-or-nothing: nothing is written, and no sub-order is quietly
+      // flipped to PICKUP to make the order fit.
+      expect(orderRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('checks serviceability before pricing, so a refused order costs no tax or commission work', async () => {
+      // These spies are module-level and shared across the file, so the
+      // assertion below is about *this* execution rather than the suite's.
+      vi.mocked(resolveTaxUseCase.execute).mockClear();
+      vi.mocked(resolveCommissionUseCase.execute).mockClear();
+      const useCase = buildUseCase({
+        resolveServiceabilityUseCase: serviceabilityUseCase([vendorId]),
+      });
+
+      await expect(useCase.execute(input)).rejects.toThrow(AddressNotServiceableError);
+
+      // SDD 4.2 puts step 4b ahead of steps 4d/4e.
+      expect(resolveTaxUseCase.execute).not.toHaveBeenCalled();
+      expect(resolveCommissionUseCase.execute).not.toHaveBeenCalled();
+    });
+
+    it('uses the pincode from the stored address, never one supplied by the caller', async () => {
+      const resolveServiceabilityUseCase = serviceabilityUseCase([]);
+      const useCase = buildUseCase({ resolveServiceabilityUseCase });
+
+      await useCase.execute(input);
+
+      expect(resolveServiceabilityUseCase.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ pincode: address.pincode }),
+      );
+    });
+
+    it('excludes a PICKUP vendor from the serviceability check entirely (D6)', async () => {
+      const resolveServiceabilityUseCase = serviceabilityUseCase([]);
+      const useCase = buildUseCase({
+        cartItemRepository: cartItemRepo({
+          listByCartId: vi.fn().mockResolvedValue([pickupCartItem]),
+        }),
+        productRepository: twoVendorProductRepo(),
+        productVariantRepository: twoVendorVariantRepo(),
+        vendorRepository: twoVendorVendorRepo(),
+        resolveServiceabilityUseCase,
+      });
+
+      await useCase.execute({ ...input, pickupVendorIds: [pickupVendorId] });
+
+      expect(resolveServiceabilityUseCase.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ deliveryVendorIds: [] }),
+      );
+    });
+
+    it('checks only the DELIVERY half of a mixed-fulfilment cart', async () => {
+      const resolveServiceabilityUseCase = serviceabilityUseCase([]);
+      const useCase = buildUseCase({
+        cartItemRepository: cartItemRepo({
+          listByCartId: vi.fn().mockResolvedValue([cartItem, pickupCartItem]),
+        }),
+        productRepository: twoVendorProductRepo(),
+        productVariantRepository: twoVendorVariantRepo(),
+        vendorRepository: twoVendorVendorRepo(),
+        resolveServiceabilityUseCase,
+      });
+
+      await useCase.execute({ ...input, pickupVendorIds: [pickupVendorId] });
+
+      expect(resolveServiceabilityUseCase.execute).toHaveBeenCalledWith(
+        expect.objectContaining({ deliveryVendorIds: [vendorId] }),
+      );
     });
   });
 });

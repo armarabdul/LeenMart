@@ -147,7 +147,7 @@ describe('tenant context', () => {
   });
 
   describe('model registry', () => {
-    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a, S2-6b, S3-5, S3-8 and S4-QR protect', () => {
+    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a, S2-6b, S3-5, S3-8, S4-QR and S4-SERV protect', () => {
       expect([...TENANT_SCOPED_MODELS].sort()).toEqual([
         'Inventory',
         'KycDocument',
@@ -174,6 +174,9 @@ describe('tenant context', () => {
         // never on the admin credential.
         'ProductMediaVariant',
         'ProductVariant',
+        // S4-SERV: a vendor's declared delivery pincodes are vendor-owned
+        // configuration, scoped by vendor_id like every other tenant table.
+        'ServiceablePincode',
         'SubOrder',
         'VendorKycSubmission',
         'VendorProfile',

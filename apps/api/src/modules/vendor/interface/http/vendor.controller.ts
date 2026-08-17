@@ -4,11 +4,13 @@ import type {
   CreateKycUploadIntentResponse,
   RegisterVendorResponse,
   SetVendorPickupCapabilityRequest,
+  SetVendorServiceablePincodesRequest,
   SetVendorShopAddressRequest,
   SetVendorShopNameRequest,
   SubmitVendorKycRequest,
   SubmitVendorKycResponse,
   VendorPickupCapabilityResponse,
+  VendorServiceablePincodesResponse,
   VendorShopAddressResponse,
   VendorShopProfileResponse,
 } from '@leen-mart/contracts';
@@ -20,6 +22,11 @@ import type { SetVendorPickupCapabilityUseCase } from '../../application/use-cas
 import type { SetVendorShopAddressUseCase } from '../../application/use-cases/set-vendor-shop-address.use-case.js';
 import type { SetVendorShopNameUseCase } from '../../application/use-cases/set-vendor-shop-name.use-case.js';
 import type { GetVendorShopProfileUseCase } from '../../application/use-cases/get-vendor-shop-profile.use-case.js';
+import type {
+  GetVendorServiceablePincodesUseCase,
+  SetVendorServiceablePincodesUseCase,
+  VendorServiceablePincodes,
+} from '../../application/use-cases/manage-vendor-serviceable-pincodes.use-case.js';
 import type { SubmitVendorKycUseCase } from '../../application/use-cases/submit-vendor-kyc.use-case.js';
 import type { RegisterVendorUseCase } from '../../application/use-cases/register-vendor.use-case.js';
 
@@ -31,6 +38,8 @@ export interface VendorController {
   readonly setPickupCapability: (req: Request, res: Response) => Promise<void>;
   readonly setShopAddress: (req: Request, res: Response) => Promise<void>;
   readonly getShopProfile: (req: Request, res: Response) => Promise<void>;
+  readonly getServiceablePincodes: (req: Request, res: Response) => Promise<void>;
+  readonly setServiceablePincodes: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface VendorControllerDeps {
@@ -41,6 +50,8 @@ export interface VendorControllerDeps {
   readonly setVendorPickupCapabilityUseCase: SetVendorPickupCapabilityUseCase;
   readonly setVendorShopAddressUseCase: SetVendorShopAddressUseCase;
   readonly getVendorShopProfileUseCase: GetVendorShopProfileUseCase;
+  readonly getVendorServiceablePincodesUseCase: GetVendorServiceablePincodesUseCase;
+  readonly setVendorServiceablePincodesUseCase: SetVendorServiceablePincodesUseCase;
 }
 
 const toShopProfileResponse = (vendor: VendorProfile): VendorShopProfileResponse => ({
@@ -61,6 +72,15 @@ const toShopAddressResponse = (vendor: VendorProfile): VendorShopAddressResponse
   shopName: vendor.shopName,
   supportsPickup: vendor.supportsPickup,
   shopAddress: vendor.shopAddress,
+});
+
+/** S4-SERV. `configured` is carried explicitly so an empty list is never mistaken for "delivers nowhere" (D7). */
+const toServiceablePincodesResponse = (
+  result: VendorServiceablePincodes,
+): VendorServiceablePincodesResponse => ({
+  id: result.vendorId,
+  configured: result.configured,
+  pincodes: [...result.pincodes],
 });
 
 const toPickupCapabilityResponse = (vendor: VendorProfile): VendorPickupCapabilityResponse => ({
@@ -183,6 +203,47 @@ const createGetShopProfileHandler =
       .json({ data: toShopAddressResponse(vendor), meta: { requestId: getRequestId() } });
   };
 
+/** Mirrors `createSetShopAddressHandler` — same "split out for the length budget" reasoning. */
+const createGetServiceablePincodesHandler =
+  (
+    getVendorServiceablePincodesUseCase: GetVendorServiceablePincodesUseCase,
+  ): VendorController['getServiceablePincodes'] =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'GET /vendors/me/serviceable-pincodes reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+
+    const result = await getVendorServiceablePincodesUseCase.execute({ principal: req.principal });
+    res
+      .status(200)
+      .json({ data: toServiceablePincodesResponse(result), meta: { requestId: getRequestId() } });
+  };
+
+/** Mirrors `createSetShopAddressHandler` — same "split out for the length budget" reasoning. */
+const createSetServiceablePincodesHandler =
+  (
+    setVendorServiceablePincodesUseCase: SetVendorServiceablePincodesUseCase,
+  ): VendorController['setServiceablePincodes'] =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'PUT /vendors/me/serviceable-pincodes reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+
+    const { body } = validatedData<SetVendorServiceablePincodesRequest>(req);
+    const result = await setVendorServiceablePincodesUseCase.execute({
+      principal: req.principal,
+      pincodes: body.pincodes,
+    });
+
+    res
+      .status(200)
+      .json({ data: toServiceablePincodesResponse(result), meta: { requestId: getRequestId() } });
+  };
+
 export const createVendorController = (deps: VendorControllerDeps): VendorController => ({
   register: async (req: Request, res: Response): Promise<void> => {
     // `authenticate()` guarantees `req.principal` is set before this handler
@@ -249,4 +310,10 @@ export const createVendorController = (deps: VendorControllerDeps): VendorContro
   setPickupCapability: createSetPickupCapabilityHandler(deps.setVendorPickupCapabilityUseCase),
   setShopAddress: createSetShopAddressHandler(deps.setVendorShopAddressUseCase),
   getShopProfile: createGetShopProfileHandler(deps.getVendorShopProfileUseCase),
+  getServiceablePincodes: createGetServiceablePincodesHandler(
+    deps.getVendorServiceablePincodesUseCase,
+  ),
+  setServiceablePincodes: createSetServiceablePincodesHandler(
+    deps.setVendorServiceablePincodesUseCase,
+  ),
 });

@@ -4,17 +4,43 @@ import { Provider } from 'react-redux';
 import { createStore } from '@/app/store';
 import { ShopProfilePage } from '@/pages/ShopProfilePage';
 import {
+  useGetServiceablePincodesQuery,
   useGetShopProfileQuery,
+  useSetServiceablePincodesMutation,
   useSetShopAddressMutation,
 } from '@/features/shop-profile/shop-profile.api';
 
 vi.mock('@/features/shop-profile/shop-profile.api', () => ({
   useGetShopProfileQuery: vi.fn(),
   useSetShopAddressMutation: vi.fn(),
+  useGetServiceablePincodesQuery: vi.fn(),
+  useSetServiceablePincodesMutation: vi.fn(),
 }));
 
 const mockedUseGetShopProfileQuery = vi.mocked(useGetShopProfileQuery);
 const mockedUseSetShopAddressMutation = vi.mocked(useSetShopAddressMutation);
+const mockedUseGetServiceablePincodesQuery = vi.mocked(useGetServiceablePincodesQuery);
+const mockedUseSetServiceablePincodesMutation = vi.mocked(useSetServiceablePincodesMutation);
+
+/** S4-SERV. Defaults keep every S4-ADDR expectation in this file unaffected. */
+const setServiceablePincodes = vi.fn();
+const stubPincodes = (options: { configured?: boolean; pincodes?: string[] } = {}): void => {
+  mockedUseGetServiceablePincodesQuery.mockReturnValue({
+    data: {
+      id: 'vendor-1',
+      configured: options.configured ?? false,
+      pincodes: options.pincodes ?? [],
+    },
+    isLoading: false,
+    isError: false,
+    error: undefined,
+  } as unknown as ReturnType<typeof useGetServiceablePincodesQuery>);
+  setServiceablePincodes.mockReturnValue({ unwrap: () => Promise.resolve({}) });
+  mockedUseSetServiceablePincodesMutation.mockReturnValue([
+    setServiceablePincodes,
+    { isLoading: false, error: undefined },
+  ] as unknown as ReturnType<typeof useSetServiceablePincodesMutation>);
+};
 
 const ADDRESS = {
   line1: '12 Market Road',
@@ -37,6 +63,7 @@ const renderPage = (options: {
   isLoading?: boolean;
   isError?: boolean;
   saveRejects?: boolean;
+  pincodes?: { configured?: boolean; pincodes?: string[] };
 }): { setShopAddress: ReturnType<typeof vi.fn> } => {
   mockedUseGetShopProfileQuery.mockReturnValue({
     data: options.isError === true ? undefined : (options.profile ?? PROFILE),
@@ -55,6 +82,8 @@ const renderPage = (options: {
     setShopAddress,
     { isLoading: false, error: undefined },
   ] as unknown as ReturnType<typeof useSetShopAddressMutation>);
+
+  stubPincodes(options.pincodes);
 
   render(
     <Provider store={createStore()}>
@@ -150,5 +179,59 @@ describe('ShopProfilePage', () => {
     expect(
       screen.getByText(/Changing it here does not affect orders that have already been placed/),
     ).toBeInTheDocument();
+  });
+  describe('delivery areas (S4-SERV)', () => {
+    it('tells an unconfigured vendor they currently deliver everywhere', () => {
+      renderPage({ pincodes: { configured: false, pincodes: [] } });
+
+      expect(
+        screen.getByText(/you currently receive delivery orders from everywhere/i),
+      ).toBeInTheDocument();
+    });
+
+    it('does not show the everywhere notice once pincodes are configured', () => {
+      renderPage({ pincodes: { configured: true, pincodes: ['560001'] } });
+
+      expect(
+        screen.queryByText(/you currently receive delivery orders from everywhere/i),
+      ).not.toBeInTheDocument();
+    });
+
+    it('prefills the stored pincodes, one per line', () => {
+      renderPage({ pincodes: { configured: true, pincodes: ['560001', '560002'] } });
+
+      expect(screen.getByLabelText(/Delivery pincodes/)).toHaveValue(
+        ['560001', '560002'].join('\n'),
+      );
+    });
+
+    it('submits pincodes parsed from newlines, commas and stray spaces', () => {
+      renderPage({});
+
+      fireEvent.change(screen.getByLabelText(/Delivery pincodes/), {
+        // Newline, comma and stray spaces all in one paste.
+        target: { value: ['560001, 560002', ' 560003 '].join('\n') },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Save delivery areas' }));
+
+      expect(setServiceablePincodes).toHaveBeenCalledWith({
+        pincodes: ['560001', '560002', '560003'],
+      });
+    });
+
+    it('submits an empty set when the box is cleared', () => {
+      renderPage({ pincodes: { configured: true, pincodes: ['560001'] } });
+
+      fireEvent.change(screen.getByLabelText(/Delivery pincodes/), { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save delivery areas' }));
+
+      expect(setServiceablePincodes).toHaveBeenCalledWith({ pincodes: [] });
+    });
+
+    it('states that pickup orders are unaffected', () => {
+      renderPage({});
+
+      expect(screen.getByText(/Pickup orders are never affected by this list/)).toBeInTheDocument();
+    });
   });
 });

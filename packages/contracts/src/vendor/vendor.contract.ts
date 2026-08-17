@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { uuidSchema } from '../common/primitives.js';
+import { pincodeSchema, uuidSchema } from '../common/primitives.js';
 
 /** Mirrors the domain `VendorStatus` value object's SDD 15.1 lifecycle states. */
 export const vendorStatusSchema = z.enum([
@@ -109,6 +109,39 @@ export const vendorPickupCapabilityResponseSchema = z.object({
 });
 
 /**
+ * PUT /vendors/me/serviceable-pincodes (S4-SERV, locked decision D1 —
+ * vendor-declared serviceability).
+ *
+ * A whole-set replace, the same reasoning `setVendorShopAddressRequestSchema`
+ * gives: the set is only meaningful as a whole, and a partial patch would need
+ * add/remove semantics this milestone has no requirement for.
+ *
+ * Duplicates are accepted on the wire and collapsed server-side rather than
+ * rejected — `["560001","560001"]` states a coherent intention, and the
+ * table's composite primary key makes the stored result identical either way.
+ *
+ * An **empty array is legal and meaningful**: it clears the vendor's set,
+ * which under locked decision D7 returns them to serving everywhere.
+ */
+export const setVendorServiceablePincodesRequestSchema = z
+  .object({
+    pincodes: z.array(pincodeSchema).max(2000),
+  })
+  .strict();
+
+/** GET/PUT /vendors/me/serviceable-pincodes. Always sorted, always de-duplicated. */
+export const vendorServiceablePincodesResponseSchema = z.object({
+  id: uuidSchema,
+  /**
+   * S4-SERV / D7. `false` means this vendor has declared nothing and therefore
+   * currently delivers everywhere — surfaced explicitly so the vendor portal
+   * can say so rather than showing an empty list that looks like "nowhere".
+   */
+  configured: z.boolean(),
+  pincodes: z.array(pincodeSchema),
+});
+
+/**
  * POST /admin/kyc/vendors/:vendorId/activate (S3-3A, decision D-S3-04).
  * Empty body — activation names no new fact beyond "this KYC-approved
  * vendor may now trade," which the URL's own `vendorId` already states.
@@ -132,5 +165,11 @@ export type SetVendorPickupCapabilityRequest = z.infer<
   typeof setVendorPickupCapabilityRequestSchema
 >;
 export type VendorPickupCapabilityResponse = z.infer<typeof vendorPickupCapabilityResponseSchema>;
+export type SetVendorServiceablePincodesRequest = z.infer<
+  typeof setVendorServiceablePincodesRequestSchema
+>;
+export type VendorServiceablePincodesResponse = z.infer<
+  typeof vendorServiceablePincodesResponseSchema
+>;
 export type ActivateVendorRequest = z.infer<typeof activateVendorRequestSchema>;
 export type ActivateVendorResponse = z.infer<typeof activateVendorResponseSchema>;

@@ -62,6 +62,8 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'LedgerJournal',
   'LedgerEntry',
   'PickupToken',
+  // S4-SERV: vendor-declared delivery serviceability, RLS-scoped by vendor_id.
+  'ServiceablePincode',
 ]);
 
 /**

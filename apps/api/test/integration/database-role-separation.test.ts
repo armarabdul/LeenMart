@@ -517,6 +517,9 @@ describe('database role separation', () => {
         // S4-QR: the checkout credential issues and rotates the customer's
         // pickup token; the vendor credential only ever reads and redeems it.
         'pickup_tokens',
+        // S4-SERV: SELECT only — checkout reads a vendor's declared delivery
+        // pincodes to validate placement, and never writes them.
+        'serviceable_pincodes',
         'sub_orders',
         'vendors',
       ]);
@@ -560,6 +563,9 @@ describe('database role separation', () => {
         'product_media_variants',
         'product_variants',
         'products',
+        // S4-SERV: vendor-declared delivery serviceability, scoped by
+        // vendor_id like every other vendor-owned table.
+        'serviceable_pincodes',
         'sub_orders',
         'vendor_kyc_submissions',
         'vendors',
