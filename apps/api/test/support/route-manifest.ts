@@ -24,7 +24,7 @@ export type RouteClassification =
   /** Runs before any tenant exists (registration, login, refresh, OTP). */
   | 'PRE_TENANT';
 
-export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 /** Everything a `TENANT_OWNED` entry needs to drive itself. */
 export interface RouteTestContext {
@@ -599,6 +599,20 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     path: '/me/pickup-capability',
     classification: 'SELF_SCOPED',
     why: 'Sets the pickup capability flag on the caller’s own vendor profile (S4-QR, locked decision #25); there is no vendor id in the request to swap for another owner’s.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendors',
+    path: '/me/shop-address',
+    classification: 'SELF_SCOPED',
+    why: 'Reads the caller’s own vendor profile (S4-ADDR); resolved from the principal, with no vendor id in the request to swap for another owner’s.',
+  },
+  {
+    method: 'PUT',
+    prefix: '/api/v1/vendors',
+    path: '/me/shop-address',
+    classification: 'SELF_SCOPED',
+    why: 'Replaces the shop address on the caller’s own vendor profile (S4-ADDR); same self-scoped shape as /me/shop-profile, and isolation is asserted directly in shop-address.test.ts.',
   },
 
   // --- admin KYC: /api/v1/admin/kyc ---

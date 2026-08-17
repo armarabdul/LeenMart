@@ -17,11 +17,11 @@ import type { CartItem, CartItemRepository, CartRepository } from '../../../cart
 import { type Address, type AddressId, type AddressRepository } from '../../../customer/index.js';
 import type { Principal, VendorId } from '../../../identity/index.js';
 import type { ResolveCommissionUseCase, ResolveTaxUseCase } from '../../../pricing-tax/index.js';
-import type { VendorProfile, VendorRepository } from '../../../vendor/index.js';
+import type { VendorProfile, VendorRepository, VendorShopAddress } from '../../../vendor/index.js';
 import type { OutboxWriter } from '../../../../shared/application/ports/outbox-writer.port.js';
 import { Order, type OrderAddressSnapshot } from '../../domain/entities/order.entity.js';
 import { OrderItem, type TaxSnapshot } from '../../domain/entities/order-item.entity.js';
-import { SubOrder } from '../../domain/entities/sub-order.entity.js';
+import { SubOrder, type PickupLocationSnapshot } from '../../domain/entities/sub-order.entity.js';
 import { FulfilmentMode } from '../../domain/value-objects/fulfilment-mode.value-object.js';
 import { ORDER_AUDIT_ACTIONS, ORDER_AUDIT_ENTITY_TYPES } from '../../domain/audit-actions.js';
 import {
@@ -99,6 +99,13 @@ interface ResolvedLine {
 interface PricedLine extends ResolvedLine {
   /** Captured once here, where `resolveVendors()`'s non-null check is still in scope — never re-narrowed downstream. */
   readonly vendorShopName: string;
+  /**
+   * S4-ADDR. Travels on the line for the same reason `vendorShopName` does:
+   * it is read from the vendor exactly once, here, and everything downstream
+   * uses the captured copy. `null` when the vendor has set no shop address —
+   * which is legal, and simply means a pickup sub-order carries no location.
+   */
+  readonly vendorShopAddress: VendorShopAddress | null;
   readonly commissionRateBasisPoints: number;
   readonly commissionAmount: Money;
   readonly tax: TaxSnapshot;
@@ -311,6 +318,7 @@ export class PlaceOrderUseCase {
       priced.push({
         ...line,
         vendorShopName: vendor.shopName,
+        vendorShopAddress: vendor.shopAddress,
         commissionRateBasisPoints: commission.rule.rateBasisPoints,
         commissionAmount: commission.commissionAmount,
         tax,
@@ -348,10 +356,21 @@ export class PlaceOrderUseCase {
       }
 
       const subOrders = [...linesByVendor.entries()].map(([vendorId, vendorLines]) => {
-        const fulfilmentMode = pickupVendorIds.has(vendorId)
-          ? FulfilmentMode.PICKUP
-          : FulfilmentMode.DELIVERY;
-        return this.buildSubOrder(orderId, vendorId, vendorLines, { now, fulfilmentMode });
+        const isPickup = pickupVendorIds.has(vendorId);
+        const fulfilmentMode = isPickup ? FulfilmentMode.PICKUP : FulfilmentMode.DELIVERY;
+        // S4-ADDR: the collection address is captured here, once, and only
+        // for PICKUP. A DELIVERY sub-order gets `null` — it has no collection
+        // point — and nothing ever re-reads this from the vendor profile
+        // afterwards, which is what makes a later shop relocation unable to
+        // rewrite where an existing order said to collect.
+        const pickupLocationSnapshot = isPickup
+          ? (vendorLines[0]?.vendorShopAddress ?? null)
+          : null;
+        return this.buildSubOrder(orderId, vendorId, vendorLines, {
+          now,
+          fulfilmentMode,
+          pickupLocationSnapshot,
+        });
       });
       const order = Order.place({
         id: orderId,
@@ -388,9 +407,13 @@ export class PlaceOrderUseCase {
     orderId: ReturnType<typeof toOrderId>,
     vendorId: VendorId,
     lines: readonly PricedLine[],
-    context: { readonly now: Date; readonly fulfilmentMode: FulfilmentMode },
+    context: {
+      readonly now: Date;
+      readonly fulfilmentMode: FulfilmentMode;
+      readonly pickupLocationSnapshot: PickupLocationSnapshot | null;
+    },
   ): SubOrder {
-    const { now, fulfilmentMode } = context;
+    const { now, fulfilmentMode, pickupLocationSnapshot } = context;
     const { idGenerator } = this.deps;
     // `groupByVendor` never produces an empty group — every entry in its
     // map came from pushing at least one line onto it — but `lines[0]` is
@@ -430,6 +453,7 @@ export class PlaceOrderUseCase {
       vendorId,
       fulfilmentMode,
       vendorShopNameSnapshot: vendorShopName,
+      pickupLocationSnapshot,
       totalAmount: sumMoney(items.map((item) => item.lineAmount)),
       items,
       now,

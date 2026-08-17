@@ -56,6 +56,7 @@ const buildSubOrder = (status: OrderStatus, fulfilmentMode: FulfilmentMode): Sub
     status,
     fulfilmentMode,
     vendorShopNameSnapshot: 'Test Shop',
+    pickupLocationSnapshot: null,
     totalAmount: Money.fromMajor(199),
     items: [],
     createdAt: NOW,

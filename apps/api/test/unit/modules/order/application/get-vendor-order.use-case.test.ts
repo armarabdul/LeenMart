@@ -40,6 +40,7 @@ const activeVendor = VendorProfile.reconstitute({
   plan: 'COMMISSION',
   shopName: 'Test Shop',
   supportsPickup: false,
+  shopAddress: null,
   createdAt: NOW,
   updatedAt: NOW,
 });
@@ -76,6 +77,7 @@ const detail: VendorSubOrderDetail = {
     status: OrderStatus.CONFIRMED,
     fulfilmentMode: FulfilmentMode.DELIVERY,
     vendorShopNameSnapshot: 'Test Shop',
+    pickupLocationSnapshot: null,
     totalAmount: Money.fromMajor(199),
     items: [],
     createdAt: NOW,
@@ -139,6 +141,7 @@ describe('GetVendorOrderUseCase', () => {
       plan: 'COMMISSION',
       shopName: 'Test Shop',
       supportsPickup: false,
+      shopAddress: null,
       createdAt: NOW,
       updatedAt: NOW,
     });

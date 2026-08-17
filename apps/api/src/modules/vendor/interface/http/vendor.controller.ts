@@ -4,10 +4,12 @@ import type {
   CreateKycUploadIntentResponse,
   RegisterVendorResponse,
   SetVendorPickupCapabilityRequest,
+  SetVendorShopAddressRequest,
   SetVendorShopNameRequest,
   SubmitVendorKycRequest,
   SubmitVendorKycResponse,
   VendorPickupCapabilityResponse,
+  VendorShopAddressResponse,
   VendorShopProfileResponse,
 } from '@leen-mart/contracts';
 import { getRequestId } from '../../../../shared/interface/http/middleware/request-context.js';
@@ -15,7 +17,9 @@ import { validatedData } from '../../../../shared/interface/http/middleware/vali
 import type { VendorProfile } from '../../domain/entities/vendor-profile.entity.js';
 import type { CreateKycUploadIntentUseCase } from '../../application/use-cases/create-kyc-upload-intent.use-case.js';
 import type { SetVendorPickupCapabilityUseCase } from '../../application/use-cases/set-vendor-pickup-capability.use-case.js';
+import type { SetVendorShopAddressUseCase } from '../../application/use-cases/set-vendor-shop-address.use-case.js';
 import type { SetVendorShopNameUseCase } from '../../application/use-cases/set-vendor-shop-name.use-case.js';
+import type { GetVendorShopProfileUseCase } from '../../application/use-cases/get-vendor-shop-profile.use-case.js';
 import type { SubmitVendorKycUseCase } from '../../application/use-cases/submit-vendor-kyc.use-case.js';
 import type { RegisterVendorUseCase } from '../../application/use-cases/register-vendor.use-case.js';
 
@@ -25,6 +29,8 @@ export interface VendorController {
   readonly submitKyc: (req: Request, res: Response) => Promise<void>;
   readonly setShopName: (req: Request, res: Response) => Promise<void>;
   readonly setPickupCapability: (req: Request, res: Response) => Promise<void>;
+  readonly setShopAddress: (req: Request, res: Response) => Promise<void>;
+  readonly getShopProfile: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface VendorControllerDeps {
@@ -33,12 +39,28 @@ export interface VendorControllerDeps {
   readonly submitVendorKycUseCase: SubmitVendorKycUseCase;
   readonly setVendorShopNameUseCase: SetVendorShopNameUseCase;
   readonly setVendorPickupCapabilityUseCase: SetVendorPickupCapabilityUseCase;
+  readonly setVendorShopAddressUseCase: SetVendorShopAddressUseCase;
+  readonly getVendorShopProfileUseCase: GetVendorShopProfileUseCase;
 }
 
 const toShopProfileResponse = (vendor: VendorProfile): VendorShopProfileResponse => ({
   id: vendor.id,
   status: vendor.status.name,
   shopName: vendor.shopName,
+});
+
+/**
+ * S4-ADDR. The shop-address surface returns the whole self-service profile —
+ * name, pickup capability and address — because the vendor portal renders
+ * them on one screen and a read that returned only the address would force a
+ * second round trip for the rest.
+ */
+const toShopAddressResponse = (vendor: VendorProfile): VendorShopAddressResponse => ({
+  id: vendor.id,
+  status: vendor.status.name,
+  shopName: vendor.shopName,
+  supportsPickup: vendor.supportsPickup,
+  shopAddress: vendor.shopAddress,
 });
 
 const toPickupCapabilityResponse = (vendor: VendorProfile): VendorPickupCapabilityResponse => ({
@@ -118,6 +140,49 @@ const createSetPickupCapabilityHandler =
       .json({ data: toPickupCapabilityResponse(vendor), meta: { requestId: getRequestId() } });
   };
 
+/** Mirrors `createSetShopNameHandler` — same "split out for the length budget" reasoning. */
+const createSetShopAddressHandler =
+  (setVendorShopAddressUseCase: SetVendorShopAddressUseCase): VendorController['setShopAddress'] =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'PUT /vendors/me/shop-address reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+
+    const { body } = validatedData<SetVendorShopAddressRequest>(req);
+    const vendor = await setVendorShopAddressUseCase.execute({
+      principal: req.principal,
+      shopAddress: {
+        line1: body.line1,
+        line2: body.line2,
+        city: body.city,
+        state: body.state,
+        pincode: body.pincode,
+      },
+    });
+
+    res
+      .status(200)
+      .json({ data: toShopAddressResponse(vendor), meta: { requestId: getRequestId() } });
+  };
+
+/** The read half of the shop-address surface — see `GetVendorShopProfileUseCase`. */
+const createGetShopProfileHandler =
+  (getVendorShopProfileUseCase: GetVendorShopProfileUseCase): VendorController['getShopProfile'] =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'GET /vendors/me/shop-address reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+
+    const vendor = await getVendorShopProfileUseCase.execute({ principal: req.principal });
+    res
+      .status(200)
+      .json({ data: toShopAddressResponse(vendor), meta: { requestId: getRequestId() } });
+  };
+
 export const createVendorController = (deps: VendorControllerDeps): VendorController => ({
   register: async (req: Request, res: Response): Promise<void> => {
     // `authenticate()` guarantees `req.principal` is set before this handler
@@ -182,4 +247,6 @@ export const createVendorController = (deps: VendorControllerDeps): VendorContro
 
   setShopName: createSetShopNameHandler(deps.setVendorShopNameUseCase),
   setPickupCapability: createSetPickupCapabilityHandler(deps.setVendorPickupCapabilityUseCase),
+  setShopAddress: createSetShopAddressHandler(deps.setVendorShopAddressUseCase),
+  getShopProfile: createGetShopProfileHandler(deps.getVendorShopProfileUseCase),
 });

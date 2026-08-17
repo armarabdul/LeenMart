@@ -292,6 +292,27 @@ model VendorProfile {
   /// Whether this vendor offers pickup fulfilment (S4-QR). Opt-in — `false`
   /// for every pre-existing and newly registered vendor.
   supportsPickup Boolean      @default(false) @map("supports_pickup")
+
+  /// The shop's physical address (S4-ADDR). One address per vendor for v1 —
+  /// no multi-outlet model — so these are columns on `vendors` rather than a
+  /// separate table, the same inline shape `orders` already uses for its own
+  /// address snapshot.
+  ///
+  /// Nullable as a *set*: either every required part is present or the vendor
+  /// has not set an address at all. Never partially populated and never
+  /// backfilled, for the same reason `shop_name` documents — an address
+  /// nobody entered would be invented data.
+  ///
+  /// No country column: `addresses`, this schema's own address convention,
+  /// has none either (ASM-01 places the platform in India). No lat/lng:
+  /// geocoding, PostGIS and delivery radius are separate Stage 4 capabilities
+  /// this milestone deliberately does not touch.
+  shopAddressLine1   String? @map("shop_address_line_1") @db.VarChar(200)
+  shopAddressLine2   String? @map("shop_address_line_2") @db.VarChar(200)
+  shopAddressCity    String? @map("shop_address_city") @db.VarChar(100)
+  shopAddressState   String? @map("shop_address_state") @db.VarChar(100)
+  shopAddressPincode String? @map("shop_address_pincode") @db.VarChar(6)
+
   createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -1289,6 +1310,24 @@ model SubOrder {
   /// `FulfilmentMode`'s own doc comment above.
   fulfilmentMode         FulfilmentMode @default(DELIVERY) @map("fulfilment_mode")
   vendorShopNameSnapshot String         @map("vendor_shop_name_snapshot") @db.VarChar(120)
+
+  /// Where the customer collects, captured at placement (S4-ADDR).
+  ///
+  /// A *snapshot*, for exactly the reason `vendor_shop_name_snapshot` above
+  /// and `orders.address_*` are: a vendor who later moves premises must not
+  /// retroactively change where an already-placed order said to go. The
+  /// pickup location is therefore never re-resolved from `vendors` when an
+  /// existing order is displayed.
+  ///
+  /// `NULL` as a set for every DELIVERY sub-order and for every row that
+  /// pre-dates this milestone — only PICKUP sub-orders placed from here on
+  /// carry one.
+  pickupLocationLine1   String? @map("pickup_location_line_1") @db.VarChar(200)
+  pickupLocationLine2   String? @map("pickup_location_line_2") @db.VarChar(200)
+  pickupLocationCity    String? @map("pickup_location_city") @db.VarChar(100)
+  pickupLocationState   String? @map("pickup_location_state") @db.VarChar(100)
+  pickupLocationPincode String? @map("pickup_location_pincode") @db.VarChar(6)
+
   totalAmount            BigInt         @map("total_amount")
   totalCurrency          String         @default("INR") @map("total_currency") @db.VarChar(3)
   /// Optimistic-concurrency guard (S3-5) — see `Inventory.version`'s own

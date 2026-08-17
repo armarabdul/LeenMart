@@ -4,7 +4,7 @@ import { toProductId, toProductVariantId } from '../../../catalogue/index.js';
 import { toVendorId } from '../../../identity/index.js';
 import type { OrderAddressSnapshot } from '../../domain/entities/order.entity.js';
 import { OrderItem, type TaxSnapshot } from '../../domain/entities/order-item.entity.js';
-import { SubOrder } from '../../domain/entities/sub-order.entity.js';
+import { SubOrder, type PickupLocationSnapshot } from '../../domain/entities/sub-order.entity.js';
 import type {
   VendorOrderRepository,
   VendorSubOrderDetail,
@@ -22,6 +22,37 @@ import {
 type SubOrderDetailRow = Prisma.SubOrderGetPayload<{
   include: { items: true; order: { select: typeof ADDRESS_SELECT } };
 }>;
+
+/**
+ * S4-ADDR. Collapses the five nullable snapshot columns back into one
+ * all-or-nothing object, keyed off the mandatory parts — they are only ever
+ * written as a set, so any one being null means "no pickup location".
+ */
+const toPickupLocationSnapshot = (row: {
+  pickupLocationLine1: string | null;
+  pickupLocationLine2: string | null;
+  pickupLocationCity: string | null;
+  pickupLocationState: string | null;
+  pickupLocationPincode: string | null;
+}): PickupLocationSnapshot | null => {
+  const { pickupLocationLine1, pickupLocationCity, pickupLocationState, pickupLocationPincode } =
+    row;
+  if (
+    !pickupLocationLine1 ||
+    !pickupLocationCity ||
+    !pickupLocationState ||
+    !pickupLocationPincode
+  ) {
+    return null;
+  }
+  return {
+    line1: pickupLocationLine1,
+    line2: row.pickupLocationLine2,
+    city: pickupLocationCity,
+    state: pickupLocationState,
+    pincode: pickupLocationPincode,
+  };
+};
 
 const ADDRESS_SELECT = {
   addressRecipientName: true,
@@ -100,6 +131,7 @@ const toSubOrder = (row: SubOrderDetailRow): SubOrder =>
     status: OrderStatus.fromName(row.status),
     fulfilmentMode: FulfilmentMode.fromName(row.fulfilmentMode),
     vendorShopNameSnapshot: row.vendorShopNameSnapshot,
+    pickupLocationSnapshot: toPickupLocationSnapshot(row),
     totalAmount: Money.fromMinor(row.totalAmount, row.totalCurrency as 'INR'),
     items: row.items.map(toOrderItem),
     createdAt: row.createdAt,

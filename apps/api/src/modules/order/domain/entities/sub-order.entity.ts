@@ -13,6 +13,22 @@ import type { OrderId } from '../value-objects/order-id.value-object.js';
 import type { SubOrderId } from '../value-objects/sub-order-id.value-object.js';
 import type { OrderItem } from './order-item.entity.js';
 
+/**
+ * Where the customer collects, frozen at placement (S4-ADDR).
+ *
+ * A snapshot for the same reason `vendorShopNameSnapshot` and
+ * `OrderAddressSnapshot` are: a vendor who later moves premises must not
+ * retroactively change where an already-placed order said to go. Nothing on
+ * this aggregate ever re-reads it from the vendor profile.
+ */
+export interface PickupLocationSnapshot {
+  readonly line1: string;
+  readonly line2: string | null;
+  readonly city: string;
+  readonly state: string;
+  readonly pincode: string;
+}
+
 export interface SubOrderProps {
   readonly id: SubOrderId;
   readonly orderId: OrderId;
@@ -21,6 +37,12 @@ export interface SubOrderProps {
   /** S4-QR: chosen once at checkout, never changes afterward — see `FulfilmentMode`'s own doc comment for why this lives here rather than on `Order`. */
   readonly fulfilmentMode: FulfilmentMode;
   readonly vendorShopNameSnapshot: string;
+  /**
+   * S4-ADDR. Non-null only on a `PICKUP` sub-order whose vendor had a shop
+   * address at placement — `null` for every `DELIVERY` sub-order, and for any
+   * pickup order placed before this milestone existed.
+   */
+  readonly pickupLocationSnapshot: PickupLocationSnapshot | null;
   readonly totalAmount: Money;
   readonly items: readonly OrderItem[];
   readonly createdAt: Date;
@@ -90,10 +112,23 @@ export class SubOrder {
     vendorId: VendorId;
     fulfilmentMode: FulfilmentMode;
     vendorShopNameSnapshot: string;
+    /**
+     * S4-ADDR. The caller passes this only for a `PICKUP` sub-order; the
+     * guard below refuses a collection address on a `DELIVERY` one rather
+     * than silently storing a contradiction.
+     */
+    pickupLocationSnapshot?: PickupLocationSnapshot | null;
     totalAmount: Money;
     items: readonly OrderItem[];
     now: Date;
   }): SubOrder {
+    const pickupLocationSnapshot = props.pickupLocationSnapshot ?? null;
+    if (pickupLocationSnapshot && props.fulfilmentMode.name !== 'PICKUP') {
+      throw new FulfilmentModeMismatchError(
+        'Recording a pickup location',
+        props.fulfilmentMode.name,
+      );
+    }
     return new SubOrder({
       id: props.id,
       orderId: props.orderId,
@@ -101,6 +136,7 @@ export class SubOrder {
       status: OrderStatus.PENDING_PAYMENT,
       fulfilmentMode: props.fulfilmentMode,
       vendorShopNameSnapshot: props.vendorShopNameSnapshot,
+      pickupLocationSnapshot,
       totalAmount: props.totalAmount,
       items: props.items,
       createdAt: props.now,
@@ -135,6 +171,10 @@ export class SubOrder {
 
   get vendorShopNameSnapshot(): string {
     return this.props.vendorShopNameSnapshot;
+  }
+
+  get pickupLocationSnapshot(): PickupLocationSnapshot | null {
+    return this.props.pickupLocationSnapshot;
   }
 
   get totalAmount(): Money {

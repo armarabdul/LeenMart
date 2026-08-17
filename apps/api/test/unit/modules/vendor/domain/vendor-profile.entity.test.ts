@@ -21,6 +21,7 @@ const inState = (status: VendorStatus): VendorProfile =>
     plan: 'COMMISSION',
     shopName: null,
     supportsPickup: false,
+    shopAddress: null,
     createdAt: now,
     updatedAt: now,
   });
@@ -262,6 +263,7 @@ describe('VendorProfile', () => {
         plan: 'COMMISSION',
         shopName: 'Test Shop',
         supportsPickup: true,
+        shopAddress: null,
         createdAt: now,
         updatedAt: now,
       });

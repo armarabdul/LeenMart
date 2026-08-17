@@ -28,6 +28,7 @@ const vendor = VendorProfile.reconstitute({
   plan: 'COMMISSION',
   shopName: null,
   supportsPickup: false,
+  shopAddress: null,
   createdAt: NOW,
   updatedAt: NOW,
 });

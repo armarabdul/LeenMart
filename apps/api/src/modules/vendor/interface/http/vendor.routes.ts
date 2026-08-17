@@ -3,6 +3,7 @@ import {
   createKycUploadIntentRequestSchema,
   registerVendorRequestSchema,
   setVendorPickupCapabilityRequestSchema,
+  setVendorShopAddressRequestSchema,
   setVendorShopNameRequestSchema,
   submitVendorKycRequestSchema,
 } from '@leen-mart/contracts';
@@ -16,6 +17,54 @@ import {
 import { validate } from '../../../../shared/interface/http/middleware/validate.js';
 import type { AccessTokenService, SessionDenylist } from '../../../identity/index.js';
 import type { VendorController } from './vendor.controller.js';
+
+/**
+ * S4-ADDR. The third self-service shop-profile attribute, on the same
+ * `MANAGE_SHOP_PROFILE` permission as `/me/shop-profile` and
+ * `/me/pickup-capability` — not a new capability, and deliberately not a new
+ * permission.
+ *
+ * Split into its own function only to keep `createVendorRouter` inside this
+ * repository's function-length budget; the middleware order is identical to
+ * every route above it.
+ */
+const mountShopAddressRoutes = (
+  router: Router,
+  controller: VendorController,
+  // The three auth collaborators travel as one object rather than as three
+  // more positional arguments — they are always supplied together, and it
+  // keeps this inside the four-parameter budget.
+  auth: {
+    readonly accessTokenService: AccessTokenService;
+    readonly sessionDenylist: SessionDenylist;
+    readonly resolveVendorTenant: VendorTenantResolver;
+  },
+): void => {
+  const { accessTokenService, sessionDenylist, resolveVendorTenant } = auth;
+  // GET is gated identically to the write: a role that may not manage the
+  // shop profile has no business reading it back here either. The customer's
+  // view of a pickup location is a different surface entirely — the order's
+  // own snapshot — not this one.
+  router.get(
+    '/me/shop-address',
+    authenticate(accessTokenService, sessionDenylist),
+    tenantContext(resolveVendorTenant),
+    requirePermission('MANAGE_SHOP_PROFILE'),
+    asyncHandler(controller.getShopProfile),
+  );
+
+  // PUT, not PATCH: the address parts are only meaningful as a set, so this
+  // replaces the whole address rather than merging field-by-field — a merge
+  // could leave a new line1 sitting against a stale city.
+  router.put(
+    '/me/shop-address',
+    authenticate(accessTokenService, sessionDenylist),
+    tenantContext(resolveVendorTenant),
+    requirePermission('MANAGE_SHOP_PROFILE'),
+    validate({ body: setVendorShopAddressRequestSchema }),
+    asyncHandler(controller.setShopAddress),
+  );
+};
 
 /**
  * Mounted at `/api/v1/vendors`, so this router's `/` is `POST /api/v1/vendors`
@@ -108,6 +157,12 @@ export const createVendorRouter = (
     validate({ body: setVendorPickupCapabilityRequestSchema }),
     asyncHandler(controller.setPickupCapability),
   );
+
+  mountShopAddressRoutes(router, controller, {
+    accessTokenService,
+    sessionDenylist,
+    resolveVendorTenant,
+  });
 
   return router;
 };

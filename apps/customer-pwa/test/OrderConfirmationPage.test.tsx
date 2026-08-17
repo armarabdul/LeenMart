@@ -51,6 +51,7 @@ const subOrder = (overrides: Partial<SubOrderResponse> = {}): SubOrderResponse =
   vendorShopName: 'Ratnagiri Orchards',
   status: 'PENDING_PAYMENT',
   fulfilmentMode: 'DELIVERY',
+  pickupLocation: null,
   totalAmount: { amount: '19800', currency: 'INR' },
   items: [orderItem()],
   ...overrides,
@@ -288,5 +289,62 @@ describe('sub-order fulfilment status display (S3-6, observe-only — no new mut
     expect(screen.queryByRole('button', { name: 'Start processing' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Mark shipped' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Mark delivered' })).not.toBeInTheDocument();
+  });
+  describe('pickup location (S4-ADDR)', () => {
+    const LOCATION = {
+      line1: '12 Market Road',
+      line2: null,
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560001',
+    };
+
+    it('shows where to collect on a PICKUP sub-order', () => {
+      renderOrderPage(
+        order({
+          subOrders: [
+            subOrder({ fulfilmentMode: 'PICKUP', status: 'CONFIRMED', pickupLocation: LOCATION }),
+          ],
+        }),
+      );
+
+      expect(screen.getByText('Collect from')).toBeInTheDocument();
+      expect(screen.getByText('12 Market Road')).toBeInTheDocument();
+    });
+
+    it('shows it from the moment the order exists, not only once it is ready', () => {
+      renderOrderPage(
+        order({
+          status: 'PENDING_PAYMENT',
+          subOrders: [
+            subOrder({
+              fulfilmentMode: 'PICKUP',
+              status: 'PENDING_PAYMENT',
+              pickupLocation: LOCATION,
+            }),
+          ],
+        }),
+      );
+
+      expect(screen.getByText('Collect from')).toBeInTheDocument();
+    });
+
+    it('shows nothing for a DELIVERY sub-order', () => {
+      renderOrderPage(order({ subOrders: [subOrder({ fulfilmentMode: 'DELIVERY' })] }));
+
+      expect(screen.queryByText('Collect from')).not.toBeInTheDocument();
+    });
+
+    it('shows nothing for a PICKUP sub-order with no snapshot', () => {
+      renderOrderPage(
+        order({
+          subOrders: [
+            subOrder({ fulfilmentMode: 'PICKUP', status: 'CONFIRMED', pickupLocation: null }),
+          ],
+        }),
+      );
+
+      expect(screen.queryByText('Collect from')).not.toBeInTheDocument();
+    });
   });
 });

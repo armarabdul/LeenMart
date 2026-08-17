@@ -4,7 +4,7 @@ import { toProductId, toProductVariantId } from '../../../catalogue/index.js';
 import { toUserId, toVendorId, type UserId } from '../../../identity/index.js';
 import { Order, type OrderAddressSnapshot } from '../../domain/entities/order.entity.js';
 import { OrderItem, type TaxSnapshot } from '../../domain/entities/order-item.entity.js';
-import { SubOrder } from '../../domain/entities/sub-order.entity.js';
+import { SubOrder, type PickupLocationSnapshot } from '../../domain/entities/sub-order.entity.js';
 import type { OrderRepository, OrderSummary } from '../../domain/repositories/order.repository.js';
 import { SubOrderConcurrentlyModifiedError } from '../../domain/errors/order-errors.js';
 import { toOrderId, type OrderId } from '../../domain/value-objects/order-id.value-object.js';
@@ -16,6 +16,55 @@ import { FulfilmentMode } from '../../domain/value-objects/fulfilment-mode.value
 type OrderRow = Prisma.OrderGetPayload<{
   include: { subOrders: { include: { items: true } } };
 }>;
+
+/**
+ * S4-ADDR. Collapses the five nullable snapshot columns back into one
+ * all-or-nothing object, keyed off the mandatory parts — they are only ever
+ * written as a set, so any one being null means "no pickup location".
+ */
+
+/** Explodes the snapshot back into its flat columns, or writes all five as null. */
+const pickupLocationColumns = (
+  snapshot: PickupLocationSnapshot | null,
+): {
+  pickupLocationLine1: string | null;
+  pickupLocationLine2: string | null;
+  pickupLocationCity: string | null;
+  pickupLocationState: string | null;
+  pickupLocationPincode: string | null;
+} => ({
+  pickupLocationLine1: snapshot === null ? null : snapshot.line1,
+  pickupLocationLine2: snapshot === null ? null : snapshot.line2,
+  pickupLocationCity: snapshot === null ? null : snapshot.city,
+  pickupLocationState: snapshot === null ? null : snapshot.state,
+  pickupLocationPincode: snapshot === null ? null : snapshot.pincode,
+});
+
+const toPickupLocationSnapshot = (row: {
+  pickupLocationLine1: string | null;
+  pickupLocationLine2: string | null;
+  pickupLocationCity: string | null;
+  pickupLocationState: string | null;
+  pickupLocationPincode: string | null;
+}): PickupLocationSnapshot | null => {
+  const { pickupLocationLine1, pickupLocationCity, pickupLocationState, pickupLocationPincode } =
+    row;
+  if (
+    !pickupLocationLine1 ||
+    !pickupLocationCity ||
+    !pickupLocationState ||
+    !pickupLocationPincode
+  ) {
+    return null;
+  }
+  return {
+    line1: pickupLocationLine1,
+    line2: row.pickupLocationLine2,
+    city: pickupLocationCity,
+    state: pickupLocationState,
+    pincode: pickupLocationPincode,
+  };
+};
 
 const toTaxSnapshot = (row: {
   taxResolved: boolean;
@@ -60,6 +109,7 @@ const toSubOrder = (row: OrderRow['subOrders'][number]): SubOrder =>
     status: OrderStatus.fromName(row.status),
     fulfilmentMode: FulfilmentMode.fromName(row.fulfilmentMode),
     vendorShopNameSnapshot: row.vendorShopNameSnapshot,
+    pickupLocationSnapshot: toPickupLocationSnapshot(row),
     totalAmount: Money.fromMinor(row.totalAmount, row.totalCurrency as 'INR'),
     items: row.items.map(toOrderItem),
     createdAt: row.createdAt,
@@ -160,6 +210,7 @@ export class PrismaOrderRepository implements OrderRepository {
             status: subOrder.status.name,
             fulfilmentMode: subOrder.fulfilmentMode.name,
             vendorShopNameSnapshot: subOrder.vendorShopNameSnapshot,
+            ...pickupLocationColumns(subOrder.pickupLocationSnapshot),
             totalAmount: subOrder.totalAmount.amountMinor,
             totalCurrency: subOrder.totalAmount.currency,
             createdAt: subOrder.createdAt,

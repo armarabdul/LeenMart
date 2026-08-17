@@ -49,6 +49,7 @@ const activeVendor = VendorProfile.reconstitute({
   plan: 'COMMISSION',
   shopName: 'Test Shop',
   supportsPickup: true,
+  shopAddress: null,
   createdAt: NOW,
   updatedAt: NOW,
 });
@@ -89,6 +90,7 @@ const buildDetail = (
     status,
     fulfilmentMode,
     vendorShopNameSnapshot: 'Test Shop',
+    pickupLocationSnapshot: null,
     totalAmount: Money.fromMajor(199),
     items: [],
     createdAt: NOW,
@@ -237,6 +239,7 @@ describe('MarkReadyForPickupUseCase', () => {
       plan: 'COMMISSION',
       shopName: 'Test Shop',
       supportsPickup: true,
+      shopAddress: null,
       createdAt: NOW,
       updatedAt: NOW,
     });

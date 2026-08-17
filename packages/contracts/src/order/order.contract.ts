@@ -88,11 +88,33 @@ export const orderItemResponseSchema = z.object({
   tax: orderItemTaxSchema,
 });
 
+/**
+ * Where the customer collects, as it stood when the order was placed
+ * (S4-ADDR). Carries no `recipientName`/`phone`/`label` — this is the shop's
+ * premises, not a delivery address.
+ */
+export const pickupLocationSnapshotSchema = z.object({
+  line1: z.string(),
+  line2: z.string().nullable(),
+  city: z.string(),
+  state: z.string(),
+  pincode: z.string(),
+});
+
 export const subOrderResponseSchema = z.object({
   id: uuidSchema,
   vendorShopName: z.string(),
   status: orderStatusSchema,
   fulfilmentMode: fulfilmentModeSchema,
+  /**
+   * S4-ADDR. Non-null only on a `PICKUP` sub-order placed once its vendor had
+   * set a shop address — `null` for every DELIVERY sub-order and for any
+   * pickup order placed before this milestone. Read from the sub-order's own
+   * snapshot columns, never re-resolved from the vendor profile, so a vendor
+   * who later moves premises cannot change where an existing order says to
+   * collect from.
+   */
+  pickupLocation: pickupLocationSnapshotSchema.nullable(),
   totalAmount: moneySchema,
   items: z.array(orderItemResponseSchema),
 });
@@ -216,6 +238,7 @@ export type PlaceOrderRequest = z.infer<typeof placeOrderRequestSchema>;
 export type OrderAddressSnapshotDto = z.infer<typeof orderAddressSnapshotSchema>;
 export type OrderItemTaxDto = z.infer<typeof orderItemTaxSchema>;
 export type OrderItemResponse = z.infer<typeof orderItemResponseSchema>;
+export type PickupLocationSnapshotDto = z.infer<typeof pickupLocationSnapshotSchema>;
 export type SubOrderResponse = z.infer<typeof subOrderResponseSchema>;
 export type OrderResponse = z.infer<typeof orderResponseSchema>;
 export type OrderSummaryResponse = z.infer<typeof orderSummaryResponseSchema>;

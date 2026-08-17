@@ -14,6 +14,25 @@ import { InvalidVendorStatusTransitionError } from '../errors/vendor-errors.js';
  */
 export type VendorPlanName = 'COMMISSION' | 'SUBSCRIPTION';
 
+/**
+ * A vendor's shop premises (S4-ADDR). One per vendor for v1 — no multi-outlet
+ * model — and modelled as a plain readonly interface rather than a class, the
+ * same shape `OrderAddressSnapshot` already uses for the comparable snapshot
+ * on the order side: it carries no behaviour beyond format validation, which
+ * happens once at the HTTP boundary (`setVendorShopAddressRequestSchema`).
+ *
+ * Held as a whole object rather than as five loose props, which is what makes
+ * "either the vendor has an address or they do not" representable — a
+ * half-populated address is unspellable rather than merely discouraged.
+ */
+export interface VendorShopAddress {
+  readonly line1: string;
+  readonly line2: string | null;
+  readonly city: string;
+  readonly state: string;
+  readonly pincode: string;
+}
+
 export interface VendorProfileProps {
   readonly id: VendorId;
   readonly userId: UserId;
@@ -35,6 +54,13 @@ export interface VendorProfileProps {
    * real to check it against (`PickupNotSupportedByVendorError` otherwise).
    */
   readonly supportsPickup: boolean;
+  /**
+   * The shop's premises (S4-ADDR). `null` until the vendor sets one — never
+   * backfilled or guessed, the same discipline `shopName` above states.
+   * `PlaceOrderUseCase` snapshots this onto a `PICKUP` sub-order at placement
+   * and never reads it again for an existing order.
+   */
+  readonly shopAddress: VendorShopAddress | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -120,6 +146,7 @@ export class VendorProfile {
       plan: 'COMMISSION',
       shopName: null,
       supportsPickup: false,
+      shopAddress: null,
       createdAt: props.now,
       updatedAt: props.now,
     });
@@ -152,6 +179,10 @@ export class VendorProfile {
 
   get supportsPickup(): boolean {
     return this.props.supportsPickup;
+  }
+
+  get shopAddress(): VendorShopAddress | null {
+    return this.props.shopAddress;
   }
 
   get createdAt(): Date {
@@ -245,5 +276,23 @@ export class VendorProfile {
    */
   updatePickupCapability(supportsPickup: boolean, now: Date): VendorProfile {
     return new VendorProfile({ ...this.props, supportsPickup, updatedAt: now });
+  }
+
+  /**
+   * Sets or replaces the shop's premises (S4-ADDR). Same shape as
+   * `updateShopName`/`updatePickupCapability` — a mutable profile attribute,
+   * not a lifecycle state, so it does not go through `transition()` and is
+   * callable from any status.
+   *
+   * Replaces the address wholesale rather than merging field-by-field: the
+   * parts are only meaningful together, and a merge could leave a new
+   * `line1` sitting against a stale `city`.
+   *
+   * Editing this deliberately does **not** touch any already-placed order.
+   * A `PICKUP` sub-order snapshots the address at placement precisely so a
+   * vendor relocating cannot rewrite where an existing order said to collect.
+   */
+  updateShopAddress(shopAddress: VendorShopAddress, now: Date): VendorProfile {
+    return new VendorProfile({ ...this.props, shopAddress, updatedAt: now });
   }
 }

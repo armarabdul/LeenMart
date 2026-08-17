@@ -1,7 +1,11 @@
 import type { TransactionScope } from '@leen-mart/domain-kit';
 import type { PrismaClient } from '@prisma/client';
 import { toUserId, toVendorId, type UserId, type VendorId } from '../../../identity/index.js';
-import { VendorProfile, type VendorPlanName } from '../../domain/entities/vendor-profile.entity.js';
+import {
+  VendorProfile,
+  type VendorPlanName,
+  type VendorShopAddress,
+} from '../../domain/entities/vendor-profile.entity.js';
 import { VendorStatus } from '../../domain/value-objects/vendor-status.value-object.js';
 import type { VendorRepository } from '../../domain/repositories/vendor.repository.js';
 
@@ -12,9 +16,35 @@ interface VendorProfileRow {
   readonly plan: VendorPlanName;
   readonly shopName: string | null;
   readonly supportsPickup: boolean;
+  readonly shopAddressLine1: string | null;
+  readonly shopAddressLine2: string | null;
+  readonly shopAddressCity: string | null;
+  readonly shopAddressState: string | null;
+  readonly shopAddressPincode: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
+
+/**
+ * The five nullable columns collapse back into one all-or-nothing object
+ * (S4-ADDR). Keyed off the mandatory parts: they are only ever written as a
+ * set, so any one of them being null means "no address set" rather than a
+ * partially filled one. `line2` is genuinely optional and so is carried
+ * through as-is.
+ */
+const toShopAddress = (row: VendorProfileRow): VendorShopAddress | null => {
+  const { shopAddressLine1, shopAddressCity, shopAddressState, shopAddressPincode } = row;
+  if (!shopAddressLine1 || !shopAddressCity || !shopAddressState || !shopAddressPincode) {
+    return null;
+  }
+  return {
+    line1: shopAddressLine1,
+    line2: row.shopAddressLine2,
+    city: shopAddressCity,
+    state: shopAddressState,
+    pincode: shopAddressPincode,
+  };
+};
 
 const toDomain = (row: VendorProfileRow): VendorProfile =>
   VendorProfile.reconstitute({
@@ -24,9 +54,32 @@ const toDomain = (row: VendorProfileRow): VendorProfile =>
     plan: row.plan,
     shopName: row.shopName,
     supportsPickup: row.supportsPickup,
+    shopAddress: toShopAddress(row),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   });
+
+/** Explodes the domain object back into the flat columns, or clears all five. */
+const shopAddressColumns = (
+  vendorProfile: VendorProfile,
+): {
+  shopAddressLine1: string | null;
+  shopAddressLine2: string | null;
+  shopAddressCity: string | null;
+  shopAddressState: string | null;
+  shopAddressPincode: string | null;
+} => {
+  // Read once and branched once, rather than five independent optional
+  // chains — identical result, and it keeps this inside the complexity budget.
+  const address = vendorProfile.shopAddress;
+  return {
+    shopAddressLine1: address === null ? null : address.line1,
+    shopAddressLine2: address === null ? null : address.line2,
+    shopAddressCity: address === null ? null : address.city,
+    shopAddressState: address === null ? null : address.state,
+    shopAddressPincode: address === null ? null : address.pincode,
+  };
+};
 
 /** Maps rows to `VendorProfile` at the boundary; Prisma types never escape this file (SDD 3.4). */
 export class PrismaVendorRepository implements VendorRepository {
@@ -53,6 +106,7 @@ export class PrismaVendorRepository implements VendorRepository {
         plan: vendorProfile.plan,
         shopName: vendorProfile.shopName,
         supportsPickup: vendorProfile.supportsPickup,
+        ...shopAddressColumns(vendorProfile),
         createdAt: vendorProfile.createdAt,
         updatedAt: vendorProfile.updatedAt,
       },
@@ -60,7 +114,8 @@ export class PrismaVendorRepository implements VendorRepository {
   }
 
   /**
-   * Writes the lifecycle state and shop name — `id`/`userId`/`plan` are
+   * Writes the lifecycle state, shop name, pickup capability and shop
+   * address — `id`/`userId`/`plan` are
    * immutable here (plan changes are S3-2's own deliberately-withheld
    * concern), and `createdAt` is set once at registration. Mirrors the
    * narrow-update convention `PrismaUserRepository`/`PrismaOtpRepository`
@@ -73,6 +128,7 @@ export class PrismaVendorRepository implements VendorRepository {
         status: vendorProfile.status.name,
         shopName: vendorProfile.shopName,
         supportsPickup: vendorProfile.supportsPickup,
+        ...shopAddressColumns(vendorProfile),
         updatedAt: vendorProfile.updatedAt,
       },
     });

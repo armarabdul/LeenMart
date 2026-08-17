@@ -35,6 +35,7 @@ const activeVendor = VendorProfile.reconstitute({
   plan: 'COMMISSION',
   shopName: 'Test Shop',
   supportsPickup: false,
+  shopAddress: null,
   createdAt: NOW,
   updatedAt: NOW,
 });
@@ -116,6 +117,7 @@ describe('ListVendorOrdersUseCase', () => {
       plan: 'COMMISSION',
       shopName: 'Test Shop',
       supportsPickup: false,
+      shopAddress: null,
       createdAt: NOW,
       updatedAt: NOW,
     });

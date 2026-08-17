@@ -19,6 +19,9 @@ const VendorOrderDetailPage = lazy(() =>
 const VendorEarningsPage = lazy(() =>
   import('@/pages/VendorEarningsPage').then((module) => ({ default: module.VendorEarningsPage })),
 );
+const ShopProfilePage = lazy(() =>
+  import('@/pages/ShopProfilePage').then((module) => ({ default: module.ShopProfilePage })),
+);
 const RedeemPickupPage = lazy(() =>
   import('@/pages/RedeemPickupPage').then((module) => ({ default: module.RedeemPickupPage })),
 );
@@ -51,6 +54,7 @@ const router = createBrowserRouter([
           { path: '/orders/:id', element: withBoundary(<VendorOrderDetailPage />) },
           { path: '/earnings', element: withBoundary(<VendorEarningsPage />) },
           { path: '/pickup/redeem', element: withBoundary(<RedeemPickupPage />) },
+          { path: '/shop-profile', element: withBoundary(<ShopProfilePage />) },
         ],
       },
       { path: '*', element: withBoundary(<NotFoundPage />) },

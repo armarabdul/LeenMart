@@ -3,6 +3,7 @@ import type { OrderItemResponse, OrderResponse, SubOrderResponse } from '@leen-m
 import { apiErrorMessage } from '@/shared/api/base-api';
 import { formatMoney } from '@/shared/lib/format-money';
 import { ORDER_STATUS_LABEL } from '@/shared/lib/order-status-label';
+import { PickupLocationPanel } from '@/features/checkout/components/PickupLocationPanel';
 import { PickupQrPanel } from '@/features/checkout/components/PickupQrPanel';
 import { useGetOrderQuery } from '@/features/checkout/checkout.api';
 import { TestPaymentPanel } from '@/features/payment/components/TestPaymentPanel';
@@ -56,6 +57,14 @@ const SubOrderCard = ({
         <OrderItemRow key={item.id} item={item} />
       ))}
     </ul>
+    {/* S4-ADDR: where to collect, from the order's own snapshot. Shown for
+        the whole life of a pickup sub-order — the customer needs the address
+        from the moment they order, not only once it is ready. `null` for
+        every DELIVERY sub-order, and for pickup orders placed before the
+        vendor had an address. */}
+    {subOrder.fulfilmentMode === 'PICKUP' && subOrder.pickupLocation && (
+      <PickupLocationPanel shopName={subOrder.vendorShopName} location={subOrder.pickupLocation} />
+    )}
     {/* S4-QR: the QR appears only once this vendor has actually marked the
         pickup ready — the customer has nothing to show before that, and the
         backend refuses to issue a token in any other state. */}

@@ -83,6 +83,7 @@ const buildOrder = (status: OrderStatus, customer = customerId): Order => {
     status,
     fulfilmentMode: FulfilmentMode.DELIVERY,
     vendorShopNameSnapshot: 'Test Shop',
+    pickupLocationSnapshot: null,
     totalAmount: Money.fromMajor(597),
     items: [item],
     createdAt: NOW,

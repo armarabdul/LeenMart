@@ -82,6 +82,11 @@ const toSubOrderResponse = (subOrder: SubOrder): SubOrderResponse => ({
   vendorShopName: subOrder.vendorShopNameSnapshot,
   status: subOrder.status.name,
   fulfilmentMode: subOrder.fulfilmentMode.name,
+  // S4-ADDR. Straight from the sub-order's own snapshot — never re-resolved
+  // from the vendor profile, so a vendor who later moves premises cannot
+  // change where an existing order says to collect. `null` for every DELIVERY
+  // sub-order by construction.
+  pickupLocation: subOrder.pickupLocationSnapshot,
   totalAmount: subOrder.totalAmount.toJSON(),
   items: subOrder.items.map(toOrderItemResponse),
 });

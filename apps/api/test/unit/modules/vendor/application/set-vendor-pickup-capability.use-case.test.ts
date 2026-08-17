@@ -28,6 +28,7 @@ const vendor = VendorProfile.reconstitute({
   plan: 'COMMISSION',
   shopName: 'Test Shop',
   supportsPickup: false,
+  shopAddress: null,
   createdAt: NOW,
   updatedAt: NOW,
 });
@@ -69,6 +70,7 @@ describe('SetVendorPickupCapabilityUseCase', () => {
       plan: 'COMMISSION',
       shopName: 'Test Shop',
       supportsPickup: true,
+      shopAddress: null,
       createdAt: NOW,
       updatedAt: NOW,
     });

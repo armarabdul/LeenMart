@@ -46,6 +46,50 @@ export const vendorShopProfileResponseSchema = z.object({
 });
 
 /**
+ * A vendor's shop address (S4-ADDR). Field-for-field the shape
+ * `orderAddressSnapshotSchema` and the customer address book already use,
+ * minus the parts that belong to a *delivery* address rather than to premises:
+ * no `recipientName`/`phone` (the shop is identified by its own name and the
+ * vendor's account), no `label` (there is one address, so nothing to
+ * distinguish), and no `landmark`.
+ *
+ * No country field: `addressRequestSchema` has none either — the platform is
+ * India-only (ASM-01). No latitude/longitude: geocoding, PostGIS and delivery
+ * radius are separate Stage 4 capabilities, and speculative columns are
+ * exactly what this codebase's schema conventions refuse.
+ */
+export const vendorShopAddressSchema = z.object({
+  line1: z.string().trim().min(1).max(200),
+  line2: z.string().trim().min(1).max(200).nullable(),
+  city: z.string().trim().min(1).max(100),
+  state: z.string().trim().min(1).max(100),
+  pincode: z
+    .string()
+    .trim()
+    .regex(/^[1-9][0-9]{5}$/, 'Must be a valid 6-digit Indian pincode'),
+});
+
+/**
+ * PUT /vendors/me/shop-address (S4-ADDR). A whole-address replace rather than
+ * a partial patch: the parts are only meaningful as a set, and a partial
+ * update could otherwise leave a half-changed address — a new line1 against
+ * the old city — which is worse than no address at all.
+ */
+export const setVendorShopAddressRequestSchema = vendorShopAddressSchema.strict();
+
+/**
+ * GET/PUT /vendors/me/shop-address. `shopAddress` is `null` until the vendor
+ * sets one; it is never partially populated.
+ */
+export const vendorShopAddressResponseSchema = z.object({
+  id: uuidSchema,
+  status: vendorStatusSchema,
+  shopName: z.string().nullable(),
+  supportsPickup: z.boolean(),
+  shopAddress: vendorShopAddressSchema.nullable(),
+});
+
+/**
  * PATCH /vendors/me/pickup-capability (S4-QR, locked decision #25). A single
  * field, the same "not a general shop profile editor" shape
  * `setVendorShopNameRequestSchema` already uses — `PlaceOrderUseCase` checks
@@ -81,6 +125,9 @@ export type RegisterVendorRequest = z.infer<typeof registerVendorRequestSchema>;
 export type RegisterVendorResponse = z.infer<typeof registerVendorResponseSchema>;
 export type SetVendorShopNameRequest = z.infer<typeof setVendorShopNameRequestSchema>;
 export type VendorShopProfileResponse = z.infer<typeof vendorShopProfileResponseSchema>;
+export type VendorShopAddress = z.infer<typeof vendorShopAddressSchema>;
+export type SetVendorShopAddressRequest = z.infer<typeof setVendorShopAddressRequestSchema>;
+export type VendorShopAddressResponse = z.infer<typeof vendorShopAddressResponseSchema>;
 export type SetVendorPickupCapabilityRequest = z.infer<
   typeof setVendorPickupCapabilityRequestSchema
 >;

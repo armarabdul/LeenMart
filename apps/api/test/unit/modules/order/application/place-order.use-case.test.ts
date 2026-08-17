@@ -65,6 +65,7 @@ const activeVendor = VendorProfile.reconstitute({
   plan: 'COMMISSION',
   shopName: 'Test Shop',
   supportsPickup: false,
+  shopAddress: null,
   createdAt: NOW,
   updatedAt: NOW,
 });
@@ -320,6 +321,7 @@ const pickupCapableVendor = VendorProfile.reconstitute({
   plan: 'COMMISSION',
   shopName: 'Pickup Shop',
   supportsPickup: true,
+  shopAddress: null,
   createdAt: NOW,
   updatedAt: NOW,
 });
@@ -459,6 +461,7 @@ describe('PlaceOrderUseCase', () => {
       plan: 'COMMISSION',
       shopName: 'Test Shop',
       supportsPickup: false,
+      shopAddress: null,
       createdAt: NOW,
       updatedAt: NOW,
     });
@@ -476,6 +479,7 @@ describe('PlaceOrderUseCase', () => {
       plan: 'COMMISSION',
       shopName: null,
       supportsPickup: false,
+      shopAddress: null,
       createdAt: NOW,
       updatedAt: NOW,
     });

@@ -34,6 +34,8 @@ import {
 } from '../../shared/infrastructure/persistence/tenant-prisma.js';
 import { RegisterVendorUseCase } from './application/use-cases/register-vendor.use-case.js';
 import { SetVendorPickupCapabilityUseCase } from './application/use-cases/set-vendor-pickup-capability.use-case.js';
+import { SetVendorShopAddressUseCase } from './application/use-cases/set-vendor-shop-address.use-case.js';
+import { GetVendorShopProfileUseCase } from './application/use-cases/get-vendor-shop-profile.use-case.js';
 import { SetVendorShopNameUseCase } from './application/use-cases/set-vendor-shop-name.use-case.js';
 import { ActivateVendorUseCase } from './application/use-cases/activate-vendor.use-case.js';
 import { createVendorController } from './interface/http/vendor.controller.js';
@@ -302,6 +304,38 @@ const buildSetVendorPickupCapabilityUseCase = (params: {
   logger: Logger;
 }): SetVendorPickupCapabilityUseCase => new SetVendorPickupCapabilityUseCase(params);
 
+/** S4-ADDR. Same split-out reasoning as `buildSetVendorShopNameUseCase`. */
+const buildSetVendorShopAddressUseCase = (params: {
+  vendorRepository: PrismaVendorRepository;
+  clock: Clock;
+  logger: Logger;
+}): SetVendorShopAddressUseCase => new SetVendorShopAddressUseCase(params);
+
+/**
+ * The three self-service shop-profile use cases (name, pickup capability,
+ * address) plus the read. Grouped because they share the same dependencies
+ * and the same `MANAGE_SHOP_PROFILE` gate, and because S4-ADDR's additions
+ * pushed `buildVendorFacingUseCases` past this repository's function-length
+ * budget.
+ */
+const buildShopProfileUseCases = (params: {
+  vendorRepository: PrismaVendorRepository;
+  clock: Clock;
+  logger: Logger;
+}): {
+  setVendorShopNameUseCase: SetVendorShopNameUseCase;
+  setVendorPickupCapabilityUseCase: SetVendorPickupCapabilityUseCase;
+  setVendorShopAddressUseCase: SetVendorShopAddressUseCase;
+  getVendorShopProfileUseCase: GetVendorShopProfileUseCase;
+} => ({
+  setVendorShopNameUseCase: buildSetVendorShopNameUseCase(params),
+  setVendorPickupCapabilityUseCase: buildSetVendorPickupCapabilityUseCase(params),
+  setVendorShopAddressUseCase: buildSetVendorShopAddressUseCase(params),
+  getVendorShopProfileUseCase: new GetVendorShopProfileUseCase({
+    vendorRepository: params.vendorRepository,
+  }),
+});
+
 interface VendorFacingUseCasesParams {
   prisma: PrismaClient;
   env: Env;
@@ -321,6 +355,8 @@ interface VendorFacingUseCasesResult {
   submitVendorKycUseCase: SubmitVendorKycUseCase;
   setVendorShopNameUseCase: SetVendorShopNameUseCase;
   setVendorPickupCapabilityUseCase: SetVendorPickupCapabilityUseCase;
+  setVendorShopAddressUseCase: SetVendorShopAddressUseCase;
+  getVendorShopProfileUseCase: GetVendorShopProfileUseCase;
 }
 
 /**
@@ -369,24 +405,12 @@ const buildVendorFacingUseCases = (
     clock,
     logger,
   });
-  const setVendorShopNameUseCase = buildSetVendorShopNameUseCase({
-    vendorRepository,
-    clock,
-    logger,
-  });
-  const setVendorPickupCapabilityUseCase = buildSetVendorPickupCapabilityUseCase({
-    vendorRepository,
-    clock,
-    logger,
-  });
-
   return {
     vendorRepository,
     registerVendorUseCase,
     createKycUploadIntentUseCase,
     submitVendorKycUseCase,
-    setVendorShopNameUseCase,
-    setVendorPickupCapabilityUseCase,
+    ...buildShopProfileUseCases({ vendorRepository, clock, logger }),
   };
 };
 
@@ -486,14 +510,10 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
   const moduleLogger = logger.child({ module: 'vendor' });
   const { objectStore, dataKeyCipher, documentCipher } = buildKycCrypto(env);
 
-  const {
-    vendorRepository,
-    registerVendorUseCase,
-    createKycUploadIntentUseCase,
-    submitVendorKycUseCase,
-    setVendorShopNameUseCase,
-    setVendorPickupCapabilityUseCase,
-  } = buildVendorFacingUseCases({
+  // Destructured once, straight into the controller: every member of
+  // `vendorFacing` except the repository is a controller dependency, so
+  // naming them twice bought nothing but lines.
+  const { vendorRepository, ...vendorFacingUseCases } = buildVendorFacingUseCases({
     prisma,
     env,
     objectStore,
@@ -505,13 +525,7 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
     logger: moduleLogger,
   });
 
-  const controller = createVendorController({
-    registerVendorUseCase,
-    createKycUploadIntentUseCase,
-    submitVendorKycUseCase,
-    setVendorShopNameUseCase,
-    setVendorPickupCapabilityUseCase,
-  });
+  const controller = createVendorController(vendorFacingUseCases);
   const resolveVendorTenant = async (userId: UserId): Promise<VendorId | null> =>
     (await vendorRepository.findByUserId(userId))?.id ?? null;
   const router = createVendorRouter(
