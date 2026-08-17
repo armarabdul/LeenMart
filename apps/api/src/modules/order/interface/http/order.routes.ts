@@ -12,6 +12,9 @@ import type { AccessTokenService, SessionDenylist } from '../../../identity/inde
 import type { OrderController } from './order.controller.js';
 
 const orderIdParamsSchema = z.object({ id: z.string().uuid() }).strict();
+const pickupTokenParamsSchema = z
+  .object({ id: z.string().uuid(), subOrderId: z.string().uuid() })
+  .strict();
 
 /** The fixed idempotency scope key for this one route — see `idempotency()`'s own doc comment for why this is a plain string, not derived from the request path. */
 const PLACE_ORDER_ENDPOINT = 'POST /api/v1/orders';
@@ -107,6 +110,19 @@ export const createOrderRouter = (controller: OrderController, deps: OrderRouter
     validate({ params: orderIdParamsSchema, body: confirmPaymentRequestSchema }),
     idempotency(idempotencyKeyRepository, CONFIRM_PAYMENT_ENDPOINT, { clock, idGenerator }),
     asyncHandler(controller.confirmPayment),
+  );
+
+  // S4-QR: the customer's own QR/token view — `VIEW_OWN_ORDERS`, no new
+  // permission (the pickup-mode analogue of reading the order's own
+  // status). No idempotency wrapper: this is a read that also rotates the
+  // token as a side effect (the use case's own doc comment explains why
+  // that is safe to repeat), not a create.
+  router.get(
+    '/:id/sub-orders/:subOrderId/pickup-token',
+    authenticate(accessTokenService, sessionDenylist),
+    requirePermission('VIEW_OWN_ORDERS'),
+    validate({ params: pickupTokenParamsSchema }),
+    asyncHandler(controller.getPickupToken),
   );
 
   return router;

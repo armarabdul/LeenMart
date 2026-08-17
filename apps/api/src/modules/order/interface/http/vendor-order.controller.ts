@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import type {
   OrderItemResponse,
+  RedeemPickupTokenRequest,
   VendorSubOrderResponse,
   VendorSubOrderSummaryResponse,
 } from '@leen-mart/contracts';
@@ -15,6 +16,8 @@ import { toSubOrderId } from '../../domain/value-objects/sub-order-id.value-obje
 import type { DeliverSubOrderUseCase } from '../../application/use-cases/deliver-sub-order.use-case.js';
 import type { GetVendorOrderUseCase } from '../../application/use-cases/get-vendor-order.use-case.js';
 import type { ListVendorOrdersUseCase } from '../../application/use-cases/list-vendor-orders.use-case.js';
+import type { MarkReadyForPickupUseCase } from '../../application/use-cases/mark-ready-for-pickup.use-case.js';
+import type { RedeemPickupTokenUseCase } from '../../application/use-cases/redeem-pickup-token.use-case.js';
 import type { ShipSubOrderUseCase } from '../../application/use-cases/ship-sub-order.use-case.js';
 import type { StartProcessingUseCase } from '../../application/use-cases/start-processing.use-case.js';
 
@@ -24,6 +27,8 @@ export interface VendorOrderController {
   readonly startProcessing: (req: Request, res: Response) => Promise<void>;
   readonly shipSubOrder: (req: Request, res: Response) => Promise<void>;
   readonly deliverSubOrder: (req: Request, res: Response) => Promise<void>;
+  readonly markReadyForPickup: (req: Request, res: Response) => Promise<void>;
+  readonly redeemPickupToken: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface VendorOrderControllerDeps {
@@ -32,6 +37,8 @@ export interface VendorOrderControllerDeps {
   readonly startProcessingUseCase: StartProcessingUseCase;
   readonly shipSubOrderUseCase: ShipSubOrderUseCase;
   readonly deliverSubOrderUseCase: DeliverSubOrderUseCase;
+  readonly markReadyForPickupUseCase: MarkReadyForPickupUseCase;
+  readonly redeemPickupTokenUseCase: RedeemPickupTokenUseCase;
 }
 
 const toVendorSubOrderSummaryResponse = (
@@ -40,6 +47,7 @@ const toVendorSubOrderSummaryResponse = (
   id: summary.id,
   orderId: summary.orderId,
   status: summary.status.name,
+  fulfilmentMode: summary.fulfilmentMode.name,
   totalAmount: summary.totalAmount.toJSON(),
   createdAt: summary.createdAt.toISOString(),
 });
@@ -70,6 +78,7 @@ const toVendorSubOrderResponse = (detail: VendorSubOrderDetail): VendorSubOrderR
   id: detail.subOrder.id,
   orderId: detail.subOrder.orderId,
   status: detail.subOrder.status.name,
+  fulfilmentMode: detail.subOrder.fulfilmentMode.name,
   totalAmount: detail.subOrder.totalAmount.toJSON(),
   address: {
     recipientName: detail.address.recipientName,
@@ -194,6 +203,53 @@ const deliverSubOrderHandler =
     });
   };
 
+const markReadyForPickupHandler =
+  (deps: VendorOrderControllerDeps) =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'POST /vendor/orders/:id/ready-for-pickup reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+    const { params } = validatedData<unknown, unknown, { id: string }>(req);
+
+    const detail = await deps.markReadyForPickupUseCase.execute({
+      principal: req.principal,
+      subOrderId: toSubOrderId(params.id),
+    });
+
+    res.status(200).json({
+      data: toVendorSubOrderResponse(detail),
+      meta: { requestId: getRequestId() },
+    });
+  };
+
+/**
+ * S4-QR: no `:id` param — the token itself, once verified, is what names
+ * the sub-order (locked decision #10, `RedeemPickupTokenUseCase`'s own doc
+ * comment on why "wrong sub-order" and "forged token" read identically).
+ */
+const redeemPickupTokenHandler =
+  (deps: VendorOrderControllerDeps) =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'POST /vendor/orders/pickup/redeem reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+    const { body } = validatedData<RedeemPickupTokenRequest>(req);
+
+    const detail = await deps.redeemPickupTokenUseCase.execute({
+      principal: req.principal,
+      token: body.token,
+    });
+
+    res.status(200).json({
+      data: toVendorSubOrderResponse(detail),
+      meta: { requestId: getRequestId() },
+    });
+  };
+
 export const createVendorOrderController = (
   deps: VendorOrderControllerDeps,
 ): VendorOrderController => ({
@@ -202,4 +258,6 @@ export const createVendorOrderController = (
   startProcessing: startProcessingHandler(deps),
   shipSubOrder: shipSubOrderHandler(deps),
   deliverSubOrder: deliverSubOrderHandler(deps),
+  markReadyForPickup: markReadyForPickupHandler(deps),
+  redeemPickupToken: redeemPickupTokenHandler(deps),
 });

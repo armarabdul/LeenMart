@@ -3,6 +3,7 @@ import type { OrderItemResponse, OrderResponse, SubOrderResponse } from '@leen-m
 import { apiErrorMessage } from '@/shared/api/base-api';
 import { formatMoney } from '@/shared/lib/format-money';
 import { ORDER_STATUS_LABEL } from '@/shared/lib/order-status-label';
+import { PickupQrPanel } from '@/features/checkout/components/PickupQrPanel';
 import { useGetOrderQuery } from '@/features/checkout/checkout.api';
 import { TestPaymentPanel } from '@/features/payment/components/TestPaymentPanel';
 import { CancelOrderButton } from '@/features/checkout/components/CancelOrderButton';
@@ -36,7 +37,13 @@ const OrderItemRow = ({ item }: { readonly item: OrderItemResponse }): JSX.Eleme
   </li>
 );
 
-const SubOrderCard = ({ subOrder }: { readonly subOrder: SubOrderResponse }): JSX.Element => (
+const SubOrderCard = ({
+  subOrder,
+  orderId,
+}: {
+  readonly subOrder: SubOrderResponse;
+  readonly orderId: string;
+}): JSX.Element => (
   <div className="rounded-lg border border-slate-200 bg-white p-4">
     <div className="flex items-center justify-between">
       <h3 className="text-sm font-semibold text-slate-900">Sold by {subOrder.vendorShopName}</h3>
@@ -49,6 +56,12 @@ const SubOrderCard = ({ subOrder }: { readonly subOrder: SubOrderResponse }): JS
         <OrderItemRow key={item.id} item={item} />
       ))}
     </ul>
+    {/* S4-QR: the QR appears only once this vendor has actually marked the
+        pickup ready — the customer has nothing to show before that, and the
+        backend refuses to issue a token in any other state. */}
+    {subOrder.fulfilmentMode === 'PICKUP' && subOrder.status === 'READY_FOR_PICKUP' && (
+      <PickupQrPanel orderId={orderId} subOrderId={subOrder.id} />
+    )}
     <div className="flex justify-end border-t border-slate-100 pt-2 text-sm font-medium text-slate-900">
       Subtotal: {formatMoney(subOrder.totalAmount)}
     </div>
@@ -133,7 +146,7 @@ export const OrderConfirmationPage = (): JSX.Element => {
         </h2>
         <div className="flex flex-col gap-3">
           {order.subOrders.map((subOrder) => (
-            <SubOrderCard key={subOrder.id} subOrder={subOrder} />
+            <SubOrderCard key={subOrder.id} subOrder={subOrder} orderId={order.id} />
           ))}
         </div>
       </section>

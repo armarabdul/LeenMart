@@ -28,6 +28,13 @@ export interface VendorProfileProps {
    * (`setVendorShopNameRequestSchema`).
    */
   readonly shopName: string | null;
+  /**
+   * Whether this vendor offers pickup fulfilment (S4-QR). `false` for every
+   * pre-existing vendor and every newly registered one — pickup is opt-in,
+   * never assumed, so a customer's `PICKUP` checkout selection has something
+   * real to check it against (`PickupNotSupportedByVendorError` otherwise).
+   */
+  readonly supportsPickup: boolean;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -112,6 +119,7 @@ export class VendorProfile {
       status: VendorStatus.REGISTERED,
       plan: 'COMMISSION',
       shopName: null,
+      supportsPickup: false,
       createdAt: props.now,
       updatedAt: props.now,
     });
@@ -140,6 +148,10 @@ export class VendorProfile {
 
   get shopName(): string | null {
     return this.props.shopName;
+  }
+
+  get supportsPickup(): boolean {
+    return this.props.supportsPickup;
   }
 
   get createdAt(): Date {
@@ -224,5 +236,14 @@ export class VendorProfile {
    */
   updateShopName(shopName: string, now: Date): VendorProfile {
     return new VendorProfile({ ...this.props, shopName, updatedAt: now });
+  }
+
+  /**
+   * Sets or changes whether this vendor offers pickup (S4-QR). Same shape as
+   * `updateShopName` — a mutable capability flag, not a lifecycle state, so
+   * it does not go through `transition()` and is callable from any status.
+   */
+  updatePickupCapability(supportsPickup: boolean, now: Date): VendorProfile {
+    return new VendorProfile({ ...this.props, supportsPickup, updatedAt: now });
   }
 }

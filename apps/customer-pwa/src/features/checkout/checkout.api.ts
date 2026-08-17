@@ -1,4 +1,9 @@
-import type { OrderResponse, OrderSummaryResponse, PlaceOrderRequest } from '@leen-mart/contracts';
+import type {
+  OrderResponse,
+  OrderSummaryResponse,
+  PickupTokenResponse,
+  PlaceOrderRequest,
+} from '@leen-mart/contracts';
 import type { SuccessEnvelope } from '@/shared/api/base-api';
 import { baseApi } from '@/shared/api/base-api';
 
@@ -35,6 +40,21 @@ export const checkoutApi = baseApi.injectEndpoints({
     // own existing `invalidatesTags` without any change there, since RTK
     // Query already treats a type-only invalidation as matching every
     // id-scoped tag of that type too.
+    /**
+     * S4-QR: the current QR credential for one PICKUP sub-order. Each call
+     * *rotates* the token server-side, so this is deliberately not cached
+     * under an `Order` tag — `PickupQrPanel` re-fetches on its own schedule,
+     * driven by the `expiresAt` the server returns, and a stale cache entry
+     * would show a QR the backend has already invalidated.
+     */
+    getPickupToken: builder.query<
+      PickupTokenResponse,
+      { readonly orderId: string; readonly subOrderId: string }
+    >({
+      query: ({ orderId, subOrderId }) =>
+        `/orders/${encodeURIComponent(orderId)}/sub-orders/${encodeURIComponent(subOrderId)}/pickup-token`,
+      transformResponse: (response: SuccessEnvelope<PickupTokenResponse>) => response.data,
+    }),
     listOrders: builder.query<readonly OrderSummaryResponse[], void>({
       query: () => '/orders',
       transformResponse: (response: SuccessEnvelope<readonly OrderSummaryResponse[]>) =>
@@ -57,4 +77,5 @@ export const {
   useGetOrderQuery,
   useListOrdersQuery,
   useCancelOrderMutation,
+  useGetPickupTokenQuery,
 } = checkoutApi;

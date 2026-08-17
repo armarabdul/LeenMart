@@ -11,6 +11,7 @@ import { toOrderId, type OrderId } from '../../domain/value-objects/order-id.val
 import { toOrderItemId } from '../../domain/value-objects/order-item-id.value-object.js';
 import { toSubOrderId } from '../../domain/value-objects/sub-order-id.value-object.js';
 import { OrderStatus } from '../../domain/value-objects/order-status.value-object.js';
+import { FulfilmentMode } from '../../domain/value-objects/fulfilment-mode.value-object.js';
 
 type OrderRow = Prisma.OrderGetPayload<{
   include: { subOrders: { include: { items: true } } };
@@ -57,6 +58,7 @@ const toSubOrder = (row: OrderRow['subOrders'][number]): SubOrder =>
     orderId: toOrderId(row.orderId),
     vendorId: toVendorId(row.vendorId),
     status: OrderStatus.fromName(row.status),
+    fulfilmentMode: FulfilmentMode.fromName(row.fulfilmentMode),
     vendorShopNameSnapshot: row.vendorShopNameSnapshot,
     totalAmount: Money.fromMinor(row.totalAmount, row.totalCurrency as 'INR'),
     items: row.items.map(toOrderItem),
@@ -108,6 +110,29 @@ const toSummary = (row: {
  * scoping, the same convention `PrismaAddressRepository` already
  * establishes for a table with no tenant concept at all.
  */
+interface OrderAddressSnapshotColumns {
+  readonly addressRecipientName: string;
+  readonly addressPhone: string;
+  readonly addressLine1: string;
+  readonly addressLine2: string | null;
+  readonly addressCity: string;
+  readonly addressState: string;
+  readonly addressPincode: string;
+  readonly addressLabel: string;
+}
+
+/** The order's immutable delivery-address snapshot, split out to keep `create` within this file's function-length budget. */
+const addressSnapshotOf = (order: Order): OrderAddressSnapshotColumns => ({
+  addressRecipientName: order.address.recipientName,
+  addressPhone: order.address.phone,
+  addressLine1: order.address.line1,
+  addressLine2: order.address.line2,
+  addressCity: order.address.city,
+  addressState: order.address.state,
+  addressPincode: order.address.pincode,
+  addressLabel: order.address.label,
+});
+
 export class PrismaOrderRepository implements OrderRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
@@ -124,15 +149,8 @@ export class PrismaOrderRepository implements OrderRepository {
         status: order.status.name,
         totalAmount: order.totalAmount.amountMinor,
         totalCurrency: order.totalAmount.currency,
-        addressRecipientName: order.address.recipientName,
-        addressPhone: order.address.phone,
-        addressLine1: order.address.line1,
-        addressLine2: order.address.line2,
-        addressCity: order.address.city,
-        addressState: order.address.state,
-        addressPincode: order.address.pincode,
+        ...addressSnapshotOf(order),
         addressLandmark: order.address.landmark,
-        addressLabel: order.address.label,
         createdAt: order.createdAt,
         updatedAt: order.updatedAt,
         subOrders: {
@@ -140,6 +158,7 @@ export class PrismaOrderRepository implements OrderRepository {
             id: subOrder.id,
             vendorId: subOrder.vendorId,
             status: subOrder.status.name,
+            fulfilmentMode: subOrder.fulfilmentMode.name,
             vendorShopNameSnapshot: subOrder.vendorShopNameSnapshot,
             totalAmount: subOrder.totalAmount.amountMinor,
             totalCurrency: subOrder.totalAmount.currency,

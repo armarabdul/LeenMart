@@ -35,9 +35,11 @@ import {
   EmptyCartError,
   InsufficientStockError,
   OrderAddressNotFoundError,
+  PickupNotSupportedByVendorError,
   ProductNotEligibleForOrderError,
   VendorNotEligibleForOrderError,
 } from '../../../../../src/modules/order/domain/errors/order-errors.js';
+import { FulfilmentMode } from '../../../../../src/modules/order/domain/value-objects/fulfilment-mode.value-object.js';
 import type { OrderRepository } from '../../../../../src/modules/order/domain/repositories/order.repository.js';
 
 const ids = new UuidV7Generator();
@@ -62,6 +64,7 @@ const activeVendor = VendorProfile.reconstitute({
   status: VendorStatus.ACTIVE,
   plan: 'COMMISSION',
   shopName: 'Test Shop',
+  supportsPickup: false,
   createdAt: NOW,
   updatedAt: NOW,
 });
@@ -304,6 +307,93 @@ const buildUseCase = (overrides: BuildOverrides = {}): PlaceOrderUseCase =>
 
 const input = { principal, addressId, paymentMethod: 'ONLINE' as const };
 
+// --- S4-QR: a second vendor/product/variant, so the pickup-selection tests
+// can build a genuine two-vendor cart. ---
+const pickupVendorId = toVendorId(ids.generate());
+const pickupProductId = toProductId(ids.generate());
+const pickupVariantId = toProductVariantId(ids.generate());
+
+const pickupCapableVendor = VendorProfile.reconstitute({
+  id: pickupVendorId,
+  userId: toUserId(ids.generate()),
+  status: VendorStatus.ACTIVE,
+  plan: 'COMMISSION',
+  shopName: 'Pickup Shop',
+  supportsPickup: true,
+  createdAt: NOW,
+  updatedAt: NOW,
+});
+
+const pickupProduct = Product.reconstitute({
+  id: pickupProductId,
+  vendorId: pickupVendorId,
+  categoryId: toProductId(ids.generate()) as never,
+  name: 'Kesar Mango',
+  brand: null,
+  description: null,
+  hsnCode: '08045020',
+  countryOfOrigin: null,
+  netQuantity: null,
+  attributeValues: {},
+  status: 'APPROVED',
+  rejectionReason: null,
+  rejectionNote: null,
+  createdAt: NOW,
+  updatedAt: NOW,
+  deletedAt: null,
+});
+
+const pickupVariant = ProductVariant.reconstitute({
+  id: pickupVariantId,
+  productId: pickupProductId,
+  vendorId: pickupVendorId,
+  sku: 'MANGO-KESAR' as never,
+  name: '1 kg box (Kesar)',
+  price: Money.fromMajor(249),
+  unitOfMeasure: 'per box',
+  quantityStep: 1,
+  createdAt: NOW,
+  updatedAt: NOW,
+  deletedAt: null,
+});
+
+const pickupCartItem = CartItem.reconstitute({
+  id: toCartItemId(ids.generate()),
+  cartId,
+  variantId: pickupVariantId,
+  quantity: 1,
+  createdAt: NOW,
+  updatedAt: NOW,
+});
+
+/** Routes findById calls to whichever of the two fixture vendors/products/variants the id names. */
+const twoVendorProductRepo = (): ProductRepository =>
+  productRepo({
+    findById: vi
+      .fn()
+      .mockImplementation((id: unknown) =>
+        Promise.resolve(id === pickupProductId ? pickupProduct : product),
+      ),
+  });
+
+const twoVendorVariantRepo = (): ProductVariantRepository =>
+  variantRepo({
+    findById: vi
+      .fn()
+      .mockImplementation((id: unknown) =>
+        Promise.resolve(id === pickupVariantId ? pickupVariant : variant),
+      ),
+  });
+
+const twoVendorVendorRepo = (): VendorRepository =>
+  vendorRepo({
+    findById: vi
+      .fn()
+      .mockImplementation((id: unknown) =>
+        Promise.resolve(id === pickupVendorId ? pickupCapableVendor : activeVendor),
+      ),
+  });
+
 describe('PlaceOrderUseCase', () => {
   it('places an order that starts PENDING_PAYMENT', async () => {
     const useCase = buildUseCase();
@@ -368,6 +458,7 @@ describe('PlaceOrderUseCase', () => {
       status: VendorStatus.SUSPENDED,
       plan: 'COMMISSION',
       shopName: 'Test Shop',
+      supportsPickup: false,
       createdAt: NOW,
       updatedAt: NOW,
     });
@@ -384,6 +475,7 @@ describe('PlaceOrderUseCase', () => {
       status: VendorStatus.ACTIVE,
       plan: 'COMMISSION',
       shopName: null,
+      supportsPickup: false,
       createdAt: NOW,
       updatedAt: NOW,
     });
@@ -480,5 +572,58 @@ describe('PlaceOrderUseCase', () => {
     const useCase = buildUseCase({ cartItemRepository: cartItems });
 
     await expect(useCase.execute(input)).resolves.toBeDefined();
+  });
+
+  describe('pickup selection (S4-QR)', () => {
+    it('defaults to DELIVERY when pickupVendorIds is omitted — existing checkout calls are unaffected', async () => {
+      const useCase = buildUseCase();
+      const order = await useCase.execute(input);
+
+      expect(order.subOrders[0]?.fulfilmentMode).toBe(FulfilmentMode.DELIVERY);
+    });
+
+    it('sets PICKUP on the sub-order for a vendor named in pickupVendorIds who supports it', async () => {
+      const useCase = buildUseCase({
+        cartItemRepository: cartItemRepo({
+          listByCartId: vi.fn().mockResolvedValue([pickupCartItem]),
+        }),
+        productRepository: twoVendorProductRepo(),
+        productVariantRepository: twoVendorVariantRepo(),
+        vendorRepository: twoVendorVendorRepo(),
+      });
+
+      const order = await useCase.execute({ ...input, pickupVendorIds: [pickupVendorId] });
+
+      expect(order.subOrders).toHaveLength(1);
+      expect(order.subOrders[0]?.fulfilmentMode).toBe(FulfilmentMode.PICKUP);
+    });
+
+    it('rejects with PickupNotSupportedByVendorError for a vendor that does not support pickup, and creates no order — never silently downgraded to DELIVERY', async () => {
+      const orderRepository = orderRepo();
+      const useCase = buildUseCase({ orderRepository });
+
+      await expect(useCase.execute({ ...input, pickupVendorIds: [vendorId] })).rejects.toThrow(
+        PickupNotSupportedByVendorError,
+      );
+      expect(orderRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('a multi-vendor cart may freely mix PICKUP and DELIVERY across its sub-orders', async () => {
+      const useCase = buildUseCase({
+        cartItemRepository: cartItemRepo({
+          listByCartId: vi.fn().mockResolvedValue([cartItem, pickupCartItem]),
+        }),
+        productRepository: twoVendorProductRepo(),
+        productVariantRepository: twoVendorVariantRepo(),
+        vendorRepository: twoVendorVendorRepo(),
+      });
+
+      const order = await useCase.execute({ ...input, pickupVendorIds: [pickupVendorId] });
+
+      expect(order.subOrders).toHaveLength(2);
+      const byVendor = new Map(order.subOrders.map((so) => [so.vendorId, so.fulfilmentMode]));
+      expect(byVendor.get(vendorId)).toBe(FulfilmentMode.DELIVERY);
+      expect(byVendor.get(pickupVendorId)).toBe(FulfilmentMode.PICKUP);
+    });
   });
 });

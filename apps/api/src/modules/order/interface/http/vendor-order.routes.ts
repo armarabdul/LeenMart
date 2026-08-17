@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { redeemPickupTokenRequestSchema } from '@leen-mart/contracts';
 import { asyncHandler } from '../../../../shared/interface/http/middleware/async-handler.js';
 import { authenticate } from '../../../../shared/interface/http/middleware/authenticate.js';
 import { requirePermission } from '../../../../shared/interface/http/middleware/authorize.js';
@@ -89,6 +90,28 @@ export const createVendorOrderRouter = (
     requirePermission('UPDATE_ORDER_FULFILMENT'),
     validate({ params: subOrderParamsSchema }),
     asyncHandler(controller.deliverSubOrder),
+  );
+
+  // S4-QR: PROCESSING -> READY_FOR_PICKUP, the pickup-mode analogue of
+  // `/ship`. `UPDATE_ORDER_FULFILMENT` — the same permission, not a new one.
+  router.post(
+    '/:id/ready-for-pickup',
+    ...authenticated,
+    requirePermission('UPDATE_ORDER_FULFILMENT'),
+    validate({ params: subOrderParamsSchema }),
+    asyncHandler(controller.markReadyForPickup),
+  );
+
+  // S4-QR: no `:id` — the presented token, once verified, names the
+  // sub-order (locked decision #10). `SCAN_PICKUP_QR`, preserved exactly as
+  // defined ahead of this milestone (VENDOR_OWNER/MANAGER/STAFF = OWN,
+  // SUPER_ADMIN = NONE).
+  router.post(
+    '/pickup/redeem',
+    ...authenticated,
+    requirePermission('SCAN_PICKUP_QR'),
+    validate({ body: redeemPickupTokenRequestSchema }),
+    asyncHandler(controller.redeemPickupToken),
   );
 
   return router;

@@ -1,4 +1,8 @@
-import type { VendorSubOrderResponse, VendorSubOrderSummaryResponse } from '@leen-mart/contracts';
+import type {
+  RedeemPickupTokenRequest,
+  VendorSubOrderResponse,
+  VendorSubOrderSummaryResponse,
+} from '@leen-mart/contracts';
 import type { SuccessEnvelope } from '@/shared/api/base-api';
 import { baseApi } from '@/shared/api/base-api';
 
@@ -51,6 +55,25 @@ export const vendorOrderApi = baseApi.injectEndpoints({
       transformResponse: (response: SuccessEnvelope<VendorSubOrderResponse>) => response.data,
       invalidatesTags: ['VendorOrder'],
     }),
+    // S4-QR: the pickup-mode analogue of `shipSubOrder` — PROCESSING ->
+    // READY_FOR_PICKUP. Same shape, same tag invalidation.
+    markReadyForPickup: builder.mutation<VendorSubOrderResponse, string>({
+      query: (subOrderId) => ({
+        url: `/vendor/orders/${encodeURIComponent(subOrderId)}/ready-for-pickup`,
+        method: 'POST',
+      }),
+      transformResponse: (response: SuccessEnvelope<VendorSubOrderResponse>) => response.data,
+      invalidatesTags: ['VendorOrder'],
+    }),
+    // S4-QR: no sub-order id in the URL — the scanned token itself names the
+    // sub-order once the backend has verified it (locked decision #10), so
+    // this deliberately cannot be aimed at an order the vendor merely knows
+    // the id of.
+    redeemPickupToken: builder.mutation<VendorSubOrderResponse, RedeemPickupTokenRequest>({
+      query: (body) => ({ url: '/vendor/orders/pickup/redeem', method: 'POST', body }),
+      transformResponse: (response: SuccessEnvelope<VendorSubOrderResponse>) => response.data,
+      invalidatesTags: ['VendorOrder'],
+    }),
   }),
 });
 
@@ -60,4 +83,6 @@ export const {
   useStartProcessingMutation,
   useShipSubOrderMutation,
   useDeliverSubOrderMutation,
+  useMarkReadyForPickupMutation,
+  useRedeemPickupTokenMutation,
 } = vendorOrderApi;

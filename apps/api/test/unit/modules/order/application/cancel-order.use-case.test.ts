@@ -13,6 +13,7 @@ import { CancelOrderUseCase } from '../../../../../src/modules/order/application
 import { Order } from '../../../../../src/modules/order/domain/entities/order.entity.js';
 import { OrderItem } from '../../../../../src/modules/order/domain/entities/order-item.entity.js';
 import { SubOrder } from '../../../../../src/modules/order/domain/entities/sub-order.entity.js';
+import { FulfilmentMode } from '../../../../../src/modules/order/domain/value-objects/fulfilment-mode.value-object.js';
 import {
   OrderCancellationNotAllowedError,
   OrderNotFoundError,
@@ -76,6 +77,7 @@ const buildOrder = (status: OrderStatus): Order => {
     orderId,
     vendorId,
     status,
+    fulfilmentMode: FulfilmentMode.DELIVERY,
     vendorShopNameSnapshot: 'Test Shop',
     totalAmount: Money.fromMajor(597),
     items: [item],

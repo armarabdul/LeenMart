@@ -12,6 +12,7 @@ import type { VendorRepository } from '../../../../../src/modules/vendor/domain/
 import type { OutboxWriter } from '../../../../../src/shared/application/ports/outbox-writer.port.js';
 import { StartProcessingUseCase } from '../../../../../src/modules/order/application/use-cases/start-processing.use-case.js';
 import { SubOrder } from '../../../../../src/modules/order/domain/entities/sub-order.entity.js';
+import { FulfilmentMode } from '../../../../../src/modules/order/domain/value-objects/fulfilment-mode.value-object.js';
 import {
   InvalidOrderStatusTransitionError,
   SubOrderConcurrentlyModifiedError,
@@ -46,6 +47,7 @@ const activeVendor = VendorProfile.reconstitute({
   status: VendorStatus.ACTIVE,
   plan: 'COMMISSION',
   shopName: 'Test Shop',
+  supportsPickup: false,
   createdAt: NOW,
   updatedAt: NOW,
 });
@@ -80,6 +82,7 @@ const buildDetail = (status: OrderStatus, version = 1): VendorSubOrderDetail => 
     orderId: toOrderId(ids.generate()),
     vendorId,
     status,
+    fulfilmentMode: FulfilmentMode.DELIVERY,
     vendorShopNameSnapshot: 'Test Shop',
     totalAmount: Money.fromMajor(199),
     items: [],
@@ -215,6 +218,7 @@ describe('StartProcessingUseCase', () => {
       status: VendorStatus.SUSPENDED,
       plan: 'COMMISSION',
       shopName: 'Test Shop',
+      supportsPickup: false,
       createdAt: NOW,
       updatedAt: NOW,
     });

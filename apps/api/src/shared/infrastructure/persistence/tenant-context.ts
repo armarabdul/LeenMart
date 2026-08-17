@@ -36,6 +36,14 @@ import type { UserId, VendorId } from '../../../modules/identity/index.js';
  * context and silently return zero rows (RLS's own fail-closed behaviour),
  * not merely another vendor's data leaking.
  *
+ * `PickupToken` joins here from S4-QR, for the identical reason: a vendor's
+ * own redemption path (`RedeemPickupTokenUseCase`) reads/writes
+ * `pickup_tokens` through the wrapped `leenmart_app` client, and
+ * `pickup_tokens_vendor_select`/`pickup_tokens_vendor_redeem`
+ * (20260817180000) both require `app.vendor_id`. This entry was added
+ * deliberately in the same migration/PR that introduced the table, not
+ * discovered afterward the way S3-8's own gap was.
+ *
  * Prisma model names, not table names — this is matched against the `model`
  * field the query extension receives.
  */
@@ -53,6 +61,7 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'OrderItem',
   'LedgerJournal',
   'LedgerEntry',
+  'PickupToken',
 ]);
 
 /**

@@ -33,6 +33,7 @@ import {
   PrismaTransactionRunner,
 } from '../../shared/infrastructure/persistence/tenant-prisma.js';
 import { RegisterVendorUseCase } from './application/use-cases/register-vendor.use-case.js';
+import { SetVendorPickupCapabilityUseCase } from './application/use-cases/set-vendor-pickup-capability.use-case.js';
 import { SetVendorShopNameUseCase } from './application/use-cases/set-vendor-shop-name.use-case.js';
 import { ActivateVendorUseCase } from './application/use-cases/activate-vendor.use-case.js';
 import { createVendorController } from './interface/http/vendor.controller.js';
@@ -294,6 +295,13 @@ const buildSetVendorShopNameUseCase = (params: {
   logger: Logger;
 }): SetVendorShopNameUseCase => new SetVendorShopNameUseCase(params);
 
+/** S4-QR, locked decision #25. Same split-out reasoning as `buildSetVendorShopNameUseCase`. */
+const buildSetVendorPickupCapabilityUseCase = (params: {
+  vendorRepository: PrismaVendorRepository;
+  clock: Clock;
+  logger: Logger;
+}): SetVendorPickupCapabilityUseCase => new SetVendorPickupCapabilityUseCase(params);
+
 interface VendorFacingUseCasesParams {
   prisma: PrismaClient;
   env: Env;
@@ -312,6 +320,7 @@ interface VendorFacingUseCasesResult {
   createKycUploadIntentUseCase: CreateKycUploadIntentUseCase;
   submitVendorKycUseCase: SubmitVendorKycUseCase;
   setVendorShopNameUseCase: SetVendorShopNameUseCase;
+  setVendorPickupCapabilityUseCase: SetVendorPickupCapabilityUseCase;
 }
 
 /**
@@ -365,6 +374,11 @@ const buildVendorFacingUseCases = (
     clock,
     logger,
   });
+  const setVendorPickupCapabilityUseCase = buildSetVendorPickupCapabilityUseCase({
+    vendorRepository,
+    clock,
+    logger,
+  });
 
   return {
     vendorRepository,
@@ -372,6 +386,7 @@ const buildVendorFacingUseCases = (
     createKycUploadIntentUseCase,
     submitVendorKycUseCase,
     setVendorShopNameUseCase,
+    setVendorPickupCapabilityUseCase,
   };
 };
 
@@ -434,6 +449,28 @@ const buildAdminKycRouter = (params: {
  * `createIdentityModule`: `app.ts` knows nothing about Prisma or the vendor
  * lifecycle — it hands over the shared container's ports and gets a router.
  */
+interface KycCrypto {
+  readonly objectStore: ReturnType<typeof buildKycObjectStore>;
+  readonly dataKeyCipher: ReturnType<typeof createDataKeyCipher>;
+  readonly documentCipher: AesGcmDocumentCipher;
+}
+
+/**
+ * One instance each, shared by the vendor-facing and admin paths: neither
+ * object storage nor the data-key cipher carries a tenant credential the way
+ * Postgres does, so there is exactly one of each to build. `documentCipher`
+ * is stateless — no KMS/network dependency, unlike `dataKeyCipher` — so it
+ * needs no construction parameters at all.
+ *
+ * Split out of `createVendorModule` purely to keep it within this file's
+ * function-length budget.
+ */
+const buildKycCrypto = (env: Env): KycCrypto => ({
+  objectStore: buildKycObjectStore(env),
+  dataKeyCipher: createDataKeyCipher(env),
+  documentCipher: new AesGcmDocumentCipher(),
+});
+
 export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
   const {
     prisma,
@@ -447,14 +484,7 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
     logger,
   } = deps;
   const moduleLogger = logger.child({ module: 'vendor' });
-  // One instance each, shared by the vendor-facing and admin paths: neither
-  // object storage nor the data-key cipher carries a tenant credential the
-  // way Postgres does, so there is exactly one of each to build.
-  const objectStore = buildKycObjectStore(env);
-  const dataKeyCipher = createDataKeyCipher(env);
-  // Stateless — no KMS/network dependency, unlike `dataKeyCipher` — so one
-  // instance needs no construction parameters at all.
-  const documentCipher = new AesGcmDocumentCipher();
+  const { objectStore, dataKeyCipher, documentCipher } = buildKycCrypto(env);
 
   const {
     vendorRepository,
@@ -462,6 +492,7 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
     createKycUploadIntentUseCase,
     submitVendorKycUseCase,
     setVendorShopNameUseCase,
+    setVendorPickupCapabilityUseCase,
   } = buildVendorFacingUseCases({
     prisma,
     env,
@@ -479,6 +510,7 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
     createKycUploadIntentUseCase,
     submitVendorKycUseCase,
     setVendorShopNameUseCase,
+    setVendorPickupCapabilityUseCase,
   });
   const resolveVendorTenant = async (userId: UserId): Promise<VendorId | null> =>
     (await vendorRepository.findByUserId(userId))?.id ?? null;

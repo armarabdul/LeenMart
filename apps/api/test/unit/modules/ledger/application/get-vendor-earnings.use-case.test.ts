@@ -33,6 +33,7 @@ const activeVendor = VendorProfile.reconstitute({
   status: VendorStatus.ACTIVE,
   plan: 'COMMISSION',
   shopName: 'Test Shop',
+  supportsPickup: false,
   createdAt: NOW,
   updatedAt: NOW,
 });
@@ -93,6 +94,7 @@ describe('GetVendorEarningsUseCase', () => {
       status: VendorStatus.SUSPENDED,
       plan: 'COMMISSION',
       shopName: 'Test Shop',
+      supportsPickup: false,
       createdAt: NOW,
       updatedAt: NOW,
     });

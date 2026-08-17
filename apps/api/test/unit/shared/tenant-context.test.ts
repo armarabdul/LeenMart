@@ -147,7 +147,7 @@ describe('tenant context', () => {
   });
 
   describe('model registry', () => {
-    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a, S2-6b, S3-5 and S3-8 protect', () => {
+    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a, S2-6b, S3-5, S3-8 and S4-QR protect', () => {
       expect([...TENANT_SCOPED_MODELS].sort()).toEqual([
         'Inventory',
         'KycDocument',
@@ -163,6 +163,11 @@ describe('tenant context', () => {
         // surface already uses.
         'Order',
         'OrderItem',
+        // S4-QR: the vendor's own pickup-token redemption path reads/writes
+        // this through the wrapped `prisma` client — see this model's own
+        // registry comment for why it was added in the same PR as the table,
+        // not discovered afterward.
+        'PickupToken',
         'Product',
         'ProductMedia',
         // S2-6b: the worker writes these under a tenant context of its own,

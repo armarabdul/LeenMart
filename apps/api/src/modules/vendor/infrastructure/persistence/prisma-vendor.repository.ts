@@ -11,6 +11,7 @@ interface VendorProfileRow {
   readonly status: string;
   readonly plan: VendorPlanName;
   readonly shopName: string | null;
+  readonly supportsPickup: boolean;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -22,6 +23,7 @@ const toDomain = (row: VendorProfileRow): VendorProfile =>
     status: VendorStatus.fromName(row.status),
     plan: row.plan,
     shopName: row.shopName,
+    supportsPickup: row.supportsPickup,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   });
@@ -50,6 +52,7 @@ export class PrismaVendorRepository implements VendorRepository {
         status: vendorProfile.status.name,
         plan: vendorProfile.plan,
         shopName: vendorProfile.shopName,
+        supportsPickup: vendorProfile.supportsPickup,
         createdAt: vendorProfile.createdAt,
         updatedAt: vendorProfile.updatedAt,
       },
@@ -69,6 +72,7 @@ export class PrismaVendorRepository implements VendorRepository {
       data: {
         status: vendorProfile.status.name,
         shopName: vendorProfile.shopName,
+        supportsPickup: vendorProfile.supportsPickup,
         updatedAt: vendorProfile.updatedAt,
       },
     });

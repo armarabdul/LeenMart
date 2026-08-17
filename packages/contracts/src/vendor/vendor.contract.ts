@@ -46,6 +46,25 @@ export const vendorShopProfileResponseSchema = z.object({
 });
 
 /**
+ * PATCH /vendors/me/pickup-capability (S4-QR, locked decision #25). A single
+ * field, the same "not a general shop profile editor" shape
+ * `setVendorShopNameRequestSchema` already uses — `PlaceOrderUseCase` checks
+ * this exact flag before accepting a `PICKUP` request for this vendor and
+ * never silently downgrades an unsupported one to `DELIVERY`.
+ */
+export const setVendorPickupCapabilityRequestSchema = z
+  .object({
+    supportsPickup: z.boolean(),
+  })
+  .strict();
+
+export const vendorPickupCapabilityResponseSchema = z.object({
+  id: uuidSchema,
+  status: vendorStatusSchema,
+  supportsPickup: z.boolean(),
+});
+
+/**
  * POST /admin/kyc/vendors/:vendorId/activate (S3-3A, decision D-S3-04).
  * Empty body — activation names no new fact beyond "this KYC-approved
  * vendor may now trade," which the URL's own `vendorId` already states.
@@ -62,5 +81,9 @@ export type RegisterVendorRequest = z.infer<typeof registerVendorRequestSchema>;
 export type RegisterVendorResponse = z.infer<typeof registerVendorResponseSchema>;
 export type SetVendorShopNameRequest = z.infer<typeof setVendorShopNameRequestSchema>;
 export type VendorShopProfileResponse = z.infer<typeof vendorShopProfileResponseSchema>;
+export type SetVendorPickupCapabilityRequest = z.infer<
+  typeof setVendorPickupCapabilityRequestSchema
+>;
+export type VendorPickupCapabilityResponse = z.infer<typeof vendorPickupCapabilityResponseSchema>;
 export type ActivateVendorRequest = z.infer<typeof activateVendorRequestSchema>;
 export type ActivateVendorResponse = z.infer<typeof activateVendorResponseSchema>;

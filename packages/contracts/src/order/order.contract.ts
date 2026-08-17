@@ -4,8 +4,11 @@ import { addressResponseSchema } from '../customer/address.contract.js';
 
 /**
  * Mirrors the domain `OrderStatus` value object (S3-3A, decision D-S3-06;
- * widened S3-6, locked decision #2) — shared by `Order` and `SubOrder`.
- * `SHIPPED`/`DELIVERED` are delivery-mode-only, vendor-initiated, S3-6.
+ * widened S3-6, S4-QR) — shared by `Order` and `SubOrder`. `SHIPPED`/
+ * `DELIVERED` are `DELIVERY`-mode-only, vendor-initiated (S3-6);
+ * `READY_FOR_PICKUP`/`COMPLETED` are `PICKUP`-mode-only (S4-QR) —
+ * `COMPLETED` is reachable only through QR/token redemption, never a direct
+ * request (locked decision #10).
  */
 export const orderStatusSchema = z.enum([
   'PENDING_PAYMENT',
@@ -13,19 +16,30 @@ export const orderStatusSchema = z.enum([
   'PROCESSING',
   'SHIPPED',
   'DELIVERED',
+  'READY_FOR_PICKUP',
+  'COMPLETED',
   'CANCELLED',
 ]);
+
+/** Mirrors the domain `FulfilmentMode` value object (S4-QR, locked decision #4) — chosen once at checkout, carried on `SubOrder`, never `Order`. */
+export const fulfilmentModeSchema = z.enum(['DELIVERY', 'PICKUP']);
 
 /**
  * POST /api/v1/orders. `paymentMethod` is narrowed to the literal `'ONLINE'`
  * — COD is not accepted in S3-3A (approved decision: "verified customer
  * address" is undefined and trust-score infrastructure is Stage 6, so COD
  * eligibility cannot be evaluated honestly).
+ *
+ * `pickupVendorIds` (S4-QR, locked decision #24): the vendors, among those
+ * actually present in the cart, the customer wants `PICKUP` from — every
+ * other vendor defaults to `DELIVERY`. Omitted or empty means "deliver
+ * everything," so existing checkout calls need no change.
  */
 export const placeOrderRequestSchema = z
   .object({
     addressId: uuidSchema,
     paymentMethod: z.literal('ONLINE'),
+    pickupVendorIds: z.array(uuidSchema).optional(),
   })
   .strict();
 
@@ -78,6 +92,7 @@ export const subOrderResponseSchema = z.object({
   id: uuidSchema,
   vendorShopName: z.string(),
   status: orderStatusSchema,
+  fulfilmentMode: fulfilmentModeSchema,
   totalAmount: moneySchema,
   items: z.array(orderItemResponseSchema),
 });
@@ -143,6 +158,7 @@ export const vendorSubOrderSummaryResponseSchema = z.object({
   id: uuidSchema,
   orderId: uuidSchema,
   status: orderStatusSchema,
+  fulfilmentMode: fulfilmentModeSchema,
   totalAmount: moneySchema,
   createdAt: isoDateTimeSchema,
 });
@@ -163,6 +179,7 @@ export const vendorSubOrderResponseSchema = z.object({
   id: uuidSchema,
   orderId: uuidSchema,
   status: orderStatusSchema,
+  fulfilmentMode: fulfilmentModeSchema,
   totalAmount: moneySchema,
   address: orderAddressSnapshotSchema,
   items: z.array(orderItemResponseSchema),
@@ -170,7 +187,31 @@ export const vendorSubOrderResponseSchema = z.object({
   updatedAt: isoDateTimeSchema,
 });
 
+/**
+ * GET .../pickup-token (S4-QR, customer-facing): the current QR credential
+ * for one `PICKUP` sub-order. `token` is the opaque compact-JWS string the
+ * QR code encodes; `expiresAt` lets the customer PWA schedule its own
+ * re-poll ahead of expiry rather than guessing the server's TTL.
+ */
+export const pickupTokenResponseSchema = z.object({
+  token: z.string(),
+  expiresAt: isoDateTimeSchema,
+});
+
+/**
+ * POST /vendor/orders/pickup/redeem (S4-QR): the vendor scans a customer's
+ * QR code and submits its raw payload here. No sub-order id in the request —
+ * the token itself, once verified, is what names the sub-order (locked
+ * decision #10: no direct public endpoint may mark a pickup complete).
+ */
+export const redeemPickupTokenRequestSchema = z
+  .object({
+    token: z.string().min(1),
+  })
+  .strict();
+
 export type OrderStatusDto = z.infer<typeof orderStatusSchema>;
+export type FulfilmentModeDto = z.infer<typeof fulfilmentModeSchema>;
 export type PlaceOrderRequest = z.infer<typeof placeOrderRequestSchema>;
 export type OrderAddressSnapshotDto = z.infer<typeof orderAddressSnapshotSchema>;
 export type OrderItemTaxDto = z.infer<typeof orderItemTaxSchema>;
@@ -182,3 +223,5 @@ export type VendorSubOrderSummaryResponse = z.infer<typeof vendorSubOrderSummary
 export type VendorSubOrderResponse = z.infer<typeof vendorSubOrderResponseSchema>;
 export type PaymentInitiationResponse = z.infer<typeof paymentInitiationResponseSchema>;
 export type ConfirmPaymentRequest = z.infer<typeof confirmPaymentRequestSchema>;
+export type PickupTokenResponse = z.infer<typeof pickupTokenResponseSchema>;
+export type RedeemPickupTokenRequest = z.infer<typeof redeemPickupTokenRequestSchema>;

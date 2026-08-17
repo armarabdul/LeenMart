@@ -5,11 +5,13 @@ import type {
   OrderResponse,
   OrderSummaryResponse,
   PaymentInitiationResponse,
+  PickupTokenResponse,
   PlaceOrderRequest,
   SubOrderResponse,
 } from '@leen-mart/contracts';
 import { getRequestId } from '../../../../shared/interface/http/middleware/request-context.js';
 import { validatedData } from '../../../../shared/interface/http/middleware/validate.js';
+import { toVendorId } from '../../../identity/index.js';
 import type { Order } from '../../domain/entities/order.entity.js';
 import type { OrderItem } from '../../domain/entities/order-item.entity.js';
 import type { PaymentAttempt } from '../../domain/entities/payment-attempt.entity.js';
@@ -17,9 +19,11 @@ import type { SubOrder } from '../../domain/entities/sub-order.entity.js';
 import type { OrderSummary } from '../../domain/repositories/order.repository.js';
 import { toAddressId } from '../../../customer/index.js';
 import { toOrderId } from '../../domain/value-objects/order-id.value-object.js';
+import { toSubOrderId } from '../../domain/value-objects/sub-order-id.value-object.js';
 import type { CancelOrderUseCase } from '../../application/use-cases/cancel-order.use-case.js';
 import type { ConfirmPaymentUseCase } from '../../application/use-cases/confirm-payment.use-case.js';
 import type { GetOrderUseCase } from '../../application/use-cases/get-order.use-case.js';
+import type { GetOrIssuePickupTokenUseCase } from '../../application/use-cases/get-or-issue-pickup-token.use-case.js';
 import type { InitiatePaymentUseCase } from '../../application/use-cases/initiate-payment.use-case.js';
 import type { ListOrdersUseCase } from '../../application/use-cases/list-orders.use-case.js';
 import type { PlaceOrderUseCase } from '../../application/use-cases/place-order.use-case.js';
@@ -31,6 +35,7 @@ export interface OrderController {
   readonly cancelOrder: (req: Request, res: Response) => Promise<void>;
   readonly initiatePayment: (req: Request, res: Response) => Promise<void>;
   readonly confirmPayment: (req: Request, res: Response) => Promise<void>;
+  readonly getPickupToken: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface OrderControllerDeps {
@@ -40,6 +45,7 @@ export interface OrderControllerDeps {
   readonly cancelOrderUseCase: CancelOrderUseCase;
   readonly initiatePaymentUseCase: InitiatePaymentUseCase;
   readonly confirmPaymentUseCase: ConfirmPaymentUseCase;
+  readonly getOrIssuePickupTokenUseCase: GetOrIssuePickupTokenUseCase;
 }
 
 /**
@@ -75,6 +81,7 @@ const toSubOrderResponse = (subOrder: SubOrder): SubOrderResponse => ({
   id: subOrder.id,
   vendorShopName: subOrder.vendorShopNameSnapshot,
   status: subOrder.status.name,
+  fulfilmentMode: subOrder.fulfilmentMode.name,
   totalAmount: subOrder.totalAmount.toJSON(),
   items: subOrder.items.map(toOrderItemResponse),
 });
@@ -135,6 +142,7 @@ const placeOrderHandler =
       principal: req.principal,
       addressId: toAddressId(body.addressId),
       paymentMethod: body.paymentMethod,
+      pickupVendorIds: body.pickupVendorIds?.map(toVendorId),
     });
 
     res.status(201).json({ data: toOrderResponse(order), meta: { requestId: getRequestId() } });
@@ -231,6 +239,29 @@ const confirmPaymentHandler =
     res.status(200).json({ data: toOrderResponse(order), meta: { requestId: getRequestId() } });
   };
 
+const getPickupTokenHandler =
+  (deps: OrderControllerDeps) =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'GET /orders/:id/sub-orders/:subOrderId/pickup-token reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+    const { params } = validatedData<unknown, unknown, { id: string; subOrderId: string }>(req);
+
+    const issued = await deps.getOrIssuePickupTokenUseCase.execute({
+      principal: req.principal,
+      orderId: toOrderId(params.id),
+      subOrderId: toSubOrderId(params.subOrderId),
+    });
+
+    const data: PickupTokenResponse = {
+      token: issued.token,
+      expiresAt: issued.expiresAt.toISOString(),
+    };
+    res.status(200).json({ data, meta: { requestId: getRequestId() } });
+  };
+
 export const createOrderController = (deps: OrderControllerDeps): OrderController => ({
   placeOrder: placeOrderHandler(deps),
   getOrder: getOrderHandler(deps),
@@ -238,4 +269,5 @@ export const createOrderController = (deps: OrderControllerDeps): OrderControlle
   cancelOrder: cancelOrderHandler(deps),
   initiatePayment: initiatePaymentHandler(deps),
   confirmPayment: confirmPaymentHandler(deps),
+  getPickupToken: getPickupTokenHandler(deps),
 });

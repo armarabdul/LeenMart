@@ -9,6 +9,7 @@ import { VendorStatus } from '../../../../../src/modules/vendor/domain/value-obj
 import type { VendorRepository } from '../../../../../src/modules/vendor/domain/repositories/vendor.repository.js';
 import { ListVendorOrdersUseCase } from '../../../../../src/modules/order/application/use-cases/list-vendor-orders.use-case.js';
 import { VendorNotActiveForOrdersError } from '../../../../../src/modules/order/domain/errors/order-errors.js';
+import { FulfilmentMode } from '../../../../../src/modules/order/domain/value-objects/fulfilment-mode.value-object.js';
 import { OrderStatus } from '../../../../../src/modules/order/domain/value-objects/order-status.value-object.js';
 import { toOrderId } from '../../../../../src/modules/order/domain/value-objects/order-id.value-object.js';
 import { toSubOrderId } from '../../../../../src/modules/order/domain/value-objects/sub-order-id.value-object.js';
@@ -33,6 +34,7 @@ const activeVendor = VendorProfile.reconstitute({
   status: VendorStatus.ACTIVE,
   plan: 'COMMISSION',
   shopName: 'Test Shop',
+  supportsPickup: false,
   createdAt: NOW,
   updatedAt: NOW,
 });
@@ -53,6 +55,7 @@ const buildSummary = (overrides: Partial<VendorSubOrderSummary> = {}): VendorSub
   id: toSubOrderId(ids.generate()),
   orderId: toOrderId(ids.generate()),
   status: OrderStatus.CONFIRMED,
+  fulfilmentMode: FulfilmentMode.DELIVERY,
   totalAmount: Money.fromMajor(199),
   createdAt: NOW,
   ...overrides,
@@ -112,6 +115,7 @@ describe('ListVendorOrdersUseCase', () => {
       status: VendorStatus.SUSPENDED,
       plan: 'COMMISSION',
       shopName: 'Test Shop',
+      supportsPickup: false,
       createdAt: NOW,
       updatedAt: NOW,
     });

@@ -514,6 +514,9 @@ describe('database role separation', () => {
         'orders',
         'outbox_events',
         'payment_attempts',
+        // S4-QR: the checkout credential issues and rotates the customer's
+        // pickup token; the vendor credential only ever reads and redeems it.
+        'pickup_tokens',
         'sub_orders',
         'vendors',
       ]);
@@ -550,6 +553,9 @@ describe('database role separation', () => {
         'ledger_journals',
         'order_items',
         'orders',
+        // S4-QR: a pickup token is the credential that completes a
+        // sub-order, so it is vendor-scoped like every other order table.
+        'pickup_tokens',
         'product_media',
         'product_media_variants',
         'product_variants',

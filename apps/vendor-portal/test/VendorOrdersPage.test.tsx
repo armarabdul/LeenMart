@@ -17,6 +17,7 @@ const summary = (
   id: 'sub-order-1',
   orderId: 'order-1',
   status: 'CONFIRMED',
+  fulfilmentMode: 'DELIVERY',
   totalAmount: { amount: '19800', currency: 'INR' },
   createdAt: '2026-01-01T00:00:00.000Z',
   ...overrides,

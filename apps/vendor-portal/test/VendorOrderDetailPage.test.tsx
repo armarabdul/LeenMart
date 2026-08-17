@@ -28,6 +28,7 @@ const order = (overrides: Partial<VendorSubOrderResponse> = {}): VendorSubOrderR
   id: 'sub-order-1',
   orderId: 'order-1',
   status: 'CONFIRMED',
+  fulfilmentMode: 'DELIVERY',
   totalAmount: { amount: '19800', currency: 'INR' },
   address: {
     recipientName: 'Asha Rao',

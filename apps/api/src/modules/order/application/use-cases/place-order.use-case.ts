@@ -22,11 +22,13 @@ import type { OutboxWriter } from '../../../../shared/application/ports/outbox-w
 import { Order, type OrderAddressSnapshot } from '../../domain/entities/order.entity.js';
 import { OrderItem, type TaxSnapshot } from '../../domain/entities/order-item.entity.js';
 import { SubOrder } from '../../domain/entities/sub-order.entity.js';
+import { FulfilmentMode } from '../../domain/value-objects/fulfilment-mode.value-object.js';
 import { ORDER_AUDIT_ACTIONS, ORDER_AUDIT_ENTITY_TYPES } from '../../domain/audit-actions.js';
 import {
   EmptyCartError,
   InsufficientStockError,
   OrderAddressNotFoundError,
+  PickupNotSupportedByVendorError,
   ProductNotEligibleForOrderError,
   VendorNotEligibleForOrderError,
 } from '../../domain/errors/order-errors.js';
@@ -40,6 +42,14 @@ export interface PlaceOrderInput {
   readonly addressId: AddressId;
   /** The contract narrows this to the literal `'ONLINE'` — see the class doc comment for why nothing else is accepted. */
   readonly paymentMethod: 'ONLINE';
+  /**
+   * S4-QR: the vendors, among those actually present in the cart, the
+   * customer wants `PICKUP` from — every other vendor defaults to
+   * `DELIVERY`. A vendor listed here whose `VendorProfile.supportsPickup` is
+   * `false` fails the whole placement with `PickupNotSupportedByVendorError`
+   * rather than being silently downgraded (locked decision).
+   */
+  readonly pickupVendorIds?: readonly VendorId[] | undefined;
 }
 
 export interface PlaceOrderDeps {
@@ -172,14 +182,15 @@ export class PlaceOrderUseCase {
 
   async execute(input: PlaceOrderInput): Promise<Order> {
     const { principal, addressId } = input;
+    const pickupVendorIds = new Set(input.pickupVendorIds ?? []);
 
     const cartItems = await this.loadCartItems(principal.userId);
     const address = await this.loadAddress(addressId, principal.userId);
     const resolvedLines = await this.resolveLines(cartItems);
-    const vendors = await this.resolveVendors(resolvedLines);
+    const vendors = await this.resolveVendors(resolvedLines, pickupVendorIds);
     const pricedLines = await this.priceLines(resolvedLines, vendors);
 
-    const order = await this.placeInTransaction(principal, address, pricedLines);
+    const order = await this.placeInTransaction(principal, address, pricedLines, pickupVendorIds);
 
     await this.clearCartBestEffort(principal.userId);
 
@@ -239,9 +250,15 @@ export class PlaceOrderUseCase {
     return lines;
   }
 
-  /** Every vendor appearing in the cart must be `ACTIVE` and have set a `shopName` (decisions D-S3-03/D-S3-04). */
+  /**
+   * Every vendor appearing in the cart must be `ACTIVE` and have set a
+   * `shopName` (decisions D-S3-03/D-S3-04). S4-QR: a vendor also named in
+   * `pickupVendorIds` must additionally have `supportsPickup === true` —
+   * never silently downgraded to `DELIVERY` (locked decision #25).
+   */
   private async resolveVendors(
     lines: readonly ResolvedLine[],
+    pickupVendorIds: ReadonlySet<VendorId>,
   ): Promise<ReadonlyMap<VendorId, VendorProfile>> {
     const vendorIds = [...new Set(lines.map((line) => line.vendorId))];
     const vendors = new Map<VendorId, VendorProfile>();
@@ -249,6 +266,9 @@ export class PlaceOrderUseCase {
       const vendor = await this.deps.vendorRepository.findById(vendorId);
       if (!vendor || vendor.status.name !== 'ACTIVE' || !vendor.shopName) {
         throw new VendorNotEligibleForOrderError();
+      }
+      if (pickupVendorIds.has(vendorId) && !vendor.supportsPickup) {
+        throw new PickupNotSupportedByVendorError();
       }
       vendors.set(vendorId, vendor);
     }
@@ -304,6 +324,7 @@ export class PlaceOrderUseCase {
     principal: Principal,
     address: Address,
     pricedLines: readonly PricedLine[],
+    pickupVendorIds: ReadonlySet<VendorId>,
   ): Promise<Order> {
     const {
       transactionRunner,
@@ -326,9 +347,12 @@ export class PlaceOrderUseCase {
         }
       }
 
-      const subOrders = [...linesByVendor.entries()].map(([vendorId, vendorLines]) =>
-        this.buildSubOrder(orderId, vendorId, vendorLines, now),
-      );
+      const subOrders = [...linesByVendor.entries()].map(([vendorId, vendorLines]) => {
+        const fulfilmentMode = pickupVendorIds.has(vendorId)
+          ? FulfilmentMode.PICKUP
+          : FulfilmentMode.DELIVERY;
+        return this.buildSubOrder(orderId, vendorId, vendorLines, { now, fulfilmentMode });
+      });
       const order = Order.place({
         id: orderId,
         customerId: principal.userId,
@@ -354,12 +378,19 @@ export class PlaceOrderUseCase {
     });
   }
 
+  /**
+   * `now`/`fulfilmentMode` travel as one object rather than as two more
+   * positional arguments — S4-QR's addition of the mode pushed this past the
+   * four-parameter budget, and the two are always decided together by the
+   * caller anyway.
+   */
   private buildSubOrder(
     orderId: ReturnType<typeof toOrderId>,
     vendorId: VendorId,
     lines: readonly PricedLine[],
-    now: Date,
+    context: { readonly now: Date; readonly fulfilmentMode: FulfilmentMode },
   ): SubOrder {
+    const { now, fulfilmentMode } = context;
     const { idGenerator } = this.deps;
     // `groupByVendor` never produces an empty group — every entry in its
     // map came from pushing at least one line onto it — but `lines[0]` is
@@ -397,6 +428,7 @@ export class PlaceOrderUseCase {
       id: subOrderId,
       orderId,
       vendorId,
+      fulfilmentMode,
       vendorShopNameSnapshot: vendorShopName,
       totalAmount: sumMoney(items.map((item) => item.lineAmount)),
       items,

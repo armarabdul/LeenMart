@@ -74,6 +74,7 @@ const profile = (status: VendorStatus): VendorProfile =>
     status,
     plan: 'COMMISSION',
     shopName: null,
+    supportsPickup: false,
     createdAt: NOW,
     updatedAt: NOW,
   });

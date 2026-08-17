@@ -4,6 +4,7 @@ import {
   DomainRuleError,
   NotFoundError,
 } from '@leen-mart/domain-kit';
+import type { FulfilmentModeName } from '../value-objects/fulfilment-mode.value-object.js';
 import type { OrderStatusName } from '../value-objects/order-status.value-object.js';
 import type { PaymentAttemptStatusName } from '../value-objects/payment-attempt-status.value-object.js';
 
@@ -212,5 +213,101 @@ export class VendorNotActiveForOrdersError extends DomainRuleError {
       'Your vendor account is not active yet, so you cannot manage orders.',
       options,
     );
+  }
+}
+
+/**
+ * S4-QR: a fulfilment transition was attempted on a `SubOrder` whose
+ * `fulfilmentMode` does not match — `ship()`/`deliver()` called on a
+ * `PICKUP` sub-order, or `markReadyForPickup()`/`completePickup()` called on
+ * a `DELIVERY` one. A distinct error from `InvalidOrderStatusTransitionError`
+ * on purpose: the *status* transition would otherwise be perfectly legal
+ * (e.g. `PROCESSING` is a valid predecessor for both `SHIP` and
+ * `MARK_READY_FOR_PICKUP`), so collapsing this into "invalid transition"
+ * would misreport *why* the request was refused.
+ */
+export class FulfilmentModeMismatchError extends DomainRuleError {
+  constructor(action: string, mode: FulfilmentModeName, options: AppErrorOptions = {}) {
+    super(
+      'ORDER_FULFILMENT_MODE_MISMATCH',
+      `${action} is not valid for a ${mode} sub-order.`,
+      options,
+    );
+  }
+}
+
+/**
+ * `PlaceOrderUseCase`'s own precondition (S4-QR): the customer asked for
+ * `PICKUP` from a vendor whose `VendorProfile.supportsPickup` is `false`.
+ * Refused outright rather than silently downgraded to `DELIVERY` — the
+ * locked decision this milestone is built on explicitly forbids inventing
+ * that fallback.
+ */
+export class PickupNotSupportedByVendorError extends DomainRuleError {
+  constructor(options: AppErrorOptions = {}) {
+    super(
+      'ORDER_PICKUP_NOT_SUPPORTED',
+      'One or more sellers in your cart do not offer pickup.',
+      options,
+    );
+  }
+}
+
+/**
+ * `GetOrIssuePickupTokenUseCase`'s own precondition (S4-QR): a pickup
+ * credential only means anything once the vendor has actually marked the
+ * sub-order `READY_FOR_PICKUP` — issuing one earlier (or after `COMPLETED`)
+ * would hand the customer a QR code for a pickup that either isn't ready yet
+ * or already happened. Distinct from `InvalidOrderStatusTransitionError`
+ * because no status transition is attempted here at all.
+ */
+export class PickupTokenNotAvailableError extends DomainRuleError {
+  constructor(status: OrderStatusName, options: AppErrorOptions = {}) {
+    super(
+      'PICKUP_TOKEN_NOT_AVAILABLE',
+      'A pickup code is not available for this order right now.',
+      {
+        ...options,
+        details: options.details ?? [
+          { field: 'status', issue: `Sub-order is ${status}, not READY_FOR_PICKUP` },
+        ],
+      },
+    );
+  }
+}
+
+/**
+ * `RedeemPickupTokenUseCase`'s catch-all refusal (S4-QR, SDD 13.3, SEC-15).
+ * Deliberately the *one* error for every reason a token fails verification —
+ * bad signature, wrong audience, expired, malformed, no matching row visible
+ * under this vendor's own RLS scope, or a `sub_order_id` that belongs to
+ * another vendor entirely. Collapsing all of these into one generic 422
+ * (never "expired" vs "forged" vs "not yours") is exactly SEC-15's uniform-
+ * response principle, already applied to `AccessTokenService.verify()` in
+ * this codebase for the identical reason: a caller learning *why* a token
+ * was refused learns the shape of the verification pipeline, which is
+ * exactly the information an attacker probing for valid sub-order ids wants.
+ */
+export class PickupTokenInvalidError extends DomainRuleError {
+  constructor(options: AppErrorOptions = {}) {
+    super('PICKUP_TOKEN_INVALID', 'This pickup token is invalid or has expired.', options);
+  }
+}
+
+/**
+ * The atomic `status = 'ISSUED' -> 'REDEEMED'` compare-and-set (SDD 13.1)
+ * affected zero rows: this exact token was already redeemed, by this same
+ * request racing itself (a retry) or an earlier, successful scan. Distinct
+ * from `PickupTokenInvalidError` because reaching this point already proves
+ * the token verified and belongs to the caller's own vendor (RLS-scoped) —
+ * telling the caller "already redeemed" here leaks nothing an attacker could
+ * not already see, unlike the pre-verification failures above.
+ */
+export class PickupTokenAlreadyRedeemedError extends ConflictError {
+  constructor(options: AppErrorOptions = {}) {
+    super('This pickup has already been completed.', {
+      ...options,
+      code: 'PICKUP_TOKEN_ALREADY_REDEEMED',
+    });
   }
 }

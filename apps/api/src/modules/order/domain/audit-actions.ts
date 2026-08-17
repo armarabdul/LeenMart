@@ -26,6 +26,10 @@ export const ORDER_AUDIT_ACTIONS = {
   SHIPPED: 'sub_order.shipped',
   /** S3-6: a vendor moved their own sub-order SHIPPED -> DELIVERED. Same reasoning as `PROCESSING_STARTED`. */
   DELIVERED: 'sub_order.delivered',
+  /** S4-QR: a vendor moved their own PICKUP sub-order PROCESSING -> READY_FOR_PICKUP. Same reasoning as `PROCESSING_STARTED`. */
+  READY_FOR_PICKUP: 'sub_order.ready_for_pickup',
+  /** S4-QR: a vendor's successful QR/token redemption moved a PICKUP sub-order READY_FOR_PICKUP -> COMPLETED (SDD 13.2). */
+  PICKUP_COMPLETED: 'sub_order.pickup_completed',
 } as const;
 
 export type OrderAuditAction = (typeof ORDER_AUDIT_ACTIONS)[keyof typeof ORDER_AUDIT_ACTIONS];

@@ -9,6 +9,7 @@ import { VendorStatus } from '../../../../../src/modules/vendor/domain/value-obj
 import type { VendorRepository } from '../../../../../src/modules/vendor/domain/repositories/vendor.repository.js';
 import { GetVendorOrderUseCase } from '../../../../../src/modules/order/application/use-cases/get-vendor-order.use-case.js';
 import { SubOrder } from '../../../../../src/modules/order/domain/entities/sub-order.entity.js';
+import { FulfilmentMode } from '../../../../../src/modules/order/domain/value-objects/fulfilment-mode.value-object.js';
 import {
   SubOrderNotFoundError,
   VendorNotActiveForOrdersError,
@@ -38,6 +39,7 @@ const activeVendor = VendorProfile.reconstitute({
   status: VendorStatus.ACTIVE,
   plan: 'COMMISSION',
   shopName: 'Test Shop',
+  supportsPickup: false,
   createdAt: NOW,
   updatedAt: NOW,
 });
@@ -72,6 +74,7 @@ const detail: VendorSubOrderDetail = {
     orderId: toOrderId(ids.generate()),
     vendorId,
     status: OrderStatus.CONFIRMED,
+    fulfilmentMode: FulfilmentMode.DELIVERY,
     vendorShopNameSnapshot: 'Test Shop',
     totalAmount: Money.fromMajor(199),
     items: [],
@@ -135,6 +138,7 @@ describe('GetVendorOrderUseCase', () => {
       status: VendorStatus.SUSPENDED,
       plan: 'COMMISSION',
       shopName: 'Test Shop',
+      supportsPickup: false,
       createdAt: NOW,
       updatedAt: NOW,
     });

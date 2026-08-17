@@ -1,6 +1,7 @@
 import type { Money, TransactionScope } from '@leen-mart/domain-kit';
 import type { OrderAddressSnapshot } from '../entities/order.entity.js';
 import type { SubOrder } from '../entities/sub-order.entity.js';
+import type { FulfilmentMode } from '../value-objects/fulfilment-mode.value-object.js';
 import type { OrderId } from '../value-objects/order-id.value-object.js';
 import type { OrderStatus } from '../value-objects/order-status.value-object.js';
 import type { SubOrderId } from '../value-objects/sub-order-id.value-object.js';
@@ -9,12 +10,15 @@ import type { SubOrderId } from '../value-objects/sub-order-id.value-object.js';
  * One row of "Vendor Orders" (S3-5) — enough to list, nothing more. The same
  * "enough to list, nothing more" discipline `OrderSummary` (S3-4) already
  * applies: no items, no address, since a list row exists only to let the
- * vendor pick which sub-order to open next.
+ * vendor pick which sub-order to open next. `fulfilmentMode` joins S4-QR —
+ * unlike the other fields, it is what lets the vendor portal's list
+ * distinguish a pickup order from a delivery one without opening it.
  */
 export interface VendorSubOrderSummary {
   readonly id: SubOrderId;
   readonly orderId: OrderId;
   readonly status: OrderStatus;
+  readonly fulfilmentMode: FulfilmentMode;
   readonly totalAmount: Money;
   readonly createdAt: Date;
 }

@@ -3,9 +3,11 @@ import { Money, toUuid } from '@leen-mart/domain-kit';
 import { Order } from '../../../../../src/modules/order/domain/entities/order.entity.js';
 import { SubOrder } from '../../../../../src/modules/order/domain/entities/sub-order.entity.js';
 import {
+  FulfilmentModeMismatchError,
   InvalidOrderStatusTransitionError,
   OrderCancellationNotAllowedError,
 } from '../../../../../src/modules/order/domain/errors/order-errors.js';
+import { FulfilmentMode } from '../../../../../src/modules/order/domain/value-objects/fulfilment-mode.value-object.js';
 import { OrderStatus } from '../../../../../src/modules/order/domain/value-objects/order-status.value-object.js';
 import { toOrderId } from '../../../../../src/modules/order/domain/value-objects/order-id.value-object.js';
 import { toSubOrderId } from '../../../../../src/modules/order/domain/value-objects/sub-order-id.value-object.js';
@@ -41,6 +43,26 @@ const subOrderInState = (
     orderId,
     vendorId,
     status,
+    fulfilmentMode: FulfilmentMode.DELIVERY,
+    vendorShopNameSnapshot: 'Test Shop',
+    totalAmount: Money.fromMajor(100),
+    items: [],
+    createdAt: now,
+    updatedAt: now,
+    version: 1,
+  });
+
+const pickupSubOrderInState = (
+  status: OrderStatus,
+  vendorId = vendorAId,
+  id = toSubOrderId(toUuid('00000000-0000-7000-8000-000000000b40')),
+): SubOrder =>
+  SubOrder.reconstitute({
+    id,
+    orderId,
+    vendorId,
+    status,
+    fulfilmentMode: FulfilmentMode.PICKUP,
     vendorShopNameSnapshot: 'Test Shop',
     totalAmount: Money.fromMajor(100),
     items: [],
@@ -340,6 +362,7 @@ describe('SubOrder', () => {
       id: toSubOrderId('00000000-0000-7000-8000-000000000b30'),
       orderId,
       vendorId: vendorAId,
+      fulfilmentMode: FulfilmentMode.DELIVERY,
       vendorShopNameSnapshot: 'Test Shop',
       totalAmount: Money.fromMajor(50),
       items: [],
@@ -457,12 +480,131 @@ describe('SubOrder', () => {
     });
   });
 
+  describe('markReadyForPickup() (S4-QR)', () => {
+    it('moves PROCESSING -> READY_FOR_PICKUP for a PICKUP sub-order', () => {
+      const ready = pickupSubOrderInState(OrderStatus.PROCESSING).markReadyForPickup(later);
+      expect(ready.status).toBe(OrderStatus.READY_FOR_PICKUP);
+      expect(ready.updatedAt).toEqual(later);
+    });
+
+    it.each([
+      OrderStatus.PENDING_PAYMENT,
+      OrderStatus.CONFIRMED,
+      OrderStatus.READY_FOR_PICKUP,
+      OrderStatus.COMPLETED,
+      OrderStatus.CANCELLED,
+    ])('refuses from every state other than PROCESSING — refused from %s', (from) => {
+      expect(() => pickupSubOrderInState(from).markReadyForPickup(later)).toThrow(
+        InvalidOrderStatusTransitionError,
+      );
+    });
+
+    it('never mutates the receiver', () => {
+      const original = pickupSubOrderInState(OrderStatus.PROCESSING);
+      const ready = original.markReadyForPickup(later);
+      expect(ready).not.toBe(original);
+      expect(original.status).toBe(OrderStatus.PROCESSING);
+    });
+  });
+
+  describe('completePickup() (S4-QR)', () => {
+    it('moves READY_FOR_PICKUP -> COMPLETED for a PICKUP sub-order', () => {
+      const completed = pickupSubOrderInState(OrderStatus.READY_FOR_PICKUP).completePickup(later);
+      expect(completed.status).toBe(OrderStatus.COMPLETED);
+      expect(completed.updatedAt).toEqual(later);
+    });
+
+    it.each([
+      OrderStatus.PENDING_PAYMENT,
+      OrderStatus.CONFIRMED,
+      OrderStatus.PROCESSING,
+      OrderStatus.COMPLETED,
+      OrderStatus.CANCELLED,
+    ])('refuses from every state other than READY_FOR_PICKUP — refused from %s', (from) => {
+      expect(() => pickupSubOrderInState(from).completePickup(later)).toThrow(
+        InvalidOrderStatusTransitionError,
+      );
+    });
+
+    it('refuses the skip-state transition PROCESSING -> COMPLETED (S4-QR, no skip-state transitions)', () => {
+      expect(() => pickupSubOrderInState(OrderStatus.PROCESSING).completePickup(later)).toThrow(
+        InvalidOrderStatusTransitionError,
+      );
+    });
+
+    it('COMPLETED accepts no further transition (terminal state)', () => {
+      const completed = pickupSubOrderInState(OrderStatus.COMPLETED);
+      expect(() => completed.markReadyForPickup(later)).toThrow(InvalidOrderStatusTransitionError);
+      expect(() => completed.completePickup(later)).toThrow(InvalidOrderStatusTransitionError);
+      expect(() => completed.cancel(later)).toThrow(InvalidOrderStatusTransitionError);
+    });
+
+    it('never mutates the receiver', () => {
+      const original = pickupSubOrderInState(OrderStatus.READY_FOR_PICKUP);
+      const completed = original.completePickup(later);
+      expect(completed).not.toBe(original);
+      expect(original.status).toBe(OrderStatus.READY_FOR_PICKUP);
+    });
+  });
+
+  describe('fulfilment mode gating (S4-QR, checked before the status guard)', () => {
+    it('refuses ship() on a PICKUP sub-order, even from PROCESSING (a legal status for both modes)', () => {
+      expect(() => pickupSubOrderInState(OrderStatus.PROCESSING).ship(later)).toThrow(
+        FulfilmentModeMismatchError,
+      );
+    });
+
+    it('refuses deliver() on a PICKUP sub-order', () => {
+      expect(() => pickupSubOrderInState(OrderStatus.SHIPPED).deliver(later)).toThrow(
+        FulfilmentModeMismatchError,
+      );
+    });
+
+    it('refuses markReadyForPickup() on a DELIVERY sub-order, even from PROCESSING', () => {
+      expect(() => subOrderInState(OrderStatus.PROCESSING).markReadyForPickup(later)).toThrow(
+        FulfilmentModeMismatchError,
+      );
+    });
+
+    it('refuses completePickup() on a DELIVERY sub-order', () => {
+      expect(() => subOrderInState(OrderStatus.SHIPPED).completePickup(later)).toThrow(
+        FulfilmentModeMismatchError,
+      );
+    });
+
+    it('reports the mode mismatch as a 422-mapped domain rule naming the actual mode', () => {
+      try {
+        pickupSubOrderInState(OrderStatus.PROCESSING).ship(later);
+        expect.unreachable('ship() on a PICKUP sub-order should have thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(FulfilmentModeMismatchError);
+        const failure = error as FulfilmentModeMismatchError;
+        expect(failure.kind).toBe('DOMAIN_RULE');
+        expect(failure.code).toBe('ORDER_FULFILMENT_MODE_MISMATCH');
+        expect(failure.message).toMatch(/PICKUP sub-order/);
+      }
+    });
+
+    it('mode mismatch is reported ahead of an otherwise-illegal status transition', () => {
+      // CONFIRMED is not a valid predecessor for SHIP under either mode, but
+      // the mode guard runs first — the mismatch, not the status, is why this
+      // is refused.
+      try {
+        pickupSubOrderInState(OrderStatus.CONFIRMED).ship(later);
+        expect.unreachable('ship() on a PICKUP sub-order should have thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(FulfilmentModeMismatchError);
+      }
+    });
+  });
+
   describe('version (S3-5 optimistic-concurrency guard)', () => {
     it('open() always starts at version 1', () => {
       const subOrder = SubOrder.open({
         id: toSubOrderId('00000000-0000-7000-8000-000000000b31'),
         orderId,
         vendorId: vendorAId,
+        fulfilmentMode: FulfilmentMode.DELIVERY,
         vendorShopNameSnapshot: 'Test Shop',
         totalAmount: Money.fromMajor(50),
         items: [],
@@ -478,6 +620,7 @@ describe('SubOrder', () => {
         orderId,
         vendorId: vendorAId,
         status: OrderStatus.CONFIRMED,
+        fulfilmentMode: FulfilmentMode.DELIVERY,
         vendorShopNameSnapshot: 'Test Shop',
         totalAmount: Money.fromMajor(50),
         items: [],
@@ -495,6 +638,7 @@ describe('SubOrder', () => {
         orderId,
         vendorId: vendorAId,
         status: OrderStatus.CONFIRMED,
+        fulfilmentMode: FulfilmentMode.DELIVERY,
         vendorShopNameSnapshot: 'Test Shop',
         totalAmount: Money.fromMajor(50),
         items: [],

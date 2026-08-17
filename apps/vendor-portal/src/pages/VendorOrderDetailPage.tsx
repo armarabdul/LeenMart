@@ -7,6 +7,7 @@ import { useGetVendorOrderQuery } from '@/features/vendor-order/vendor-order.api
 import { StartProcessingButton } from '@/features/vendor-order/components/StartProcessingButton';
 import { MarkShippedButton } from '@/features/vendor-order/components/MarkShippedButton';
 import { MarkDeliveredButton } from '@/features/vendor-order/components/MarkDeliveredButton';
+import { MarkReadyForPickupButton } from '@/features/vendor-order/components/MarkReadyForPickupButton';
 
 const OrderSkeleton = (): JSX.Element => (
   <div className="flex flex-col gap-4">
@@ -52,6 +53,49 @@ const AddressSummary = ({
     <p>{address.phone}</p>
   </div>
 );
+
+/**
+ * The single status-gated fulfilment action shown in the page header.
+ *
+ * Extracted from `VendorOrderDetailPage` so the page itself stays within the
+ * complexity budget; the branches are byte-for-byte the ones it used to hold
+ * inline, in the same order. The sub-order's statuses are mutually exclusive,
+ * so at most one of these ever matched before and at most one returns here —
+ * `null` covers the states with no action at all (DELIVERED, COMPLETED,
+ * CANCELLED).
+ */
+const FulfilmentAction = ({
+  subOrder,
+}: {
+  readonly subOrder: VendorSubOrderResponse;
+}): JSX.Element | null => {
+  const { id, status, fulfilmentMode } = subOrder;
+
+  if (status === 'CONFIRMED') {
+    return <StartProcessingButton subOrderId={id} />;
+  }
+  if (status === 'PROCESSING' && fulfilmentMode === 'DELIVERY') {
+    return <MarkShippedButton subOrderId={id} />;
+  }
+  // S4-QR: the pickup-mode branch. A PICKUP sub-order never offers
+  // ship/deliver, and COMPLETED is reached only by the vendor redeeming the
+  // customer's QR code on /pickup/redeem — never by a button here (locked
+  // decision #10).
+  if (status === 'PROCESSING' && fulfilmentMode === 'PICKUP') {
+    return <MarkReadyForPickupButton subOrderId={id} />;
+  }
+  if (status === 'SHIPPED') {
+    return <MarkDeliveredButton subOrderId={id} />;
+  }
+  if (status === 'READY_FOR_PICKUP') {
+    return (
+      <p className="text-sm text-slate-600">
+        Awaiting customer pickup — redeem their QR code to complete.
+      </p>
+    );
+  }
+  return null;
+};
 
 /**
  * "Vendor Order Detail" (S3-5, extended S3-6). Exactly one fulfilment
@@ -108,9 +152,7 @@ export const VendorOrderDetailPage = (): JSX.Element => {
           </p>
           <p className="text-sm font-medium text-slate-700">{ORDER_STATUS_LABEL[order.status]}</p>
         </div>
-        {order.status === 'CONFIRMED' && <StartProcessingButton subOrderId={order.id} />}
-        {order.status === 'PROCESSING' && <MarkShippedButton subOrderId={order.id} />}
-        {order.status === 'SHIPPED' && <MarkDeliveredButton subOrderId={order.id} />}
+        <FulfilmentAction subOrder={order} />
       </header>
 
       <section className="flex flex-col gap-3">

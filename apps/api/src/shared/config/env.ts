@@ -54,6 +54,19 @@ const INSECURE_DEV_KYC_WRAPPING_KEY = 'feedface'.repeat(8);
 const INSECURE_DEV_KYC_FINGERPRINT_PEPPER = 'c0ffee42'.repeat(8);
 
 /**
+ * The development Ed25519 keypair for `Ed25519PickupTokenSigner` (S4-QR, SDD
+ * §13.1: "key held only by the fulfilment module"). A real, freshly
+ * generated keypair — not a placeholder string like `INSECURE_DEV_JWT_ACCESS_SECRET`,
+ * because `jsonwebtoken`'s `EdDSA` support needs an actual PEM-encoded
+ * PKCS8/SPKI key pair to sign or verify anything with, even in development.
+ * `superRefine` below refuses to let either value reach production.
+ */
+const INSECURE_DEV_PICKUP_TOKEN_PRIVATE_KEY =
+  '-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIILsdERXf17y2+3M7qCTQfGKxvU2ma2mkiIgUC4avaKh\n-----END PRIVATE KEY-----\n';
+const INSECURE_DEV_PICKUP_TOKEN_PUBLIC_KEY =
+  '-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAQADYhCP8GEfDElt7kbLWxtRx0B6odWvdhpLp5m2xI8k=\n-----END PUBLIC KEY-----\n';
+
+/**
  * The production guards specific to KYC, extracted from `superRefine` so the
  * refinement stays under the function-length limit as the KYC surface grows.
  * Every one of these is a development stand-in that must not reach real
@@ -276,6 +289,18 @@ const envSchema = z
      */
     ADMIN_SESSION_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(30),
 
+    // --- order/pickup (S4-QR: Ed25519-signed pickup tokens, SDD 13.1) ---
+    PICKUP_TOKEN_PRIVATE_KEY: z.string().min(1).default(INSECURE_DEV_PICKUP_TOKEN_PRIVATE_KEY),
+    PICKUP_TOKEN_PUBLIC_KEY: z.string().min(1).default(INSECURE_DEV_PICKUP_TOKEN_PUBLIC_KEY),
+    /**
+     * SDD 13.1's "short-lived" + "rotating" properties, both served by one
+     * short TTL: the customer PWA re-requests a token roughly every 60
+     * seconds while the pickup view is open, and each issuance's own
+     * `exp` — not an explicit invalidation of the previous one — is what
+     * makes an earlier, screenshotted token worthless within this window.
+     */
+    PICKUP_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(90),
+
     // --- identity (Milestone 3 Step 5C: AES-256-GCM encryption for admin MFA secrets) ---
     MFA_ENCRYPTION_KEY: z
       .string()
@@ -369,6 +394,20 @@ const envSchema = z
           code: z.ZodIssueCode.custom,
           path: ['MFA_ENCRYPTION_KEY'],
           message: 'A real MFA_ENCRYPTION_KEY must be set in production.',
+        });
+      }
+      if (env.PICKUP_TOKEN_PRIVATE_KEY === INSECURE_DEV_PICKUP_TOKEN_PRIVATE_KEY) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['PICKUP_TOKEN_PRIVATE_KEY'],
+          message: 'A real PICKUP_TOKEN_PRIVATE_KEY must be set in production.',
+        });
+      }
+      if (env.PICKUP_TOKEN_PUBLIC_KEY === INSECURE_DEV_PICKUP_TOKEN_PUBLIC_KEY) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['PICKUP_TOKEN_PUBLIC_KEY'],
+          message: 'A real PICKUP_TOKEN_PUBLIC_KEY must be set in production.',
         });
       }
       assertProductionKycConfig(env, ctx);

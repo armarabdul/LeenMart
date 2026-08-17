@@ -50,6 +50,7 @@ const subOrder = (overrides: Partial<SubOrderResponse> = {}): SubOrderResponse =
   id: 'sub-order-1',
   vendorShopName: 'Ratnagiri Orchards',
   status: 'PENDING_PAYMENT',
+  fulfilmentMode: 'DELIVERY',
   totalAmount: { amount: '19800', currency: 'INR' },
   items: [orderItem()],
   ...overrides,

@@ -20,6 +20,7 @@ const inState = (status: VendorStatus): VendorProfile =>
     status,
     plan: 'COMMISSION',
     shopName: null,
+    supportsPickup: false,
     createdAt: now,
     updatedAt: now,
   });
@@ -236,6 +237,53 @@ describe('VendorProfile', () => {
 
     it('still reconstitutes, so an already-terminated row remains readable', () => {
       expect(inState(VendorStatus.TERMINATED).status).toBe(VendorStatus.TERMINATED);
+    });
+  });
+
+  describe('pickup capability (S4-QR, locked decision #25)', () => {
+    it('defaults every newly registered vendor to supportsPickup: false — never silently assumed', () => {
+      const vendor = VendorProfile.register({ id: vendorId, userId, now });
+
+      expect(vendor.supportsPickup).toBe(false);
+    });
+
+    it('updatePickupCapability() sets the flag and stamps updatedAt', () => {
+      const updated = inState(VendorStatus.ACTIVE).updatePickupCapability(true, later);
+
+      expect(updated.supportsPickup).toBe(true);
+      expect(updated.updatedAt).toEqual(later);
+    });
+
+    it('updatePickupCapability() can also turn the flag back off', () => {
+      const vendor = VendorProfile.reconstitute({
+        id: vendorId,
+        userId,
+        status: VendorStatus.ACTIVE,
+        plan: 'COMMISSION',
+        shopName: 'Test Shop',
+        supportsPickup: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      expect(vendor.updatePickupCapability(false, later).supportsPickup).toBe(false);
+    });
+
+    it('never mutates the receiver', () => {
+      const original = inState(VendorStatus.ACTIVE);
+      const updated = original.updatePickupCapability(true, later);
+
+      expect(updated).not.toBe(original);
+      expect(original.supportsPickup).toBe(false);
+    });
+
+    it('is not a lifecycle transition — callable from any status, including REGISTERED and even TERMINATED', () => {
+      expect(
+        inState(VendorStatus.REGISTERED).updatePickupCapability(true, later).supportsPickup,
+      ).toBe(true);
+      expect(
+        inState(VendorStatus.TERMINATED).updatePickupCapability(true, later).supportsPickup,
+      ).toBe(true);
     });
   });
 });

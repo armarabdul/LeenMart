@@ -47,6 +47,9 @@ export const AppLayout = (): JSX.Element => {
               <NavLink to="/earnings" end className={navLinkClassName}>
                 Earnings
               </NavLink>
+              <NavLink to="/pickup/redeem" end className={navLinkClassName}>
+                Redeem pickup
+              </NavLink>
             </nav>
           )}
           <div className="ml-auto flex items-center gap-3">

@@ -13,6 +13,7 @@ import type { AccessTokenService, SessionDenylist } from '../identity/index.js';
 import { createPricingTaxModule } from '../pricing-tax/index.js';
 import type { ResolveCommissionUseCase, ResolveTaxUseCase } from '../pricing-tax/index.js';
 import { PrismaVendorRepository } from '../vendor/infrastructure/persistence/prisma-vendor.repository.js';
+import type { Env } from '../../shared/config/env.js';
 import {
   CheckoutTransactionRunner,
   PrismaTransactionRunner,
@@ -23,17 +24,23 @@ import type { VendorTenantResolver } from '../../shared/interface/http/middlewar
 import { PlaceOrderUseCase } from './application/use-cases/place-order.use-case.js';
 import { DeliverSubOrderUseCase } from './application/use-cases/deliver-sub-order.use-case.js';
 import { GetOrderUseCase } from './application/use-cases/get-order.use-case.js';
+import { GetOrIssuePickupTokenUseCase } from './application/use-cases/get-or-issue-pickup-token.use-case.js';
 import { GetVendorOrderUseCase } from './application/use-cases/get-vendor-order.use-case.js';
 import { ListOrdersUseCase } from './application/use-cases/list-orders.use-case.js';
 import { ListVendorOrdersUseCase } from './application/use-cases/list-vendor-orders.use-case.js';
 import { CancelOrderUseCase } from './application/use-cases/cancel-order.use-case.js';
 import { InitiatePaymentUseCase } from './application/use-cases/initiate-payment.use-case.js';
 import { ConfirmPaymentUseCase } from './application/use-cases/confirm-payment.use-case.js';
+import { MarkReadyForPickupUseCase } from './application/use-cases/mark-ready-for-pickup.use-case.js';
+import { RedeemPickupTokenUseCase } from './application/use-cases/redeem-pickup-token.use-case.js';
 import type { PostOrderPaymentJournalsUseCase } from '../ledger/index.js';
 import { ShipSubOrderUseCase } from './application/use-cases/ship-sub-order.use-case.js';
 import { StartProcessingUseCase } from './application/use-cases/start-processing.use-case.js';
+import type { PickupTokenSigner } from './application/ports/pickup-token-signer.port.js';
+import { Ed25519PickupTokenSigner } from './infrastructure/crypto/ed25519-pickup-token-signer.js';
 import { PrismaOrderRepository } from './infrastructure/persistence/prisma-order.repository.js';
 import { PrismaPaymentAttemptRepository } from './infrastructure/persistence/prisma-payment-attempt.repository.js';
+import { PrismaPickupTokenRepository } from './infrastructure/persistence/prisma-pickup-token.repository.js';
 import { PrismaVendorOrderRepository } from './infrastructure/persistence/prisma-vendor-order.repository.js';
 import { MockPaymentGateway } from './infrastructure/payment/mock-payment-gateway.js';
 import { createOrderController } from './interface/http/order.controller.js';
@@ -48,6 +55,8 @@ export interface OrderModuleDeps {
   readonly publicPrisma: PrismaClient;
   /** `leenmart_checkout` (S3-3A) — vendor reads, inventory decrement/restore, and the order module's own tables. */
   readonly checkoutPrisma: PrismaClient;
+  /** S4-QR: `PICKUP_TOKEN_PRIVATE_KEY`/`PICKUP_TOKEN_PUBLIC_KEY`/`PICKUP_TOKEN_TTL_SECONDS` — the same whole-`Env` idiom `createIdentityModule` already uses for its own JWT config. */
+  readonly env: Env;
   readonly accessTokenService: AccessTokenService;
   readonly sessionDenylist: SessionDenylist;
   /**
@@ -86,6 +95,8 @@ interface OrderRepositories {
   readonly inventoryRepository: PrismaInventoryRepository;
   readonly orderRepository: PrismaOrderRepository;
   readonly paymentAttemptRepository: PrismaPaymentAttemptRepository;
+  /** Bound to `checkoutPrisma` — the customer's own issue/rotate path, per the port's own doc comment. */
+  readonly pickupTokenRepository: PrismaPickupTokenRepository;
   readonly outboxWriter: PrismaOutboxWriter;
   readonly idempotencyKeyRepository: IdempotencyKeyRepository;
   readonly transactionRunner: CheckoutTransactionRunner;
@@ -113,6 +124,7 @@ const buildOrderRepositories = (
     inventoryRepository: new PrismaInventoryRepository(checkoutPrisma),
     orderRepository: new PrismaOrderRepository(checkoutPrisma),
     paymentAttemptRepository: new PrismaPaymentAttemptRepository(checkoutPrisma),
+    pickupTokenRepository: new PrismaPickupTokenRepository(checkoutPrisma),
     outboxWriter: new PrismaOutboxWriter(checkoutPrisma, idGenerator, clock),
     idempotencyKeyRepository: new IdempotencyKeyRepository(checkoutPrisma),
     transactionRunner: new CheckoutTransactionRunner(checkoutPrisma),
@@ -126,6 +138,7 @@ interface OrderUseCases {
   readonly cancelOrderUseCase: CancelOrderUseCase;
   readonly initiatePaymentUseCase: InitiatePaymentUseCase;
   readonly confirmPaymentUseCase: ConfirmPaymentUseCase;
+  readonly getOrIssuePickupTokenUseCase: GetOrIssuePickupTokenUseCase;
 }
 
 interface BuildOrderUseCasesDeps {
@@ -135,50 +148,52 @@ interface BuildOrderUseCasesDeps {
   readonly resolveTaxUseCase: ResolveTaxUseCase;
   /** S3-7: the ledger posting driven by a captured payment. */
   readonly postOrderPaymentJournalsUseCase: PostOrderPaymentJournalsUseCase;
+  /** S4-QR: shared by both the customer issue/rotate path and the vendor redeem path — one instance, two callers. */
+  readonly pickupTokenSigner: PickupTokenSigner;
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
   readonly logger: Logger;
 }
+
+/** `PlaceOrderUseCase` alone — its dependency list is long enough to be its own builder, keeping `buildCheckoutUseCases` within this file's line budget. */
+const buildPlaceOrderUseCase = (deps: BuildOrderUseCasesDeps): PlaceOrderUseCase =>
+  new PlaceOrderUseCase({
+    ...deps.repositories,
+    resolveCommissionUseCase: deps.resolveCommissionUseCase,
+    resolveTaxUseCase: deps.resolveTaxUseCase,
+    idGenerator: deps.idGenerator,
+    clock: deps.clock,
+    logger: deps.logger,
+  });
+
+/** S4-QR's customer-facing token issuance — its own builder so `buildCheckoutUseCases` stays within this file's function-length budget. */
+const buildPickupTokenUseCase = (
+  deps: BuildOrderUseCasesDeps,
+): Pick<OrderUseCases, 'getOrIssuePickupTokenUseCase'> => ({
+  getOrIssuePickupTokenUseCase: new GetOrIssuePickupTokenUseCase({
+    orderRepository: deps.repositories.orderRepository,
+    pickupTokenRepository: deps.repositories.pickupTokenRepository,
+    pickupTokenSigner: deps.pickupTokenSigner,
+    idGenerator: deps.idGenerator,
+    logger: deps.logger,
+  }),
+});
 
 /** `PlaceOrderUseCase`/`GetOrderUseCase`/`ListOrdersUseCase`/`CancelOrderUseCase` — split out of `buildOrderUseCases` purely to keep every function under this file's line budget. */
 const buildCheckoutUseCases = (
   deps: BuildOrderUseCasesDeps,
 ): Pick<
   OrderUseCases,
-  'placeOrderUseCase' | 'getOrderUseCase' | 'listOrdersUseCase' | 'cancelOrderUseCase'
+  | 'placeOrderUseCase'
+  | 'getOrderUseCase'
+  | 'listOrdersUseCase'
+  | 'cancelOrderUseCase'
+  | 'getOrIssuePickupTokenUseCase'
 > => {
-  const { repositories, resolveCommissionUseCase, resolveTaxUseCase, idGenerator, clock, logger } =
-    deps;
-  const {
-    cartRepository,
-    cartItemRepository,
-    addressRepository,
-    productRepository,
-    productVariantRepository,
-    vendorRepository,
-    inventoryRepository,
-    orderRepository,
-    outboxWriter,
-    transactionRunner,
-  } = repositories;
+  const { repositories, clock, logger } = deps;
+  const { inventoryRepository, orderRepository, outboxWriter, transactionRunner } = repositories;
 
-  const placeOrderUseCase = new PlaceOrderUseCase({
-    cartRepository,
-    cartItemRepository,
-    addressRepository,
-    productRepository,
-    productVariantRepository,
-    vendorRepository,
-    inventoryRepository,
-    orderRepository,
-    outboxWriter,
-    transactionRunner,
-    resolveCommissionUseCase,
-    resolveTaxUseCase,
-    idGenerator,
-    clock,
-    logger,
-  });
+  const placeOrderUseCase = buildPlaceOrderUseCase(deps);
   const getOrderUseCase = new GetOrderUseCase({ orderRepository });
   const listOrdersUseCase = new ListOrdersUseCase({ orderRepository });
   const cancelOrderUseCase = new CancelOrderUseCase({
@@ -189,8 +204,13 @@ const buildCheckoutUseCases = (
     clock,
     logger,
   });
-
-  return { placeOrderUseCase, getOrderUseCase, listOrdersUseCase, cancelOrderUseCase };
+  return {
+    placeOrderUseCase,
+    getOrderUseCase,
+    listOrdersUseCase,
+    cancelOrderUseCase,
+    ...buildPickupTokenUseCase(deps),
+  };
 };
 
 /** `InitiatePaymentUseCase`/`ConfirmPaymentUseCase` (S3-3B) — split out for the same reason as `buildCheckoutUseCases`. */
@@ -248,19 +268,26 @@ interface VendorOrderUseCases {
   readonly startProcessingUseCase: StartProcessingUseCase;
   readonly shipSubOrderUseCase: ShipSubOrderUseCase;
   readonly deliverSubOrderUseCase: DeliverSubOrderUseCase;
+  readonly markReadyForPickupUseCase: MarkReadyForPickupUseCase;
+  readonly redeemPickupTokenUseCase: RedeemPickupTokenUseCase;
 }
 
 /**
  * Every vendor-facing use case (S3-5's `startProcessingUseCase`, S3-6's
- * `shipSubOrderUseCase`/`deliverSubOrderUseCase`), split out of
+ * `shipSubOrderUseCase`/`deliverSubOrderUseCase`, S4-QR's
+ * `markReadyForPickupUseCase`/`redeemPickupTokenUseCase`), split out of
  * `buildVendorOrderRouter` purely to keep it under this file's
  * function-length budget — same reasoning as `buildCheckoutUseCases`/
- * `buildPaymentUseCases` above. All three mutating use cases share the exact
- * same dependency shape (S3-6 reuses S3-5's, not a new one).
+ * `buildPaymentUseCases` above. The four mutating use cases share the exact
+ * same dependency shape (S3-6/S4-QR reuse S3-5's, not a new one) except
+ * `redeemPickupTokenUseCase`, which additionally needs the tenant-scoped
+ * `pickupTokenRepository` and the shared `pickupTokenSigner`.
  */
 const buildVendorOrderUseCases = (deps: {
   vendorRepository: PrismaVendorRepository;
   vendorOrderRepository: PrismaVendorOrderRepository;
+  pickupTokenRepository: PrismaPickupTokenRepository;
+  pickupTokenSigner: PickupTokenSigner;
   outboxWriter: PrismaOutboxWriter;
   auditWriter: AuditWriter;
   transactionRunner: PrismaTransactionRunner;
@@ -270,6 +297,8 @@ const buildVendorOrderUseCases = (deps: {
   const {
     vendorRepository,
     vendorOrderRepository,
+    pickupTokenRepository,
+    pickupTokenSigner,
     outboxWriter,
     auditWriter,
     transactionRunner,
@@ -295,6 +324,12 @@ const buildVendorOrderUseCases = (deps: {
     startProcessingUseCase: new StartProcessingUseCase(mutatingDeps),
     shipSubOrderUseCase: new ShipSubOrderUseCase(mutatingDeps),
     deliverSubOrderUseCase: new DeliverSubOrderUseCase(mutatingDeps),
+    markReadyForPickupUseCase: new MarkReadyForPickupUseCase(mutatingDeps),
+    redeemPickupTokenUseCase: new RedeemPickupTokenUseCase({
+      ...mutatingDeps,
+      pickupTokenRepository,
+      pickupTokenSigner,
+    }),
   };
 };
 
@@ -309,6 +344,8 @@ const buildVendorOrderRouter = (params: {
   accessTokenService: AccessTokenService;
   sessionDenylist: SessionDenylist;
   resolveVendorTenant: VendorTenantResolver;
+  /** S4-QR: the same signer instance the customer-facing issue/rotate path uses. */
+  pickupTokenSigner: PickupTokenSigner;
   idGenerator: IdGenerator;
   clock: Clock;
   logger: Logger;
@@ -318,6 +355,7 @@ const buildVendorOrderRouter = (params: {
     accessTokenService,
     sessionDenylist,
     resolveVendorTenant,
+    pickupTokenSigner,
     idGenerator,
     clock,
     logger,
@@ -330,6 +368,10 @@ const buildVendorOrderRouter = (params: {
   // *requesting* vendor's own profile instead, which must read through RLS.
   const vendorRepository = new PrismaVendorRepository(prisma);
   const vendorOrderRepository = new PrismaVendorOrderRepository(prisma);
+  // Bound to the tenant-scoped client, unlike `buildOrderRepositories`'s own
+  // `pickupTokenRepository` (`checkoutPrisma`) — RLS is what makes this the
+  // *vendor's own* redemption path (the port's own doc comment).
+  const pickupTokenRepository = new PrismaPickupTokenRepository(prisma);
   const transactionRunner = new PrismaTransactionRunner(prisma);
   const outboxWriter = new PrismaOutboxWriter(prisma, idGenerator, clock);
   const auditWriter: AuditWriter = new AmbientAuditWriter({
@@ -342,6 +384,8 @@ const buildVendorOrderRouter = (params: {
     buildVendorOrderUseCases({
       vendorRepository,
       vendorOrderRepository,
+      pickupTokenRepository,
+      pickupTokenSigner,
       outboxWriter,
       auditWriter,
       transactionRunner,
@@ -366,6 +410,7 @@ const buildVendorOrderRouter = (params: {
 export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
   const {
     prisma,
+    env,
     accessTokenService,
     sessionDenylist,
     resolveVendorTenant,
@@ -379,6 +424,18 @@ export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
   const repositories = buildOrderRepositories(deps);
   const paymentGateway = new MockPaymentGateway(idGenerator);
   const { resolveCommissionUseCase, resolveTaxUseCase } = createPricingTaxModule({ prisma, clock });
+  // S4-QR: one signer instance, shared by the customer issue/rotate path
+  // (below) and the vendor redeem path (`buildVendorOrderRouter`) — signs
+  // with the private key, verifies with the public key, so both directions
+  // go through the same Ed25519 keypair either way.
+  const pickupTokenSigner: PickupTokenSigner = new Ed25519PickupTokenSigner(
+    {
+      privateKeyPem: env.PICKUP_TOKEN_PRIVATE_KEY,
+      publicKeyPem: env.PICKUP_TOKEN_PUBLIC_KEY,
+      ttlSeconds: env.PICKUP_TOKEN_TTL_SECONDS,
+    },
+    clock,
+  );
 
   const useCases = buildOrderUseCases({
     repositories,
@@ -386,6 +443,7 @@ export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
     resolveCommissionUseCase,
     resolveTaxUseCase,
     postOrderPaymentJournalsUseCase,
+    pickupTokenSigner,
     idGenerator,
     clock,
     logger: moduleLogger,
@@ -405,6 +463,7 @@ export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
     accessTokenService,
     sessionDenylist,
     resolveVendorTenant,
+    pickupTokenSigner,
     idGenerator,
     clock,
     logger: moduleLogger,

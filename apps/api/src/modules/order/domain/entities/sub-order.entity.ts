@@ -1,6 +1,13 @@
 import type { Money } from '@leen-mart/domain-kit';
 import type { VendorId } from '../../../identity/index.js';
-import { InvalidOrderStatusTransitionError } from '../errors/order-errors.js';
+import {
+  FulfilmentModeMismatchError,
+  InvalidOrderStatusTransitionError,
+} from '../errors/order-errors.js';
+import type {
+  FulfilmentMode,
+  FulfilmentModeName,
+} from '../value-objects/fulfilment-mode.value-object.js';
 import { OrderStatus, type OrderStatusName } from '../value-objects/order-status.value-object.js';
 import type { OrderId } from '../value-objects/order-id.value-object.js';
 import type { SubOrderId } from '../value-objects/sub-order-id.value-object.js';
@@ -11,6 +18,8 @@ export interface SubOrderProps {
   readonly orderId: OrderId;
   readonly vendorId: VendorId;
   readonly status: OrderStatus;
+  /** S4-QR: chosen once at checkout, never changes afterward — see `FulfilmentMode`'s own doc comment for why this lives here rather than on `Order`. */
+  readonly fulfilmentMode: FulfilmentMode;
   readonly vendorShopNameSnapshot: string;
   readonly totalAmount: Money;
   readonly items: readonly OrderItem[];
@@ -32,26 +41,40 @@ export interface SubOrderProps {
 
 /**
  * Same shared state model as `Order` (S3-3A decision D-S3-06: "use the same
- * state model consistently for Order and SubOrder"; widened S3-6). Every
- * transition here is a genuinely per-vendor fact (SDD 6.3: "N independent
- * fulfilment lifecycles") — `PROCESSING`/`SHIPPED`/`DELIVERED` are all
- * vendor-initiated, delivery-mode-only transitions (S3-6 locked decision #1:
- * no pickup mode exists in this codebase).
+ * state model consistently for Order and SubOrder"; widened S3-6, widened
+ * again S4-QR). Every transition here is a genuinely per-vendor fact (SDD
+ * 6.3: "N independent fulfilment lifecycles") — `PROCESSING` is common to
+ * both fulfilment modes; `SHIPPED`/`DELIVERED` are `DELIVERY`-mode-only,
+ * vendor-initiated transitions (S3-6); `READY_FOR_PICKUP`/`COMPLETED` are
+ * `PICKUP`-mode-only (S4-QR) — `READY_FOR_PICKUP` is vendor-initiated,
+ * `COMPLETED` is reachable *only* through `RedeemPickupTokenUseCase`'s
+ * atomic token redemption, never a direct public transition (locked
+ * decision).
  *
- * `SHIP`/`DELIVER` only accept their single immediate predecessor
- * (`PROCESSING`/`SHIPPED` respectively) — S3-6 locked decision #11
- * explicitly forbids skip-state transitions such as `CONFIRMED -> SHIPPED`
- * or `PROCESSING -> DELIVERED`.
+ * Every transition only accepts its single immediate predecessor — S3-6
+ * locked decision #11's "no skip-state transitions" rule, extended to the
+ * pickup path: `PROCESSING -> COMPLETED` or `CONFIRMED -> READY_FOR_PICKUP`
+ * are both refused the same way `CONFIRMED -> SHIPPED` already is.
  */
 const TRANSITIONS = {
   CONFIRM: { from: ['PENDING_PAYMENT'], to: OrderStatus.CONFIRMED },
   START_PROCESSING: { from: ['CONFIRMED'], to: OrderStatus.PROCESSING },
   SHIP: { from: ['PROCESSING'], to: OrderStatus.SHIPPED },
   DELIVER: { from: ['SHIPPED'], to: OrderStatus.DELIVERED },
+  MARK_READY_FOR_PICKUP: { from: ['PROCESSING'], to: OrderStatus.READY_FOR_PICKUP },
+  COMPLETE_PICKUP: { from: ['READY_FOR_PICKUP'], to: OrderStatus.COMPLETED },
   CANCEL: { from: ['PENDING_PAYMENT', 'CONFIRMED'], to: OrderStatus.CANCELLED },
 } satisfies Record<string, { from: readonly OrderStatusName[]; to: OrderStatus }>;
 
 type SubOrderTransition = keyof typeof TRANSITIONS;
+
+/** Which `FulfilmentMode` each mode-specific transition requires — checked before the status guard so a wrong-mode call always reports the real reason. */
+const TRANSITION_MODE: Partial<Record<SubOrderTransition, FulfilmentModeName>> = {
+  SHIP: 'DELIVERY',
+  DELIVER: 'DELIVERY',
+  MARK_READY_FOR_PICKUP: 'PICKUP',
+  COMPLETE_PICKUP: 'PICKUP',
+};
 
 /**
  * One vendor's slice of a multi-vendor order (S3-3A, SDD 6.3). Always
@@ -65,6 +88,7 @@ export class SubOrder {
     id: SubOrderId;
     orderId: OrderId;
     vendorId: VendorId;
+    fulfilmentMode: FulfilmentMode;
     vendorShopNameSnapshot: string;
     totalAmount: Money;
     items: readonly OrderItem[];
@@ -75,6 +99,7 @@ export class SubOrder {
       orderId: props.orderId,
       vendorId: props.vendorId,
       status: OrderStatus.PENDING_PAYMENT,
+      fulfilmentMode: props.fulfilmentMode,
       vendorShopNameSnapshot: props.vendorShopNameSnapshot,
       totalAmount: props.totalAmount,
       items: props.items,
@@ -104,6 +129,10 @@ export class SubOrder {
     return this.props.status;
   }
 
+  get fulfilmentMode(): FulfilmentMode {
+    return this.props.fulfilmentMode;
+  }
+
   get vendorShopNameSnapshot(): string {
     return this.props.vendorShopNameSnapshot;
   }
@@ -130,6 +159,10 @@ export class SubOrder {
 
   private transition(name: SubOrderTransition, now: Date): SubOrder {
     const { from, to } = TRANSITIONS[name];
+    const requiredMode = TRANSITION_MODE[name];
+    if (requiredMode && this.props.fulfilmentMode.name !== requiredMode) {
+      throw new FulfilmentModeMismatchError(name, this.props.fulfilmentMode.name);
+    }
     if (!(from as readonly OrderStatusName[]).includes(this.props.status.name)) {
       throw new InvalidOrderStatusTransitionError(this.props.status.name, to.name);
     }
@@ -158,5 +191,20 @@ export class SubOrder {
 
   cancel(now: Date): SubOrder {
     return this.transition('CANCEL', now);
+  }
+
+  /** Vendor-initiated (S4-QR): `POST /api/v1/vendor/orders/:id/ready-for-pickup`, via `MarkReadyForPickupUseCase`. `PICKUP`-mode only. */
+  markReadyForPickup(now: Date): SubOrder {
+    return this.transition('MARK_READY_FOR_PICKUP', now);
+  }
+
+  /**
+   * S4-QR: reached *only* from inside `RedeemPickupTokenUseCase`, after the
+   * atomic `pickup_tokens` compare-and-set already succeeded — there is no
+   * direct public endpoint that calls this (locked decision #10). `PICKUP`-
+   * mode only.
+   */
+  completePickup(now: Date): SubOrder {
+    return this.transition('COMPLETE_PICKUP', now);
   }
 }

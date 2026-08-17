@@ -13,6 +13,7 @@ import type {
 import { toOrderId } from '../../domain/value-objects/order-id.value-object.js';
 import { toOrderItemId } from '../../domain/value-objects/order-item-id.value-object.js';
 import { OrderStatus } from '../../domain/value-objects/order-status.value-object.js';
+import { FulfilmentMode } from '../../domain/value-objects/fulfilment-mode.value-object.js';
 import {
   toSubOrderId,
   type SubOrderId,
@@ -97,6 +98,7 @@ const toSubOrder = (row: SubOrderDetailRow): SubOrder =>
     orderId: toOrderId(row.orderId),
     vendorId: toVendorId(row.vendorId),
     status: OrderStatus.fromName(row.status),
+    fulfilmentMode: FulfilmentMode.fromName(row.fulfilmentMode),
     vendorShopNameSnapshot: row.vendorShopNameSnapshot,
     totalAmount: Money.fromMinor(row.totalAmount, row.totalCurrency as 'INR'),
     items: row.items.map(toOrderItem),
@@ -109,6 +111,7 @@ const toSummary = (row: {
   id: string;
   orderId: string;
   status: string;
+  fulfilmentMode: string;
   totalAmount: bigint;
   totalCurrency: string;
   createdAt: Date;
@@ -116,6 +119,7 @@ const toSummary = (row: {
   id: toSubOrderId(row.id),
   orderId: toOrderId(row.orderId),
   status: OrderStatus.fromName(row.status),
+  fulfilmentMode: FulfilmentMode.fromName(row.fulfilmentMode),
   totalAmount: Money.fromMinor(row.totalAmount, row.totalCurrency as 'INR'),
   createdAt: row.createdAt,
 });
@@ -145,6 +149,7 @@ export class PrismaVendorOrderRepository implements VendorOrderRepository {
         id: true,
         orderId: true,
         status: true,
+        fulfilmentMode: true,
         totalAmount: true,
         totalCurrency: true,
         createdAt: true,

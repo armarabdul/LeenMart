@@ -14,6 +14,7 @@ import type { PaymentGateway } from '../../../../../src/modules/order/applicatio
 import { Order } from '../../../../../src/modules/order/domain/entities/order.entity.js';
 import { OrderItem } from '../../../../../src/modules/order/domain/entities/order-item.entity.js';
 import { SubOrder } from '../../../../../src/modules/order/domain/entities/sub-order.entity.js';
+import { FulfilmentMode } from '../../../../../src/modules/order/domain/value-objects/fulfilment-mode.value-object.js';
 import { PaymentAttempt } from '../../../../../src/modules/order/domain/entities/payment-attempt.entity.js';
 import {
   OrderNotFoundError,
@@ -81,6 +82,7 @@ const buildOrder = (status: OrderStatus): Order => {
     orderId,
     vendorId,
     status,
+    fulfilmentMode: FulfilmentMode.DELIVERY,
     vendorShopNameSnapshot: 'Test Shop',
     totalAmount: Money.fromMajor(597),
     items: [item],

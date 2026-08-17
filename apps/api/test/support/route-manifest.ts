@@ -353,6 +353,33 @@ const seedOrder = async (ctx: RouteTestContext, owner: Actor): Promise<string> =
 const snapshotOrder = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
   ctx.db.order.findUnique({ where: { id: resourceId }, include: { subOrders: true } });
 
+/**
+ * S4-QR: `seedOrder` plus the order's own (real) sub-order id, encoded
+ * `orderId/subOrderId` — same composite-id convention `seedVariant` already
+ * uses. `GetOrIssuePickupTokenUseCase` checks order ownership before it ever
+ * looks at the sub-order's mode or status, so the attacker path this matrix
+ * exercises never reaches those checks — the seeded order need not actually
+ * be `PICKUP`/`READY_FOR_PICKUP` for this test to be meaningful.
+ */
+const seedOrderWithSubOrder = async (ctx: RouteTestContext, owner: Actor): Promise<string> => {
+  const orderId = await seedOrder(ctx, owner);
+  const subOrderRow = await ctx.db.subOrder.findFirstOrThrow({ where: { orderId } });
+  return `${orderId}/${subOrderRow.id}`;
+};
+
+const pickupTokenPath = (resourceId: string): string => {
+  const [orderId, subOrderId] = resourceId.includes('/')
+    ? resourceId.split('/')
+    : [resourceId, resourceId];
+  return `${orderId}/sub-orders/${subOrderId}/pickup-token`;
+};
+
+/** The order half of a seeded `orderId/subOrderId` pair, for `snapshotOrder` — same shape as `variantIdOf`. */
+const orderIdOf = (resourceId: string): string => resourceId.split('/').at(0) ?? resourceId;
+
+const snapshotOrderFromPair = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
+  snapshotOrder(ctx, orderIdOf(resourceId));
+
 /** The whole stored row — the matrix always addresses an item by its own id, never a `cartId`. */
 const snapshotCartItem = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
   ctx.db.cartItem.findUnique({ where: { id: resourceId } });
@@ -565,6 +592,13 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     path: '/me/shop-profile',
     classification: 'SELF_SCOPED',
     why: 'Sets the shop name on the caller’s own vendor profile (S3-3A, D-S3-03); there is no vendor id in the request to swap for another owner’s.',
+  },
+  {
+    method: 'PATCH',
+    prefix: '/api/v1/vendors',
+    path: '/me/pickup-capability',
+    classification: 'SELF_SCOPED',
+    why: 'Sets the pickup capability flag on the caller’s own vendor profile (S4-QR, locked decision #25); there is no vendor id in the request to swap for another owner’s.',
   },
 
   // --- admin KYC: /api/v1/admin/kyc ---
@@ -1150,6 +1184,17 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
         .send({ testScenario: 'SUCCEEDED' }),
     snapshot: snapshotOrder,
   },
+  {
+    method: 'GET',
+    prefix: '/api/v1/orders',
+    path: '/:id/sub-orders/:subOrderId/pickup-token',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied order id and issues/rotates a pickup QR token for one of its sub-orders — order ownership is checked before the sub-order id is even read.',
+    seed: seedOrderWithSubOrder,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).get(`/api/v1/orders/${pickupTokenPath(resourceId)}`), actor),
+    snapshot: snapshotOrderFromPair,
+  },
 
   // --- vendor orders: /api/v1/vendor/orders (S3-5) ---
   //
@@ -1217,6 +1262,30 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     attempt: (ctx, actor, resourceId) =>
       authed(request(ctx.app).post(`/api/v1/vendor/orders/${resourceId}/deliver`), actor),
     snapshot: snapshotVendorSubOrder,
+  },
+  // S4-QR: same seed/actor/snapshot as `/:id/ship`/`/:id/deliver` above —
+  // same reasoning (the matrix only ever exercises the attacker path, which
+  // is refused before any status/mode-transition logic runs, so the seeded
+  // sub-order's DELIVERY-mode, PENDING_PAYMENT-state fixture is irrelevant
+  // here too).
+  {
+    method: 'POST',
+    prefix: '/api/v1/vendor/orders',
+    path: '/:id/ready-for-pickup',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied sub-order id and marks it ready for pickup.',
+    actor: activeVendorActor,
+    seed: seedVendorSubOrder,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).post(`/api/v1/vendor/orders/${resourceId}/ready-for-pickup`), actor),
+    snapshot: snapshotVendorSubOrder,
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/vendor/orders',
+    path: '/pickup/redeem',
+    classification: 'SELF_SCOPED',
+    why: 'Takes no resource id in the URL at all — the presented token, once verified, names the sub-order (locked decision #10); a token minted for another vendor is refused because pickup_tokens RLS confines the row this vendor can even see, hand-tested in the dedicated pickup redemption security suite, not the generic matrix.',
   },
   // --- vendor earnings: /api/v1/vendor/earnings (S3-8) ---
   //

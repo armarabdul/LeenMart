@@ -81,6 +81,10 @@ export const disposeIntegrationHarness = async (
   });
   const subOrderIds = subOrders.map((subOrder) => subOrder.id);
   await db.orderItem.deleteMany({ where: { subOrderId: { in: subOrderIds } } });
+  // `pickup_tokens` is RESTRICT against `sub_orders` (S4-QR) — a redeemed
+  // token is the evidence a pickup actually happened, so it is not disposable
+  // with its sub-order. Same child-first reasoning as `order_items` above.
+  await db.pickupToken.deleteMany({ where: { subOrderId: { in: subOrderIds } } });
   await db.subOrder.deleteMany({ where: { id: { in: subOrderIds } } });
   // `payment_attempts` is also RESTRICT against `orders` (S3-3B) — same
   // child-first reasoning as `order_items`/`sub_orders` above.

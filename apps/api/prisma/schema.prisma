@@ -284,13 +284,16 @@ enum VendorPlan {
 /// until they do, `PlaceOrderUseCase` refuses to sell that vendor's items
 /// rather than snapshot a null or guessed name onto an order.
 model VendorProfile {
-  id        String       @id @db.Uuid
-  userId    String       @unique @map("user_id") @db.Uuid
-  status    VendorStatus @default(REGISTERED)
-  plan      VendorPlan   @default(COMMISSION)
-  shopName  String?      @map("shop_name") @db.VarChar(120)
-  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id             String       @id @db.Uuid
+  userId         String       @unique @map("user_id") @db.Uuid
+  status         VendorStatus @default(REGISTERED)
+  plan           VendorPlan   @default(COMMISSION)
+  shopName       String?      @map("shop_name") @db.VarChar(120)
+  /// Whether this vendor offers pickup fulfilment (S4-QR). Opt-in — `false`
+  /// for every pre-existing and newly registered vendor.
+  supportsPickup Boolean      @default(false) @map("supports_pickup")
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   user           User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   kycSubmissions VendorKycSubmission[]
@@ -1109,35 +1112,94 @@ model TaxRate {
 }
 
 /// Order/SubOrder lifecycle (S3-3A, approved decision D-S3-06; widened S3-6,
-/// locked decision #2). `SHIPPED`/`DELIVERED` are delivery-mode-only — S3-6
-/// locked decision #1 explicitly excludes pickup mode, QR pickup, and every
-/// pickup-specific state (READY_FOR_PICKUP/REDEEMED/PICKUP_MISSED), which
-/// remain Stage 4. Also still deliberately excluded: ACCEPTED, REJECTED,
-/// COMPLETED, FAILED, REFUNDED — none of these were approved by S3-6 either.
+/// locked decision #2; widened again S4-QR). `SHIPPED`/`DELIVERED` are
+/// `DELIVERY`-mode-only; `READY_FOR_PICKUP`/`COMPLETED` are `PICKUP`-mode-only
+/// (S4-QR — `SubOrder.fulfilmentMode` enforces this, checked before the status
+/// guard in `SubOrder.transition()`). Still deliberately excluded: ACCEPTED,
+/// REJECTED, FAILED, REFUNDED, REDEEMED (that is a `PickupToken`'s own status,
+/// a different table entirely) and PICKUP_MISSED (needs a pickup-window/
+/// grace-period concept S4-QR's locked scope explicitly excludes).
 ///
 /// One enum, not two: the approved decision is to "use the same state model
 /// consistently for Order and SubOrder," so `Order.status` and
 /// `SubOrder.status` both use this type rather than two structurally
 /// identical enums drifting apart later. S3-6 locked decision #7: `Order`
-/// itself never reaches `SHIPPED`/`DELIVERED` — those are `SubOrder`-only
-/// facts; the parent `Order.status` stays independent of individual vendor
-/// fulfilment transitions, exactly as it already did for `PROCESSING`.
+/// itself never reaches `SHIPPED`/`DELIVERED`/`READY_FOR_PICKUP`/`COMPLETED` —
+/// those are `SubOrder`-only facts; the parent `Order.status` stays
+/// independent of individual vendor fulfilment transitions, exactly as it
+/// already did for `PROCESSING`.
 ///
 /// `PENDING_PAYMENT`/`CONFIRMED`/`PROCESSING` are produced by S3-3A/S3-3B/S3-5
-/// respectively. `SHIPPED`/`DELIVERED` are S3-6: two more `SubOrder`-only,
-/// vendor-initiated transitions (`SubOrder.ship()`/`SubOrder.deliver()`),
-/// each accepting only its single immediate predecessor — no skip-state
-/// transition (`CONFIRMED -> SHIPPED`, `PROCESSING -> DELIVERED`, etc.) is
-/// permitted (S3-6 locked decision #11). This mirrors `VendorProfile.activate()`'s
-/// own history: a fully-built transition with no caller until the milestone
-/// that needs one arrives.
+/// respectively. `SHIPPED`/`DELIVERED` are S3-6. `READY_FOR_PICKUP`/
+/// `COMPLETED` are S4-QR: `READY_FOR_PICKUP` is vendor-initiated
+/// (`SubOrder.markReadyForPickup()`); `COMPLETED` is reachable *only* through
+/// `RedeemPickupTokenUseCase`'s atomic token redemption
+/// (`SubOrder.completePickup()`) — there is no direct public endpoint that
+/// marks a pickup sub-order `COMPLETED`. Every transition accepts only its
+/// single immediate predecessor — no skip-state transition is permitted
+/// (S3-6 locked decision #11, extended to the pickup path).
 enum OrderStatus {
   PENDING_PAYMENT
   CONFIRMED
   PROCESSING
   SHIPPED
   DELIVERED
+  READY_FOR_PICKUP
+  COMPLETED
   CANCELLED
+}
+
+/// Which fulfilment path a `SubOrder` follows (S4-QR, SDD §13). Chosen once
+/// at checkout per vendor, never changes afterward — see `FulfilmentMode`'s
+/// own doc comment (domain layer) for why this lives on `SubOrder`, not
+/// `Order`: a multi-vendor order may freely mix `DELIVERY` and `PICKUP`
+/// sub-orders.
+enum FulfilmentMode {
+  DELIVERY
+  PICKUP
+}
+
+/// A pickup credential for exactly one `SubOrder` (S4-QR, SDD §13.1) — one
+/// row per sub-order, its `token_hash`/`nonce`/`expires_at` overwritten on
+/// each rotation (never appended as a log: only the *current* token is ever
+/// meaningful for redemption). `status` is the single-use gate: the
+/// `pickup_tokens_vendor_redeem` RLS policy plus
+/// `PrismaPickupTokenRepository.redeemIfIssued`'s atomic
+/// `WHERE status = 'ISSUED'` compare-and-set are what make concurrent or
+/// replayed redemption structurally impossible, not application code alone.
+///
+/// `vendor_id` is denormalised from `sub_orders.vendor_id` — the same
+/// `LedgerJournal.vendorId` technique (S3-7): a direct RLS column
+/// comparison, not a subquery through `SubOrder`.
+model PickupToken {
+  id               String            @id @db.Uuid
+  subOrderId       String            @unique @map("sub_order_id") @db.Uuid
+  vendorId         String            @map("vendor_id") @db.Uuid
+  status           PickupTokenStatus @default(ISSUED)
+  tokenHash        String            @map("token_hash") @db.VarChar(64)
+  nonce            String            @db.VarChar(32)
+  issuedAt         DateTime          @map("issued_at") @db.Timestamptz(6)
+  expiresAt        DateTime          @map("expires_at") @db.Timestamptz(6)
+  redeemedAt       DateTime?         @map("redeemed_at") @db.Timestamptz(6)
+  redeemedByUserId String?           @map("redeemed_by_user_id") @db.Uuid
+  /// Optimistic-concurrency guard for the *rotate* path only (S4-QR) — the
+  /// same `SubOrder.version` idiom. Redemption's single-use guarantee comes
+  /// from `status`, not this.
+  version          Int               @default(1)
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  /// `Restrict`, matching every other order/vendor foreign key in this
+  /// schema: a sub-order with an issued pickup credential must not vanish
+  /// out from under it.
+  subOrder SubOrder @relation(fields: [subOrderId], references: [id], onDelete: Restrict)
+
+  @@index([vendorId, status], map: "idx_pickup_tokens_vendor_status")
+  @@map("pickup_tokens")
+}
+
+enum PickupTokenStatus {
+  ISSUED
+  REDEEMED
 }
 
 /// A customer's order (S3-3A, SDD 5 module 8, SDD 6.3 "Order ↔ Vendor
@@ -1219,13 +1281,16 @@ model Order {
 /// level SDD 6.3 actually draws it (the line item), and repeating it here is
 /// what lets a sub-order summary render without joining its children.
 model SubOrder {
-  id                     String      @id @db.Uuid
-  orderId                String      @map("order_id") @db.Uuid
-  vendorId               String      @map("vendor_id") @db.Uuid
-  status                 OrderStatus @default(PENDING_PAYMENT)
-  vendorShopNameSnapshot String      @map("vendor_shop_name_snapshot") @db.VarChar(120)
-  totalAmount            BigInt      @map("total_amount")
-  totalCurrency          String      @default("INR") @map("total_currency") @db.VarChar(3)
+  id                     String         @id @db.Uuid
+  orderId                String         @map("order_id") @db.Uuid
+  vendorId               String         @map("vendor_id") @db.Uuid
+  status                 OrderStatus    @default(PENDING_PAYMENT)
+  /// S4-QR: chosen once at checkout, never changes afterward — see
+  /// `FulfilmentMode`'s own doc comment above.
+  fulfilmentMode         FulfilmentMode @default(DELIVERY) @map("fulfilment_mode")
+  vendorShopNameSnapshot String         @map("vendor_shop_name_snapshot") @db.VarChar(120)
+  totalAmount            BigInt         @map("total_amount")
+  totalCurrency          String         @default("INR") @map("total_currency") @db.VarChar(3)
   /// Optimistic-concurrency guard (S3-5) — see `Inventory.version`'s own
   /// comment for the pattern. Needed from S3-5 onward: a customer cancelling
   /// and a vendor starting processing are now two independent writers on the
@@ -1241,6 +1306,10 @@ model SubOrder {
   /// under it.
   vendor VendorProfile @relation(fields: [vendorId], references: [id], onDelete: Restrict)
   items  OrderItem[]
+  /// S4-QR: present only once a pickup credential has been issued — `null`
+  /// for every `DELIVERY` sub-order and for a `PICKUP` one before its first
+  /// token request.
+  pickupToken PickupToken?
 
   @@index([orderId], map: "idx_sub_orders_order")
   @@index([vendorId, status, createdAt(sort: Desc)], map: "idx_sub_orders_vendor_status_created")

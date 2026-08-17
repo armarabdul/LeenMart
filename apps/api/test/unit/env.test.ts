@@ -22,6 +22,13 @@ const productionEnv = {
   KYC_S3_SECRET_ACCESS_KEY: 'a-real-object-storage-secret',
   KYC_FINGERPRINT_PEPPER: '9'.repeat(64),
   PRODUCT_MEDIA_S3_SECRET_ACCESS_KEY: 'a-real-product-media-secret',
+  // S4-QR: a real Ed25519 keypair, distinct from the insecure dev default —
+  // any keypair satisfies the production guard, which only rejects the one
+  // hardcoded dev value (env.ts's own `superRefine`).
+  PICKUP_TOKEN_PRIVATE_KEY:
+    '-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIGrBPIHa/5ie/GfsGx27+SEDU8ClHf0QhPav0JfREclD\n-----END PRIVATE KEY-----\n',
+  PICKUP_TOKEN_PUBLIC_KEY:
+    '-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAENRBVQ4HPHnaCUWzQxEMdJYE7bOQCMb3vDyt8tweJwc=\n-----END PUBLIC KEY-----\n',
   APP_DATABASE_URL: 'postgresql://leenmart_app:secret@db:5432/leenmart?schema=public',
   ADMIN_DATABASE_URL: 'postgresql://leenmart_admin:secret@db:5432/leenmart?schema=public',
   PUBLIC_DATABASE_URL: 'postgresql://leenmart_public:secret@db:5432/leenmart?schema=public',

@@ -6,6 +6,8 @@ import { PrismaInventoryRepository } from '../catalogue/infrastructure/persisten
 import { PrismaProductVariantRepository } from '../catalogue/infrastructure/persistence/prisma-product-variant.repository.js';
 import { PrismaCartRepository } from './infrastructure/persistence/prisma-cart.repository.js';
 import { PrismaCartItemRepository } from './infrastructure/persistence/prisma-cart-item.repository.js';
+import { PrismaVendorRepository } from '../vendor/infrastructure/persistence/prisma-vendor.repository.js';
+import { CartLineVendorResolver } from './application/services/cart-line-vendor-resolver.js';
 import { GetCartUseCase } from './application/use-cases/get-cart.use-case.js';
 import { AddCartItemUseCase } from './application/use-cases/add-cart-item.use-case.js';
 import { UpdateCartItemQuantityUseCase } from './application/use-cases/update-cart-item-quantity.use-case.js';
@@ -26,6 +28,14 @@ export interface CartModuleDeps {
    * be a genuine privilege escalation for a customer-triggered action.
    */
   readonly publicPrisma: PrismaClient;
+  /**
+   * `leenmart_checkout` (S4-QR) — the only credential that can read a
+   * *foreign* vendor's shop name and pickup capability for a customer's
+   * cart. `publicPrisma` holds no grant on `vendors`, and `prisma`'s
+   * `vendors_select` policy is scoped to `app.vendor_id`, which a customer
+   * session never carries. Same role, same reason, as `order.module.ts`.
+   */
+  readonly checkoutPrisma: PrismaClient;
   readonly accessTokenService: AccessTokenService;
   readonly sessionDenylist: SessionDenylist;
   readonly clock: Clock;
@@ -46,12 +56,24 @@ export interface CartModule {
  * of the tenant client, they need no new code in `catalogue` at all.
  */
 export const createCartModule = (deps: CartModuleDeps): CartModule => {
-  const { prisma, publicPrisma, accessTokenService, sessionDenylist, clock, idGenerator } = deps;
+  const {
+    prisma,
+    publicPrisma,
+    checkoutPrisma,
+    accessTokenService,
+    sessionDenylist,
+    clock,
+    idGenerator,
+  } = deps;
 
   const cartRepository = new PrismaCartRepository(prisma);
   const cartItemRepository = new PrismaCartItemRepository(prisma);
   const productVariantRepository = new PrismaProductVariantRepository(publicPrisma);
   const inventoryRepository = new PrismaInventoryRepository(publicPrisma);
+  const cartLineVendorResolver = new CartLineVendorResolver({
+    productVariantRepository,
+    vendorRepository: new PrismaVendorRepository(checkoutPrisma),
+  });
 
   const getCartUseCase = new GetCartUseCase({ cartRepository, cartItemRepository });
   const addCartItemUseCase = new AddCartItemUseCase({
@@ -77,6 +99,7 @@ export const createCartModule = (deps: CartModuleDeps): CartModule => {
   const clearCartUseCase = new ClearCartUseCase({ cartRepository, cartItemRepository, clock });
 
   const controller = createCartController({
+    cartLineVendorResolver,
     getCartUseCase,
     addCartItemUseCase,
     updateCartItemQuantityUseCase,

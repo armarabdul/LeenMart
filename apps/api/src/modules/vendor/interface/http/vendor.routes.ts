@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   createKycUploadIntentRequestSchema,
   registerVendorRequestSchema,
+  setVendorPickupCapabilityRequestSchema,
   setVendorShopNameRequestSchema,
   submitVendorKycRequestSchema,
 } from '@leen-mart/contracts';
@@ -94,6 +95,18 @@ export const createVendorRouter = (
     requirePermission('MANAGE_SHOP_PROFILE'),
     validate({ body: setVendorShopNameRequestSchema }),
     asyncHandler(controller.setShopName),
+  );
+
+  // S4-QR, locked decision #25. Same `MANAGE_SHOP_PROFILE` permission as
+  // `/me/shop-profile` above — another self-service shop-profile attribute,
+  // not a new capability.
+  router.patch(
+    '/me/pickup-capability',
+    authenticate(accessTokenService, sessionDenylist),
+    tenantContext(resolveVendorTenant),
+    requirePermission('MANAGE_SHOP_PROFILE'),
+    validate({ body: setVendorPickupCapabilityRequestSchema }),
+    asyncHandler(controller.setPickupCapability),
   );
 
   return router;

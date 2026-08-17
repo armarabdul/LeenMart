@@ -7,5 +7,9 @@ export const ORDER_STATUS_LABEL: Record<OrderStatusDto, string> = {
   PROCESSING: 'Processing',
   SHIPPED: 'Shipped',
   DELIVERED: 'Delivered',
+  // S4-QR: pickup-mode states. Same wording in both apps, so a vendor and a
+  // customer read the same status the same way.
+  READY_FOR_PICKUP: 'Ready for pickup',
+  COMPLETED: 'Completed',
   CANCELLED: 'Cancelled',
 };

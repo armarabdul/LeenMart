@@ -3,15 +3,18 @@ import type {
   CreateKycUploadIntentRequest,
   CreateKycUploadIntentResponse,
   RegisterVendorResponse,
+  SetVendorPickupCapabilityRequest,
   SetVendorShopNameRequest,
   SubmitVendorKycRequest,
   SubmitVendorKycResponse,
+  VendorPickupCapabilityResponse,
   VendorShopProfileResponse,
 } from '@leen-mart/contracts';
 import { getRequestId } from '../../../../shared/interface/http/middleware/request-context.js';
 import { validatedData } from '../../../../shared/interface/http/middleware/validate.js';
 import type { VendorProfile } from '../../domain/entities/vendor-profile.entity.js';
 import type { CreateKycUploadIntentUseCase } from '../../application/use-cases/create-kyc-upload-intent.use-case.js';
+import type { SetVendorPickupCapabilityUseCase } from '../../application/use-cases/set-vendor-pickup-capability.use-case.js';
 import type { SetVendorShopNameUseCase } from '../../application/use-cases/set-vendor-shop-name.use-case.js';
 import type { SubmitVendorKycUseCase } from '../../application/use-cases/submit-vendor-kyc.use-case.js';
 import type { RegisterVendorUseCase } from '../../application/use-cases/register-vendor.use-case.js';
@@ -21,6 +24,7 @@ export interface VendorController {
   readonly createKycUploadIntent: (req: Request, res: Response) => Promise<void>;
   readonly submitKyc: (req: Request, res: Response) => Promise<void>;
   readonly setShopName: (req: Request, res: Response) => Promise<void>;
+  readonly setPickupCapability: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface VendorControllerDeps {
@@ -28,12 +32,19 @@ export interface VendorControllerDeps {
   readonly createKycUploadIntentUseCase: CreateKycUploadIntentUseCase;
   readonly submitVendorKycUseCase: SubmitVendorKycUseCase;
   readonly setVendorShopNameUseCase: SetVendorShopNameUseCase;
+  readonly setVendorPickupCapabilityUseCase: SetVendorPickupCapabilityUseCase;
 }
 
 const toShopProfileResponse = (vendor: VendorProfile): VendorShopProfileResponse => ({
   id: vendor.id,
   status: vendor.status.name,
   shopName: vendor.shopName,
+});
+
+const toPickupCapabilityResponse = (vendor: VendorProfile): VendorPickupCapabilityResponse => ({
+  id: vendor.id,
+  status: vendor.status.name,
+  supportsPickup: vendor.supportsPickup,
 });
 
 type IntentResult = Awaited<ReturnType<CreateKycUploadIntentUseCase['execute']>>;
@@ -82,6 +93,29 @@ const createSetShopNameHandler =
     res
       .status(200)
       .json({ data: toShopProfileResponse(vendor), meta: { requestId: getRequestId() } });
+  };
+
+/** Mirrors `createSetShopNameHandler` — same "split out for the length budget" reasoning. */
+const createSetPickupCapabilityHandler =
+  (
+    setVendorPickupCapabilityUseCase: SetVendorPickupCapabilityUseCase,
+  ): VendorController['setPickupCapability'] =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'PATCH /vendors/me/pickup-capability reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+
+    const { body } = validatedData<SetVendorPickupCapabilityRequest>(req);
+    const vendor = await setVendorPickupCapabilityUseCase.execute({
+      principal: req.principal,
+      supportsPickup: body.supportsPickup,
+    });
+
+    res
+      .status(200)
+      .json({ data: toPickupCapabilityResponse(vendor), meta: { requestId: getRequestId() } });
   };
 
 export const createVendorController = (deps: VendorControllerDeps): VendorController => ({
@@ -147,4 +181,5 @@ export const createVendorController = (deps: VendorControllerDeps): VendorContro
   },
 
   setShopName: createSetShopNameHandler(deps.setVendorShopNameUseCase),
+  setPickupCapability: createSetPickupCapabilityHandler(deps.setVendorPickupCapabilityUseCase),
 });

@@ -7,6 +7,8 @@ import { selectKnownVariants, type KnownVariantSummary } from '@/shared/state/kn
 import { formatMoney } from '@/shared/lib/format-money';
 import { useGetCartQuery } from '@/features/cart/cart.api';
 import { AddressSelector } from '@/features/address/components/AddressSelector';
+import { FulfilmentModeSelector } from '@/features/checkout/components/FulfilmentModeSelector';
+import { groupCartByVendor } from '@/features/checkout/lib/group-cart-by-vendor';
 import { usePlaceOrderMutation } from '@/features/checkout/checkout.api';
 
 const CheckoutSkeleton = (): JSX.Element => (
@@ -102,6 +104,9 @@ export const CheckoutPage = (): JSX.Element => {
   } = useGetCartQuery();
   const knownVariants = useAppSelector(selectKnownVariants);
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
+  // S4-QR: DELIVERY is the default, so this starts empty and only ever holds
+  // vendors the customer explicitly chose to pick up from.
+  const [pickupVendorIds, setPickupVendorIds] = useState<readonly string[]>([]);
   const [placeOrder, { isLoading: isPlacing, error: placeError }] = usePlaceOrderMutation();
   const navigate = useNavigate();
 
@@ -112,6 +117,15 @@ export const CheckoutPage = (): JSX.Element => {
 
   const items = useMemo(() => cart?.items ?? [], [cart]);
   const subtotal = useCheckoutSubtotal(items, knownVariants);
+  const vendors = useMemo(() => groupCartByVendor(items), [items]);
+
+  const togglePickup = (vendorId: string, pickup: boolean): void => {
+    setPickupVendorIds((current) =>
+      pickup
+        ? [...current.filter((id) => id !== vendorId), vendorId]
+        : current.filter((id) => id !== vendorId),
+    );
+  };
 
   const handlePlaceOrder = async (): Promise<void> => {
     if (!selectedAddressId) return;
@@ -120,6 +134,9 @@ export const CheckoutPage = (): JSX.Element => {
         addressId: selectedAddressId,
         paymentMethod: 'ONLINE',
         idempotencyKey,
+        // Omitted entirely when empty, so an all-delivery checkout sends
+        // exactly the request shape it did before S4-QR.
+        ...(pickupVendorIds.length > 0 ? { pickupVendorIds: [...pickupVendorIds] } : {}),
       }).unwrap();
       void navigate(`/orders/${order.id}`, { replace: true });
     } catch {
@@ -175,6 +192,12 @@ export const CheckoutPage = (): JSX.Element => {
         </h2>
         <AddressSelector selectedAddressId={selectedAddressId} onSelect={setSelectedAddressId} />
       </section>
+
+      <FulfilmentModeSelector
+        vendors={vendors}
+        pickupVendorIds={pickupVendorIds}
+        onToggle={togglePickup}
+      />
 
       <OrderReviewSection items={items} knownVariants={knownVariants} subtotal={subtotal} />
 
