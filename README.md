@@ -195,3 +195,4 @@ Husky hooks: `pre-commit` runs lint-staged, `commit-msg` runs commitlint,
 | Validation | Done (Zod middleware) |
 | Clean Architecture folder structure | Done |
 | Business modules | **Not implemented, by design** |
+
