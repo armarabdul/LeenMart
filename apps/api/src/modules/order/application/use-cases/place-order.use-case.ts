@@ -499,26 +499,12 @@ export class PlaceOrderUseCase {
    */
   private async placeInTransaction(plan: PlacementPlan): Promise<Order> {
     const { principal, address, pricedLines, slots } = plan;
-    const {
-      transactionRunner,
-      inventoryRepository,
-      orderRepository,
-      outboxWriter,
-      idGenerator,
-      clock,
-    } = this.deps;
+    const { transactionRunner, orderRepository, outboxWriter, idGenerator, clock } = this.deps;
     const now = clock.now();
     const orderId = toOrderId(idGenerator.generate());
 
     return transactionRunner.run(async (scope) => {
-      const inventory = inventoryRepository.withTransaction(scope);
-      for (const line of pricedLines) {
-        const decremented = await inventory.decrementIfAvailable(line.variantId, line.quantity);
-        if (!decremented) {
-          throw new InsufficientStockError();
-        }
-      }
-
+      await this.decrementInventory(scope, pricedLines);
       await this.consumeSlots(scope, slots);
 
       const subOrders = this.buildSubOrders(orderId, plan, now);
@@ -577,6 +563,34 @@ export class PlaceOrderUseCase {
         slot: slots.get(vendorId) ?? null,
       });
     });
+  }
+
+  /**
+   * Decrements stock for every line, inside the placement's own transaction.
+   *
+   * **Deterministically ordered**, for exactly the reason `consumeSlots` below
+   * is: two concurrent orders containing the same two variants in opposite cart
+   * order would otherwise be free to take the rows in opposite order and
+   * deadlock. Sorting by the row's own key means every placement in the system
+   * acquires inventory rows in the same sequence.
+   *
+   * The order of acquisition is all that changes — the decrements themselves,
+   * their quantities and the `InsufficientStockError` a shortfall raises are
+   * exactly as before.
+   */
+  private async decrementInventory(
+    scope: TransactionScope,
+    pricedLines: readonly PricedLine[],
+  ): Promise<void> {
+    const inventory = this.deps.inventoryRepository.withTransaction(scope);
+    const ordered = [...pricedLines].sort((a, b) => a.variantId.localeCompare(b.variantId));
+
+    for (const line of ordered) {
+      const decremented = await inventory.decrementIfAvailable(line.variantId, line.quantity);
+      if (!decremented) {
+        throw new InsufficientStockError();
+      }
+    }
   }
 
   /**

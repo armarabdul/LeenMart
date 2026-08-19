@@ -137,19 +137,46 @@ describe('tenant RLS isolation', () => {
       // (unchanged reach), and it is only `leenmart_app`'s new vendor-scoped
       // policies that are actually restrictive (see the `20260816130000`
       // migration's own header).
+      //
+      // **This list is exhaustive on purpose.** It is not a sample: a new
+      // vendor-owned table that forgets its policies shows up here as a
+      // missing entry, and a platform table that gains RLS by accident shows
+      // up as an extra one. Every milestone that adds a tenant table adds its
+      // name below in the same commit — this assertion once ran eight tables
+      // behind for four milestones, which is exactly the failure it exists to
+      // prevent.
       const rows = await owner.$queryRaw<{ tablename: string }[]>`
         SELECT tablename FROM pg_tables
         WHERE schemaname = 'public' AND rowsecurity ORDER BY tablename`;
 
       expect(rows.map((row) => row.tablename)).toEqual([
+        // S4-HOURS: the vendor's operating schedule and its closures.
+        'business_hour_closures',
+        'business_hours',
+        // S4-SLOTS: the vendor's recurring slot offer.
+        'delivery_slots',
         'inventory',
         'kyc_documents',
+        // S3-7: the double-entry ledger. Vendor-scoped for `leenmart_app`,
+        // cross-vendor SELECT for `leenmart_admin`, SELECT+INSERT for the
+        // checkout writer, and no UPDATE/DELETE policy for anyone — half of
+        // what makes it append-only.
+        'ledger_entries',
+        'ledger_journals',
         'order_items',
         'orders',
+        // S4-QR: a pickup token is the credential that completes a sub-order,
+        // so it is vendor-scoped like every other order table.
+        'pickup_tokens',
         'product_media',
         'product_media_variants',
         'product_variants',
         'products',
+        // S4-SERV: the vendor's declared delivery pincodes.
+        'serviceable_pincodes',
+        // S4-SLOTS: the dated capacity counter. Vendor-readable, but only
+        // `leenmart_checkout` may move `booked`.
+        'slot_capacity',
         'sub_orders',
         'vendor_kyc_submissions',
         'vendors',
@@ -495,26 +522,40 @@ describe('tenant RLS isolation', () => {
       expect(await owner.vendorKycSubmission.findUnique({ where: { id: kycA } })).not.toBeNull();
     });
 
-    it('holds exactly the policies KYC-5, S2-3a, S2-4, S2-5, S2-6a and S2-6b intend — eight reads and three updates', async () => {
+    it('holds exactly the read-only policies its milestones intend, and only three writes', async () => {
       // The narrowness assertion. A later `FOR ALL` added "because the role
       // exists" would fail here rather than quietly widening the boundary.
       // `product_variants`/`inventory`/`product_media`/`product_media_variants`
       // all contribute read-only policies only; `products` gained its first
       // write policy in S2-5 (`products_admin_decide`), for the admin
       // approve/reject decision — neither S2-6a nor S2-6b adds an admin write
-      // surface for media.
+      // surface for media. Every Stage-3/4 table since has added SELECT and
+      // nothing else, so the three writes below are still the only ones.
+      //
+      // `orders`/`order_items`/`sub_orders`/`pickup_tokens` are deliberately
+      // absent: they carry RLS but no admin policy at all, so the admin
+      // credential cannot read them. That is a fact about the boundary, not an
+      // oversight — an admin order surface would have to add the policy
+      // explicitly, and this assertion is what would make that visible.
       const rows = await owner.$queryRaw<{ tablename: string; cmd: string }[]>`
         SELECT tablename, cmd FROM pg_policies
         WHERE 'leenmart_admin' = ANY(roles) ORDER BY tablename, cmd`;
 
       expect(rows).toEqual([
+        { tablename: 'business_hour_closures', cmd: 'SELECT' },
+        { tablename: 'business_hours', cmd: 'SELECT' },
+        { tablename: 'delivery_slots', cmd: 'SELECT' },
         { tablename: 'inventory', cmd: 'SELECT' },
         { tablename: 'kyc_documents', cmd: 'SELECT' },
+        { tablename: 'ledger_entries', cmd: 'SELECT' },
+        { tablename: 'ledger_journals', cmd: 'SELECT' },
         { tablename: 'product_media', cmd: 'SELECT' },
         { tablename: 'product_media_variants', cmd: 'SELECT' },
         { tablename: 'product_variants', cmd: 'SELECT' },
         { tablename: 'products', cmd: 'SELECT' },
         { tablename: 'products', cmd: 'UPDATE' },
+        { tablename: 'serviceable_pincodes', cmd: 'SELECT' },
+        { tablename: 'slot_capacity', cmd: 'SELECT' },
         { tablename: 'vendor_kyc_submissions', cmd: 'SELECT' },
         { tablename: 'vendor_kyc_submissions', cmd: 'UPDATE' },
         { tablename: 'vendors', cmd: 'SELECT' },

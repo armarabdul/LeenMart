@@ -694,6 +694,78 @@ describe('PlaceOrderUseCase', () => {
       expect(byVendor.get(pickupVendorId)).toBe(FulfilmentMode.PICKUP);
     });
   });
+  describe('inventory lock ordering (M2)', () => {
+    /** The sequence of variant ids the placement actually decremented. */
+    const decrementOrder = (repository: InventoryRepository): string[] =>
+      (repository.decrementIfAvailable as ReturnType<typeof vi.fn>).mock.calls.map(
+        (call) => call[0] as string,
+      );
+
+    const twoLineUseCase = (
+      items: readonly unknown[],
+      inventoryRepository: InventoryRepository,
+    ): PlaceOrderUseCase =>
+      buildUseCase({
+        inventoryRepository,
+        cartItemRepository: cartItemRepo({
+          listByCartId: vi.fn().mockResolvedValue(items),
+        }),
+        productRepository: twoVendorProductRepo(),
+        productVariantRepository: twoVendorVariantRepo(),
+        vendorRepository: twoVendorVendorRepo(),
+      });
+
+    const twoLineInput = { ...input, pickupVendorIds: [pickupVendorId] };
+
+    it('decrements in a stable order, not cart order', async () => {
+      const inventory = inventoryRepo();
+
+      await twoLineUseCase([cartItem, pickupCartItem], inventory).execute(twoLineInput);
+
+      const expected = [variantId, pickupVariantId].sort((a, b) => a.localeCompare(b));
+      expect(decrementOrder(inventory)).toEqual(expected);
+    });
+
+    it('takes the same rows in the same order whichever way the cart is arranged', async () => {
+      // The deadlock this prevents: two concurrent orders holding the same two
+      // variants in opposite cart order, each waiting on the row the other has
+      // already taken.
+      const first = inventoryRepo();
+      const second = inventoryRepo();
+
+      await twoLineUseCase([cartItem, pickupCartItem], first).execute(twoLineInput);
+      await twoLineUseCase([pickupCartItem, cartItem], second).execute(twoLineInput);
+
+      expect(decrementOrder(first)).toEqual(decrementOrder(second));
+    });
+
+    it('still decrements every line, with its own quantity', async () => {
+      // Ordering is all that changed — no line is dropped or merged.
+      const inventory = inventoryRepo();
+
+      await twoLineUseCase([cartItem, pickupCartItem], inventory).execute(twoLineInput);
+
+      expect(inventory.decrementIfAvailable).toHaveBeenCalledTimes(2);
+      expect(inventory.decrementIfAvailable).toHaveBeenCalledWith(variantId, cartItem.quantity);
+      expect(inventory.decrementIfAvailable).toHaveBeenCalledWith(
+        pickupVariantId,
+        pickupCartItem.quantity,
+      );
+    });
+
+    it('still refuses the whole order when any line is short', async () => {
+      const orderRepository = orderRepo();
+      const inventory = inventoryRepo({
+        decrementIfAvailable: vi.fn().mockResolvedValue(false),
+      });
+
+      await expect(
+        buildUseCase({ orderRepository, inventoryRepository: inventory }).execute(input),
+      ).rejects.toThrow(InsufficientStockError);
+      expect(orderRepository.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('delivery serviceability (S4-SERV)', () => {
     it('places the order when every delivery vendor serves the address', async () => {
       const useCase = buildUseCase({ resolveServiceabilityUseCase: serviceabilityUseCase([]) });
