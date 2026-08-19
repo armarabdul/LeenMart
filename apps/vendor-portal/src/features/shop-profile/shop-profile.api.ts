@@ -1,8 +1,10 @@
 import type {
   SetVendorBusinessHoursRequest,
+  SetVendorDeliverySlotsRequest,
   SetVendorServiceablePincodesRequest,
   SetVendorShopAddressRequest,
   VendorBusinessHoursResponse,
+  VendorDeliverySlotsResponse,
   VendorServiceablePincodesResponse,
   VendorShopAddressResponse,
 } from '@leen-mart/contracts';
@@ -55,6 +57,16 @@ export const shopProfileApi = baseApi.injectEndpoints({
       transformResponse: (response: SuccessEnvelope<VendorBusinessHoursResponse>) => response.data,
       invalidatesTags: ['BusinessHours'],
     }),
+    getDeliverySlots: builder.query<VendorDeliverySlotsResponse, void>({
+      query: () => '/vendors/me/delivery-slots',
+      transformResponse: (response: SuccessEnvelope<VendorDeliverySlotsResponse>) => response.data,
+      providesTags: ['DeliverySlots'],
+    }),
+    setDeliverySlots: builder.mutation<VendorDeliverySlotsResponse, SetVendorDeliverySlotsRequest>({
+      query: (body) => ({ url: '/vendors/me/delivery-slots', method: 'PUT', body }),
+      transformResponse: (response: SuccessEnvelope<VendorDeliverySlotsResponse>) => response.data,
+      invalidatesTags: ['DeliverySlots'],
+    }),
   }),
 });
 
@@ -65,4 +77,6 @@ export const {
   useSetServiceablePincodesMutation,
   useGetBusinessHoursQuery,
   useSetBusinessHoursMutation,
+  useGetDeliverySlotsQuery,
+  useSetDeliverySlotsMutation,
 } = shopProfileApi;

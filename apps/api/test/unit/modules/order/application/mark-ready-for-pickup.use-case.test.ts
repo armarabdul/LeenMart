@@ -91,6 +91,7 @@ const buildDetail = (
     fulfilmentMode,
     vendorShopNameSnapshot: 'Test Shop',
     pickupLocationSnapshot: null,
+    slot: null,
     totalAmount: Money.fromMajor(199),
     items: [],
     createdAt: NOW,

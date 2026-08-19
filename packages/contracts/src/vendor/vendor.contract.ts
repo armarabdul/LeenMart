@@ -218,6 +218,76 @@ export const vendorBusinessHoursResponseSchema = z.object({
 });
 
 /**
+ * One recurring fulfilment window a vendor offers (S4-SLOTS, locked decisions
+ * S1 and S3).
+ *
+ * Minutes since IST midnight, for the same reason `businessHourIntervalSchema`
+ * uses them: an integer carries no timezone, and a client cannot reinterpret
+ * it. `endMinute` may reach 1440 (midnight); `startMinute` may not, since a
+ * zero-length window admits nobody. No overnight windows.
+ *
+ * `capacity` is the vendor-declared limit on how many sub-orders fit in the
+ * window (S1). One sub-order consumes exactly one unit (S2) — never items,
+ * weight or volume. The minimum is 1: zero would be indistinguishable from
+ * "not offered", which the absence of the window already expresses.
+ */
+export const deliverySlotSchema = z
+  .object({
+    /** 0 = Sunday … 6 = Saturday. */
+    weekday: z.number().int().min(0).max(6),
+    startMinute: z.number().int().min(0).max(1439),
+    endMinute: z.number().int().min(1).max(1440),
+    capacity: z.number().int().min(1).max(10_000),
+  })
+  .strict()
+  .refine((slot) => slot.startMinute < slot.endMinute, {
+    message: 'startMinute must be before endMinute',
+    path: ['endMinute'],
+  });
+
+/** How full one dated window already is, for the vendor's own view. */
+export const slotBookingSchema = z
+  .object({
+    /** `YYYY-MM-DD`, IST. */
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be a YYYY-MM-DD date'),
+    startMinute: z.number().int().min(0).max(1439),
+    booked: z.number().int().min(0),
+  })
+  .strict();
+
+/**
+ * PUT /vendors/me/delivery-slots (S4-SLOTS). A whole-offer replace, the same
+ * reasoning `setVendorBusinessHoursRequestSchema` gives.
+ *
+ * An **empty offer is legal and meaningful**: it clears the configuration,
+ * returning the vendor to taking orders without a slot — the
+ * backward-compatible default `serviceable_pincodes` (D7) and `business_hours`
+ * (H4-A) each already established.
+ *
+ * Replacing the offer never rewrites bookings already taken: `slot_capacity`
+ * rows carry their own snapshotted capacity.
+ */
+export const setVendorDeliverySlotsRequestSchema = z
+  .object({
+    slots: z.array(deliverySlotSchema).max(100),
+  })
+  .strict();
+
+/** GET/PUT /vendors/me/delivery-slots. */
+export const vendorDeliverySlotsResponseSchema = z.object({
+  id: uuidSchema,
+  /**
+   * S4-SLOTS. `false` means the vendor offers no windows and therefore takes
+   * orders without one — surfaced explicitly so the portal can say so rather
+   * than showing an empty list that reads as "never available".
+   */
+  configured: z.boolean(),
+  slots: z.array(deliverySlotSchema),
+  /** Bookings already taken across the next few days, so capacity is not set blind. */
+  bookings: z.array(slotBookingSchema),
+});
+
+/**
  * POST /admin/kyc/vendors/:vendorId/activate (S3-3A, decision D-S3-04).
  * Empty body — activation names no new fact beyond "this KYC-approved
  * vendor may now trade," which the URL's own `vendorId` already states.
@@ -251,5 +321,9 @@ export type BusinessHourInterval = z.infer<typeof businessHourIntervalSchema>;
 export type BusinessHourClosureDto = z.infer<typeof businessHourClosureSchema>;
 export type SetVendorBusinessHoursRequest = z.infer<typeof setVendorBusinessHoursRequestSchema>;
 export type VendorBusinessHoursResponse = z.infer<typeof vendorBusinessHoursResponseSchema>;
+export type DeliverySlotDto = z.infer<typeof deliverySlotSchema>;
+export type SlotBookingDto = z.infer<typeof slotBookingSchema>;
+export type SetVendorDeliverySlotsRequest = z.infer<typeof setVendorDeliverySlotsRequestSchema>;
+export type VendorDeliverySlotsResponse = z.infer<typeof vendorDeliverySlotsResponseSchema>;
 export type ActivateVendorRequest = z.infer<typeof activateVendorRequestSchema>;
 export type ActivateVendorResponse = z.infer<typeof activateVendorResponseSchema>;

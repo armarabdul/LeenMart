@@ -508,6 +508,10 @@ describe('database role separation', () => {
         // to validate placement, and never writes it.
         'business_hour_closures',
         'business_hours',
+        // S4-SLOTS: SELECT on the offer; SELECT/INSERT/UPDATE on the counter,
+        // which checkout materialises lazily and moves atomically. The
+        // `inventory` row below is the same shape for the same reason.
+        'delivery_slots',
         'idempotency_keys',
         'inventory',
         // S3-7: the ledger's only writer. SELECT + INSERT only — the
@@ -524,6 +528,7 @@ describe('database role separation', () => {
         // S4-SERV: SELECT only — checkout reads a vendor's declared delivery
         // pincodes to validate placement, and never writes them.
         'serviceable_pincodes',
+        'slot_capacity',
         'sub_orders',
         'vendors',
       ]);
@@ -554,6 +559,9 @@ describe('database role separation', () => {
         // vendor_id like every other vendor-owned table.
         'business_hour_closures',
         'business_hours',
+        // S4-SLOTS: vendor slot offer and its dated capacity counter, scoped
+        // by vendor_id like every other vendor-owned table.
+        'delivery_slots',
         'inventory',
         'kyc_documents',
         // S3-7: the ledger. Vendor-scoped SELECT for `leenmart_app`,
@@ -574,6 +582,7 @@ describe('database role separation', () => {
         // S4-SERV: vendor-declared delivery serviceability, scoped by
         // vendor_id like every other vendor-owned table.
         'serviceable_pincodes',
+        'slot_capacity',
         'sub_orders',
         'vendor_kyc_submissions',
         'vendors',

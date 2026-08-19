@@ -52,6 +52,7 @@ const subOrder = (overrides: Partial<SubOrderResponse> = {}): SubOrderResponse =
   status: 'PENDING_PAYMENT',
   fulfilmentMode: 'DELIVERY',
   pickupLocation: null,
+  slot: null,
   totalAmount: { amount: '19800', currency: 'INR' },
   items: [orderItem()],
   ...overrides,

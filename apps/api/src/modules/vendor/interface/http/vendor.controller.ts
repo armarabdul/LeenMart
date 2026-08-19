@@ -4,6 +4,7 @@ import type {
   CreateKycUploadIntentResponse,
   RegisterVendorResponse,
   SetVendorBusinessHoursRequest,
+  SetVendorDeliverySlotsRequest,
   SetVendorPickupCapabilityRequest,
   SetVendorServiceablePincodesRequest,
   SetVendorShopAddressRequest,
@@ -11,6 +12,7 @@ import type {
   SubmitVendorKycRequest,
   SubmitVendorKycResponse,
   VendorBusinessHoursResponse,
+  VendorDeliverySlotsResponse,
   VendorPickupCapabilityResponse,
   VendorServiceablePincodesResponse,
   VendorShopAddressResponse,
@@ -24,6 +26,11 @@ import type { SetVendorPickupCapabilityUseCase } from '../../application/use-cas
 import type { SetVendorShopAddressUseCase } from '../../application/use-cases/set-vendor-shop-address.use-case.js';
 import type { SetVendorShopNameUseCase } from '../../application/use-cases/set-vendor-shop-name.use-case.js';
 import type { GetVendorShopProfileUseCase } from '../../application/use-cases/get-vendor-shop-profile.use-case.js';
+import type {
+  GetVendorDeliverySlotsUseCase,
+  SetVendorDeliverySlotsUseCase,
+  VendorDeliverySlotsResult,
+} from '../../application/use-cases/manage-vendor-delivery-slots.use-case.js';
 import type {
   GetVendorBusinessHoursUseCase,
   SetVendorBusinessHoursUseCase,
@@ -49,6 +56,8 @@ export interface VendorController {
   readonly setServiceablePincodes: (req: Request, res: Response) => Promise<void>;
   readonly getBusinessHours: (req: Request, res: Response) => Promise<void>;
   readonly setBusinessHours: (req: Request, res: Response) => Promise<void>;
+  readonly getDeliverySlots: (req: Request, res: Response) => Promise<void>;
+  readonly setDeliverySlots: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface VendorControllerDeps {
@@ -63,6 +72,8 @@ export interface VendorControllerDeps {
   readonly setVendorServiceablePincodesUseCase: SetVendorServiceablePincodesUseCase;
   readonly getVendorBusinessHoursUseCase: GetVendorBusinessHoursUseCase;
   readonly setVendorBusinessHoursUseCase: SetVendorBusinessHoursUseCase;
+  readonly getVendorDeliverySlotsUseCase: GetVendorDeliverySlotsUseCase;
+  readonly setVendorDeliverySlotsUseCase: SetVendorDeliverySlotsUseCase;
 }
 
 const toShopProfileResponse = (vendor: VendorProfile): VendorShopProfileResponse => ({
@@ -105,6 +116,16 @@ const toBusinessHoursResponse = (
     weekday: closure.weekday,
     date: closure.closedOn,
   })),
+});
+
+/** S4-SLOTS. `configured` is carried explicitly so an empty offer is never mistaken for "never available". */
+const toDeliverySlotsResponse = (
+  result: VendorDeliverySlotsResult,
+): VendorDeliverySlotsResponse => ({
+  id: result.vendorId,
+  configured: result.configured,
+  slots: result.slots.map((slot) => ({ ...slot })),
+  bookings: result.bookings.map((booking) => ({ ...booking })),
 });
 
 const toPickupCapabilityResponse = (vendor: VendorProfile): VendorPickupCapabilityResponse => ({
@@ -342,6 +363,44 @@ const createRegisterHandler =
     res.status(201).json({ data, meta: { requestId: getRequestId() } });
   };
 
+/** Mirrors `createGetBusinessHoursHandler` — same "split out for the length budget" reasoning. */
+const createGetDeliverySlotsHandler =
+  (
+    getVendorDeliverySlotsUseCase: GetVendorDeliverySlotsUseCase,
+  ): VendorController['getDeliverySlots'] =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'GET /vendors/me/delivery-slots reached without authenticate() middleware - req.principal is unset.',
+      );
+    }
+    const result = await getVendorDeliverySlotsUseCase.execute({ principal: req.principal });
+    res
+      .status(200)
+      .json({ data: toDeliverySlotsResponse(result), meta: { requestId: getRequestId() } });
+  };
+
+/** Mirrors `createSetBusinessHoursHandler` — same "split out for the length budget" reasoning. */
+const createSetDeliverySlotsHandler =
+  (
+    setVendorDeliverySlotsUseCase: SetVendorDeliverySlotsUseCase,
+  ): VendorController['setDeliverySlots'] =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'PUT /vendors/me/delivery-slots reached without authenticate() middleware - req.principal is unset.',
+      );
+    }
+    const { body } = validatedData<SetVendorDeliverySlotsRequest>(req);
+    const result = await setVendorDeliverySlotsUseCase.execute({
+      principal: req.principal,
+      slots: body.slots.map((slot) => ({ ...slot })),
+    });
+    res
+      .status(200)
+      .json({ data: toDeliverySlotsResponse(result), meta: { requestId: getRequestId() } });
+  };
+
 export const createVendorController = (deps: VendorControllerDeps): VendorController => ({
   register: createRegisterHandler(deps.registerVendorUseCase),
 
@@ -403,4 +462,6 @@ export const createVendorController = (deps: VendorControllerDeps): VendorContro
   ),
   getBusinessHours: createGetBusinessHoursHandler(deps.getVendorBusinessHoursUseCase),
   setBusinessHours: createSetBusinessHoursHandler(deps.setVendorBusinessHoursUseCase),
+  getDeliverySlots: createGetDeliverySlotsHandler(deps.getVendorDeliverySlotsUseCase),
+  setDeliverySlots: createSetDeliverySlotsHandler(deps.setVendorDeliverySlotsUseCase),
 });

@@ -25,6 +25,8 @@ import type { Principal } from '../../../../../src/modules/identity/application/
 import { VendorProfile } from '../../../../../src/modules/vendor/domain/entities/vendor-profile.entity.js';
 import { VendorStatus } from '../../../../../src/modules/vendor/domain/value-objects/vendor-status.value-object.js';
 import type { VendorRepository } from '../../../../../src/modules/vendor/index.js';
+import type { SlotAvailabilityRepository } from '../../../../../src/modules/vendor/domain/repositories/delivery-slot.repository.js';
+import type { Order } from '../../../../../src/modules/order/domain/entities/order.entity.js';
 import type { OutboxWriter } from '../../../../../src/shared/application/ports/outbox-writer.port.js';
 import type {
   ResolveCommissionUseCase,
@@ -32,11 +34,16 @@ import type {
 } from '../../../../../src/modules/pricing-tax/index.js';
 import type { ResolveServiceabilityUseCase } from '../../../../../src/modules/order/application/use-cases/resolve-serviceability.use-case.js';
 import type { ResolveBusinessHoursUseCase } from '../../../../../src/modules/order/application/use-cases/resolve-business-hours.use-case.js';
+import type {
+  ResolveSlotSelectionUseCase,
+  ResolvedSlot,
+} from '../../../../../src/modules/order/application/use-cases/resolve-slot-selection.use-case.js';
 import { PlaceOrderUseCase } from '../../../../../src/modules/order/application/use-cases/place-order.use-case.js';
 import {
   EmptyCartError,
   InsufficientStockError,
   OrderAddressNotFoundError,
+  OrderSlotUnavailableError,
   AddressNotServiceableError,
   PickupNotSupportedByVendorError,
   ProductNotEligibleForOrderError,
@@ -289,6 +296,33 @@ const serviceabilityUseCase = (
     execute: vi.fn().mockResolvedValue(unserviceable),
   }) as unknown as ResolveServiceabilityUseCase;
 
+/**
+ * S4-SLOTS. Returns nothing by default, which is the "vendor offers no
+ * windows" case — so every test written before this milestone keeps its
+ * meaning without naming a slot.
+ */
+const slotSelectionUseCase = (
+  resolved: ReadonlyMap<unknown, unknown> = new Map(),
+): ResolveSlotSelectionUseCase =>
+  ({ execute: vi.fn().mockResolvedValue(resolved) }) as unknown as ResolveSlotSelectionUseCase;
+
+/** Records what capacity was taken, and can be told to refuse. */
+const slotRepo = (
+  consumable = true,
+): SlotAvailabilityRepository & { consume: ReturnType<typeof vi.fn> } => {
+  const consume = vi.fn().mockResolvedValue(consumable);
+  const repository = {
+    withTransaction: () => repository,
+    findTemplatesForVendors: vi.fn().mockResolvedValue(new Map()),
+    findBookingsForVendors: vi.fn().mockResolvedValue(new Map()),
+    consume,
+    release: vi.fn().mockResolvedValue(undefined),
+  };
+  return repository as unknown as SlotAvailabilityRepository & {
+    consume: ReturnType<typeof vi.fn>;
+  };
+};
+
 interface BuildOverrides {
   cartRepository?: CartRepository;
   cartItemRepository?: CartItemRepository;
@@ -303,6 +337,8 @@ interface BuildOverrides {
   resolveCommissionUseCase?: ResolveCommissionUseCase;
   resolveServiceabilityUseCase?: ResolveServiceabilityUseCase;
   resolveBusinessHoursUseCase?: ResolveBusinessHoursUseCase;
+  resolveSlotSelectionUseCase?: ResolveSlotSelectionUseCase;
+  slotAvailabilityRepository?: SlotAvailabilityRepository;
   resolveTaxUseCase?: ResolveTaxUseCase;
 }
 
@@ -320,6 +356,8 @@ const defaultDeps = (): Required<BuildOverrides> => ({
   resolveCommissionUseCase,
   resolveServiceabilityUseCase: serviceabilityUseCase(),
   resolveBusinessHoursUseCase: businessHoursUseCase(),
+  resolveSlotSelectionUseCase: slotSelectionUseCase(),
+  slotAvailabilityRepository: slotRepo(),
   resolveTaxUseCase,
 });
 
@@ -853,6 +891,132 @@ describe('PlaceOrderUseCase', () => {
       );
 
       expect(calls).toEqual(['serviceability', 'hours']);
+    });
+  });
+
+  describe('slot capacity (S4-SLOTS)', () => {
+    const slotFor = (vendor: typeof vendorId): ReadonlyMap<typeof vendorId, ResolvedSlot> =>
+      new Map([[vendor, { date: '2026-08-18', startMinute: 540, endMinute: 660, capacity: 5 }]]);
+
+    it('takes exactly one unit per booked sub-order (S2)', async () => {
+      const slotAvailabilityRepository = slotRepo();
+
+      await buildUseCase({
+        resolveSlotSelectionUseCase: slotSelectionUseCase(slotFor(vendorId)),
+        slotAvailabilityRepository,
+      }).execute(input);
+
+      expect(slotAvailabilityRepository.consume).toHaveBeenCalledTimes(1);
+      expect(slotAvailabilityRepository.consume).toHaveBeenCalledWith(vendorId, {
+        date: '2026-08-18',
+        startMinute: 540,
+        endMinute: 660,
+        capacity: 5,
+      });
+    });
+
+    it('consumes nothing when no vendor offers a window', async () => {
+      const slotAvailabilityRepository = slotRepo();
+
+      await buildUseCase({ slotAvailabilityRepository }).execute(input);
+
+      expect(slotAvailabilityRepository.consume).not.toHaveBeenCalled();
+    });
+
+    it('refuses the whole order when the window filled first', async () => {
+      // The expected outcome of losing the atomic conditional update's race,
+      // not an exceptional one — it is how the design refuses to overbook.
+      const orderRepository = orderRepo();
+
+      await expect(
+        buildUseCase({
+          orderRepository,
+          resolveSlotSelectionUseCase: slotSelectionUseCase(slotFor(vendorId)),
+          slotAvailabilityRepository: slotRepo(false),
+        }).execute(input),
+      ).rejects.toThrow(OrderSlotUnavailableError);
+      expect(orderRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('snapshots the window onto the sub-order', async () => {
+      const orderRepository = orderRepo();
+
+      await buildUseCase({
+        orderRepository,
+        resolveSlotSelectionUseCase: slotSelectionUseCase(slotFor(vendorId)),
+      }).execute(input);
+
+      const order = (orderRepository.create as ReturnType<typeof vi.fn>).mock
+        .calls[0]?.[0] as Order;
+      expect(order.subOrders[0]?.slot).toEqual({
+        date: '2026-08-18',
+        startMinute: 540,
+        endMinute: 660,
+      });
+    });
+
+    it('leaves the sub-order slot null when the vendor offers no window', async () => {
+      const orderRepository = orderRepo();
+
+      await buildUseCase({ orderRepository }).execute(input);
+
+      const order = (orderRepository.create as ReturnType<typeof vi.fn>).mock
+        .calls[0]?.[0] as Order;
+      expect(order.subOrders[0]?.slot).toBeNull();
+    });
+
+    it('applies to a PICKUP sub-order exactly as to a DELIVERY one (S4)', async () => {
+      // Business hours are DELIVERY-only (H2-A); slot capacity is not.
+      const slotAvailabilityRepository = slotRepo();
+
+      await buildUseCase({
+        resolveSlotSelectionUseCase: slotSelectionUseCase(slotFor(pickupVendorId)),
+        slotAvailabilityRepository,
+      }).execute({ ...input, pickupVendorIds: [pickupVendorId] });
+
+      expect(slotAvailabilityRepository.consume).toHaveBeenCalledWith(
+        pickupVendorId,
+        expect.objectContaining({ startMinute: 540 }),
+      );
+    });
+
+    it('runs the slot check after the hours check, per SDD 4.2 step 4c', async () => {
+      const calls: string[] = [];
+      const resolveBusinessHoursUseCase = {
+        execute: vi.fn().mockImplementation(() => {
+          calls.push('hours');
+          return Promise.resolve([]);
+        }),
+      } as unknown as ResolveBusinessHoursUseCase;
+      const resolveSlotSelectionUseCase = {
+        execute: vi.fn().mockImplementation(() => {
+          calls.push('slots');
+          return Promise.resolve(new Map());
+        }),
+      } as unknown as ResolveSlotSelectionUseCase;
+
+      await buildUseCase({ resolveBusinessHoursUseCase, resolveSlotSelectionUseCase }).execute(
+        input,
+      );
+
+      expect(calls).toEqual(['hours', 'slots']);
+    });
+
+    it('validates the slot before any pricing work is done', async () => {
+      // An unrecognised slot must cost no tax or commission work — the same
+      // ordering rule serviceability and hours already follow.
+      const resolveSlotSelectionUseCase = {
+        execute: vi.fn().mockRejectedValue(new OrderSlotUnavailableError()),
+      } as unknown as ResolveSlotSelectionUseCase;
+      const taxSpy = vi.fn();
+
+      await expect(
+        buildUseCase({
+          resolveSlotSelectionUseCase,
+          resolveTaxUseCase: { execute: taxSpy } as unknown as ResolveTaxUseCase,
+        }).execute(input),
+      ).rejects.toThrow(OrderSlotUnavailableError);
+      expect(taxSpy).not.toHaveBeenCalled();
     });
   });
 });

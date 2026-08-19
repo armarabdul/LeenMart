@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { confirmPaymentRequestSchema, placeOrderRequestSchema } from '@leen-mart/contracts';
+import {
+  confirmPaymentRequestSchema,
+  placeOrderRequestSchema,
+  slotAvailabilityQuerySchema,
+} from '@leen-mart/contracts';
 import type { Clock, IdGenerator } from '@leen-mart/domain-kit';
 import { asyncHandler } from '../../../../shared/interface/http/middleware/async-handler.js';
 import { authenticate } from '../../../../shared/interface/http/middleware/authenticate.js';
@@ -45,6 +49,46 @@ export interface OrderRouterDeps {
   readonly idGenerator: IdGenerator;
 }
 
+/**
+ * The two payment steps (S3-3B). Split into their own mount function to keep
+ * `createOrderRouter` inside this repository's function-length budget once
+ * S4-SLOTS added a fourth read — the same shape `vendor.routes.ts` already
+ * uses. The middleware order is identical to every route beside them.
+ */
+const mountPaymentRoutes = (
+  router: Router,
+  controller: OrderController,
+  deps: OrderRouterDeps,
+): void => {
+  const { accessTokenService, sessionDenylist, idempotencyKeyRepository, clock, idGenerator } =
+    deps;
+  // S3-3B: `PLACE_ORDER`, not a new permission. SDD 4.2's own approved order-
+  // placement flow already folds "create the provider-side payment order"
+  // into `PlaceOrderUseCase`'s own steps (4g), under the same permission —
+  // splitting checkout into "place" then "pay" here is a shape difference
+  // from a mock/synchronous adapter having no webhook to drive confirmation,
+  // not a different capability needing its own row in SDD 8.2's matrix.
+  // Ownership (this order belongs to the caller) is still the use case's
+  // job, exactly like every other route in this file.
+  router.post(
+    '/:id/payment/initiate',
+    authenticate(accessTokenService, sessionDenylist),
+    requirePermission('PLACE_ORDER'),
+    validate({ params: orderIdParamsSchema }),
+    idempotency(idempotencyKeyRepository, INITIATE_PAYMENT_ENDPOINT, { clock, idGenerator }),
+    asyncHandler(controller.initiatePayment),
+  );
+
+  router.post(
+    '/:id/payment/confirm',
+    authenticate(accessTokenService, sessionDenylist),
+    requirePermission('PLACE_ORDER'),
+    validate({ params: orderIdParamsSchema, body: confirmPaymentRequestSchema }),
+    idempotency(idempotencyKeyRepository, CONFIRM_PAYMENT_ENDPOINT, { clock, idGenerator }),
+    asyncHandler(controller.confirmPayment),
+  );
+};
+
 export const createOrderRouter = (controller: OrderController, deps: OrderRouterDeps): Router => {
   const { accessTokenService, sessionDenylist, idempotencyKeyRepository, clock, idGenerator } =
     deps;
@@ -57,6 +101,20 @@ export const createOrderRouter = (controller: OrderController, deps: OrderRouter
     validate({ body: placeOrderRequestSchema }),
     idempotency(idempotencyKeyRepository, PLACE_ORDER_ENDPOINT, { clock, idGenerator }),
     asyncHandler(controller.placeOrder),
+  );
+
+  // S4-SLOTS: what the caller may choose at their own checkout. Registered
+  // before `GET /:id` so the literal path is matched as itself rather than
+  // being offered to the id route's uuid validation.
+  //
+  // `PLACE_ORDER`, not a new permission: this is checkout information, and
+  // SDD 8.2 has no separate row for reading it.
+  router.get(
+    '/slot-availability',
+    authenticate(accessTokenService, sessionDenylist),
+    requirePermission('PLACE_ORDER'),
+    validate({ query: slotAvailabilityQuerySchema }),
+    asyncHandler(controller.getSlotAvailability),
   );
 
   // S3-4: "My Orders" — no params to validate, the same shape `GET /me/cart`
@@ -86,32 +144,6 @@ export const createOrderRouter = (controller: OrderController, deps: OrderRouter
     asyncHandler(controller.cancelOrder),
   );
 
-  // S3-3B: `PLACE_ORDER`, not a new permission. SDD 4.2's own approved order-
-  // placement flow already folds "create the provider-side payment order"
-  // into `PlaceOrderUseCase`'s own steps (4g), under the same permission —
-  // splitting checkout into "place" then "pay" here is a shape difference
-  // from a mock/synchronous adapter having no webhook to drive confirmation,
-  // not a different capability needing its own row in SDD 8.2's matrix.
-  // Ownership (this order belongs to the caller) is still the use case's
-  // job, exactly like every other route in this file.
-  router.post(
-    '/:id/payment/initiate',
-    authenticate(accessTokenService, sessionDenylist),
-    requirePermission('PLACE_ORDER'),
-    validate({ params: orderIdParamsSchema }),
-    idempotency(idempotencyKeyRepository, INITIATE_PAYMENT_ENDPOINT, { clock, idGenerator }),
-    asyncHandler(controller.initiatePayment),
-  );
-
-  router.post(
-    '/:id/payment/confirm',
-    authenticate(accessTokenService, sessionDenylist),
-    requirePermission('PLACE_ORDER'),
-    validate({ params: orderIdParamsSchema, body: confirmPaymentRequestSchema }),
-    idempotency(idempotencyKeyRepository, CONFIRM_PAYMENT_ENDPOINT, { clock, idGenerator }),
-    asyncHandler(controller.confirmPayment),
-  );
-
   // S4-QR: the customer's own QR/token view — `VIEW_OWN_ORDERS`, no new
   // permission (the pickup-mode analogue of reading the order's own
   // status). No idempotency wrapper: this is a read that also rotates the
@@ -124,6 +156,8 @@ export const createOrderRouter = (controller: OrderController, deps: OrderRouter
     validate({ params: pickupTokenParamsSchema }),
     asyncHandler(controller.getPickupToken),
   );
+
+  mountPaymentRoutes(router, controller, deps);
 
   return router;
 };

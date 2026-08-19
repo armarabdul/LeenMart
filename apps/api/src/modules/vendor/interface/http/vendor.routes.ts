@@ -3,6 +3,7 @@ import {
   createKycUploadIntentRequestSchema,
   registerVendorRequestSchema,
   setVendorBusinessHoursRequestSchema,
+  setVendorDeliverySlotsRequestSchema,
   setVendorPickupCapabilityRequestSchema,
   setVendorServiceablePincodesRequestSchema,
   setVendorShopAddressRequestSchema,
@@ -66,7 +67,28 @@ const mountShopAddressRoutes = (
     validate({ body: setVendorShopAddressRequestSchema }),
     asyncHandler(controller.setShopAddress),
   );
+};
 
+/**
+ * The vendor's delivery configuration (S4-SERV, S4-HOURS, S4-SLOTS).
+ *
+ * All three share SDD 8.2's own "Configure delivery/slots" permission —
+ * `CONFIGURE_DELIVERY_SLOTS` — and all three are self-scoped in exactly the
+ * same shape: the vendor is resolved from the principal and no vendor id is
+ * accepted from the request. Split from `mountShopAddressRoutes` because a
+ * shop's address is not delivery configuration, and because the two together
+ * exceed this repository's function-length budget.
+ */
+const mountDeliveryConfigRoutes = (
+  router: Router,
+  controller: VendorController,
+  auth: {
+    readonly accessTokenService: AccessTokenService;
+    readonly sessionDenylist: SessionDenylist;
+    readonly resolveVendorTenant: VendorTenantResolver;
+  },
+): void => {
+  const { accessTokenService, sessionDenylist, resolveVendorTenant } = auth;
   // S4-SERV. Gated by `CONFIGURE_DELIVERY_SLOTS` rather than
   // `MANAGE_SHOP_PROFILE`: SDD 8.2 has its own "Configure delivery/slots" row
   // (VENDOR_OWNER/VENDOR_MANAGER `OWN`, SUPER_ADMIN read-only) and declaring
@@ -116,6 +138,29 @@ const mountShopAddressRoutes = (
     requirePermission('CONFIGURE_DELIVERY_SLOTS'),
     validate({ body: setVendorBusinessHoursRequestSchema }),
     asyncHandler(controller.setBusinessHours),
+  );
+
+  // S4-SLOTS. The same CONFIGURE_DELIVERY_SLOTS permission again — SDD 8.2's
+  // "Configure delivery/slots" row names this surface most directly of the
+  // three that share it.
+  router.get(
+    '/me/delivery-slots',
+    authenticate(accessTokenService, sessionDenylist),
+    tenantContext(resolveVendorTenant),
+    requirePermission('CONFIGURE_DELIVERY_SLOTS'),
+    asyncHandler(controller.getDeliverySlots),
+  );
+
+  // PUT, matching every sibling: the offer is replaced wholesale. Bookings
+  // already taken are unaffected — `slot_capacity` rows carry their own
+  // snapshotted capacity and are never rewritten from these templates.
+  router.put(
+    '/me/delivery-slots',
+    authenticate(accessTokenService, sessionDenylist),
+    tenantContext(resolveVendorTenant),
+    requirePermission('CONFIGURE_DELIVERY_SLOTS'),
+    validate({ body: setVendorDeliverySlotsRequestSchema }),
+    asyncHandler(controller.setDeliverySlots),
   );
 };
 
@@ -211,11 +256,9 @@ export const createVendorRouter = (
     asyncHandler(controller.setPickupCapability),
   );
 
-  mountShopAddressRoutes(router, controller, {
-    accessTokenService,
-    sessionDenylist,
-    resolveVendorTenant,
-  });
+  const auth = { accessTokenService, sessionDenylist, resolveVendorTenant };
+  mountShopAddressRoutes(router, controller, auth);
+  mountDeliveryConfigRoutes(router, controller, auth);
 
   return router;
 };

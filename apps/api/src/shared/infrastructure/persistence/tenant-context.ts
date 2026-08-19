@@ -67,6 +67,11 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   // S4-HOURS: vendor operating schedule and closures, RLS-scoped by vendor_id.
   'BusinessHour',
   'BusinessHourClosure',
+  // S4-SLOTS: the vendor's slot offer and its dated capacity counter, both
+  // RLS-scoped by vendor_id. `SlotCapacity` is written only by checkout; the
+  // vendor role reads it.
+  'DeliverySlot',
+  'SlotCapacity',
 ]);
 
 /**

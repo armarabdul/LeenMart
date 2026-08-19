@@ -29,6 +29,24 @@ export interface PickupLocationSnapshot {
   readonly pincode: string;
 }
 
+/**
+ * The fulfilment window this sub-order was booked into (S4-SLOTS).
+ *
+ * A snapshot for the same reason `PickupLocationSnapshot` is: a vendor who
+ * later re-times or withdraws a window must not retroactively change when an
+ * already-placed order said to arrive. Nothing on this aggregate ever re-reads
+ * it from the vendor's templates.
+ *
+ * Minutes since IST midnight, matching `delivery_slots` — an integer carries
+ * no timezone, and the platform is IST-only (ASM-01).
+ */
+export interface SlotSnapshot {
+  /** `YYYY-MM-DD`, IST. */
+  readonly date: string;
+  readonly startMinute: number;
+  readonly endMinute: number;
+}
+
 export interface SubOrderProps {
   readonly id: SubOrderId;
   readonly orderId: OrderId;
@@ -43,6 +61,13 @@ export interface SubOrderProps {
    * pickup order placed before this milestone existed.
    */
   readonly pickupLocationSnapshot: PickupLocationSnapshot | null;
+  /**
+   * S4-SLOTS. Non-null only where the vendor offered windows at placement —
+   * `null` for a vendor who offers none, and for every order placed before
+   * this milestone existed. Applies to `PICKUP` and `DELIVERY` alike (locked
+   * decision S4).
+   */
+  readonly slot: SlotSnapshot | null;
   readonly totalAmount: Money;
   readonly items: readonly OrderItem[];
   readonly createdAt: Date;
@@ -118,6 +143,8 @@ export class SubOrder {
      * than silently storing a contradiction.
      */
     pickupLocationSnapshot?: PickupLocationSnapshot | null;
+    /** S4-SLOTS. `null` where the vendor offers no windows — never a fabricated default. */
+    slot?: SlotSnapshot | null;
     totalAmount: Money;
     items: readonly OrderItem[];
     now: Date;
@@ -137,6 +164,7 @@ export class SubOrder {
       fulfilmentMode: props.fulfilmentMode,
       vendorShopNameSnapshot: props.vendorShopNameSnapshot,
       pickupLocationSnapshot,
+      slot: props.slot ?? null,
       totalAmount: props.totalAmount,
       items: props.items,
       createdAt: props.now,
@@ -175,6 +203,10 @@ export class SubOrder {
 
   get pickupLocationSnapshot(): PickupLocationSnapshot | null {
     return this.props.pickupLocationSnapshot;
+  }
+
+  get slot(): SlotSnapshot | null {
+    return this.props.slot;
   }
 
   get totalAmount(): Money {

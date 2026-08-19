@@ -2,6 +2,7 @@ import {
   Money,
   toUuid,
   type Clock,
+  type TransactionScope,
   type IdGenerator,
   type Logger,
   type TransactionRunner,
@@ -29,14 +30,21 @@ import {
   EmptyCartError,
   InsufficientStockError,
   OrderAddressNotFoundError,
+  OrderSlotUnavailableError,
   PickupNotSupportedByVendorError,
   ProductNotEligibleForOrderError,
   VendorClosedForDeliveryError,
   VendorNotEligibleForOrderError,
 } from '../../domain/errors/order-errors.js';
 import type { OrderRepository } from '../../domain/repositories/order.repository.js';
+import type { SlotAvailabilityRepository } from '../../../vendor/domain/repositories/delivery-slot.repository.js';
+import type { SlotSelection } from '../../../vendor/domain/services/delivery-slot-policy.js';
 import type { ResolveServiceabilityUseCase } from './resolve-serviceability.use-case.js';
 import type { ResolveBusinessHoursUseCase } from './resolve-business-hours.use-case.js';
+import type {
+  ResolveSlotSelectionUseCase,
+  ResolvedSlot,
+} from './resolve-slot-selection.use-case.js';
 import { toOrderId } from '../../domain/value-objects/order-id.value-object.js';
 import { toOrderItemId } from '../../domain/value-objects/order-item-id.value-object.js';
 import { toSubOrderId } from '../../domain/value-objects/sub-order-id.value-object.js';
@@ -54,6 +62,18 @@ export interface PlaceOrderInput {
    * rather than being silently downgraded (locked decision).
    */
   readonly pickupVendorIds?: readonly VendorId[] | undefined;
+  /**
+   * S4-SLOTS: the fulfilment window the customer chose from each vendor that
+   * offers them, as `[vendorId, { date, startMinute }]` pairs. Applies to
+   * `PICKUP` exactly as to `DELIVERY` (locked decision S4).
+   *
+   * Only the date and the start minute are accepted; the window's end and its
+   * capacity are read from the vendor's own template, so a client cannot widen
+   * a window or inflate its capacity. A vendor that offers windows and is
+   * named here with none fails the whole placement rather than being assigned
+   * one (`OrderSlotRequiredError`).
+   */
+  readonly slotSelections?: readonly (readonly [VendorId, SlotSelection])[] | undefined;
 }
 
 export interface PlaceOrderDeps {
@@ -89,11 +109,34 @@ export interface PlaceOrderDeps {
    * policy caller rather than a policy owner.
    */
   readonly resolveBusinessHoursUseCase: ResolveBusinessHoursUseCase;
+  /**
+   * S4-SLOTS. Resolves the customer's chosen window against the vendor's own
+   * template — the end minute and the capacity come from the template, never
+   * from the request.
+   */
+  readonly resolveSlotSelectionUseCase: ResolveSlotSelectionUseCase;
+  /** S4-SLOTS. The capacity counter itself, re-bound to the placement transaction. */
+  readonly slotAvailabilityRepository: SlotAvailabilityRepository;
   readonly resolveCommissionUseCase: ResolveCommissionUseCase;
   readonly resolveTaxUseCase: ResolveTaxUseCase;
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
   readonly logger: Logger;
+}
+
+/**
+ * Everything the placement transaction needs, in one value.
+ *
+ * A single parameter rather than five: the members always travel together, and
+ * the collection matches what `PlaceOrderUseCase.execute` has already resolved
+ * by the time the transaction opens.
+ */
+interface PlacementPlan {
+  readonly principal: Principal;
+  readonly address: Address;
+  readonly pricedLines: readonly PricedLine[];
+  readonly pickupVendorIds: ReadonlySet<VendorId>;
+  readonly slots: ReadonlyMap<VendorId, ResolvedSlot>;
 }
 
 /** One cart line, resolved against fresh catalogue data (SEC-02) before any transaction opens. */
@@ -220,9 +263,23 @@ export class PlaceOrderUseCase {
     // checked alongside serviceability and still ahead of steps 4d/4e, so a
     // closed vendor costs no tax or commission work either.
     await this.assertOpenForDelivery(vendors, pickupVendorIds);
+    // SDD 4.2 step 4c, the first half of what that step validates (FR-27):
+    // the chosen window is checked here, still ahead of steps 4d/4e, so an
+    // unrecognised slot costs no tax or commission work either. Capacity is
+    // *not* checked here — see `resolveSlotSelectionUseCase`'s own comment.
+    const slots = await this.deps.resolveSlotSelectionUseCase.execute({
+      vendorIds: [...vendors.keys()],
+      selections: new Map(input.slotSelections ?? []),
+    });
     const pricedLines = await this.priceLines(resolvedLines, vendors);
 
-    const order = await this.placeInTransaction(principal, address, pricedLines, pickupVendorIds);
+    const order = await this.placeInTransaction({
+      principal,
+      address,
+      pricedLines,
+      pickupVendorIds,
+      slots,
+    });
 
     await this.clearCartBestEffort(principal.userId);
 
@@ -429,13 +486,19 @@ export class PlaceOrderUseCase {
     return priced;
   }
 
-  /** Steps 10–14: the one atomic transaction — inventory decrement, aggregate insert, outbox insert. */
-  private async placeInTransaction(
-    principal: Principal,
-    address: Address,
-    pricedLines: readonly PricedLine[],
-    pickupVendorIds: ReadonlySet<VendorId>,
-  ): Promise<Order> {
+  /**
+   * Steps 10–14: the one atomic transaction — inventory decrement, slot
+   * capacity consumption, aggregate insert, outbox insert.
+   *
+   * S4-SLOTS: capacity is taken here rather than earlier because this is the
+   * only point at which "taken" and "the order exists" become the same fact.
+   * A failure at any step rolls back every other, so an order is never placed
+   * against a window it did not get, and a window is never consumed by an
+   * order that did not commit (locked decisions S5/S7 — no reservation exists
+   * to expire, because nothing is held before the order is real).
+   */
+  private async placeInTransaction(plan: PlacementPlan): Promise<Order> {
+    const { principal, address, pricedLines, slots } = plan;
     const {
       transactionRunner,
       inventoryRepository,
@@ -446,7 +509,6 @@ export class PlaceOrderUseCase {
     } = this.deps;
     const now = clock.now();
     const orderId = toOrderId(idGenerator.generate());
-    const linesByVendor = groupByVendor(pricedLines);
 
     return transactionRunner.run(async (scope) => {
       const inventory = inventoryRepository.withTransaction(scope);
@@ -457,23 +519,9 @@ export class PlaceOrderUseCase {
         }
       }
 
-      const subOrders = [...linesByVendor.entries()].map(([vendorId, vendorLines]) => {
-        const isPickup = pickupVendorIds.has(vendorId);
-        const fulfilmentMode = isPickup ? FulfilmentMode.PICKUP : FulfilmentMode.DELIVERY;
-        // S4-ADDR: the collection address is captured here, once, and only
-        // for PICKUP. A DELIVERY sub-order gets `null` — it has no collection
-        // point — and nothing ever re-reads this from the vendor profile
-        // afterwards, which is what makes a later shop relocation unable to
-        // rewrite where an existing order said to collect.
-        const pickupLocationSnapshot = isPickup
-          ? (vendorLines[0]?.vendorShopAddress ?? null)
-          : null;
-        return this.buildSubOrder(orderId, vendorId, vendorLines, {
-          now,
-          fulfilmentMode,
-          pickupLocationSnapshot,
-        });
-      });
+      await this.consumeSlots(scope, slots);
+
+      const subOrders = this.buildSubOrders(orderId, plan, now);
       const order = Order.place({
         id: orderId,
         customerId: principal.userId,
@@ -500,6 +548,78 @@ export class PlaceOrderUseCase {
   }
 
   /**
+   * One `SubOrder` per vendor in the cart, each carrying the snapshots that
+   * make it immutable evidence: shop name, pickup location (S4-ADDR) and
+   * fulfilment window (S4-SLOTS).
+   */
+  private buildSubOrders(
+    orderId: ReturnType<typeof toOrderId>,
+    plan: PlacementPlan,
+    now: Date,
+  ): readonly SubOrder[] {
+    const { pricedLines, pickupVendorIds, slots } = plan;
+    return [...groupByVendor(pricedLines).entries()].map(([vendorId, vendorLines]) => {
+      const isPickup = pickupVendorIds.has(vendorId);
+      const fulfilmentMode = isPickup ? FulfilmentMode.PICKUP : FulfilmentMode.DELIVERY;
+      // S4-ADDR: the collection address is captured here, once, and only for
+      // PICKUP. A DELIVERY sub-order gets `null` — it has no collection point
+      // — and nothing ever re-reads this from the vendor profile afterwards,
+      // which is what makes a later shop relocation unable to rewrite where an
+      // existing order said to collect.
+      const pickupLocationSnapshot = isPickup ? (vendorLines[0]?.vendorShopAddress ?? null) : null;
+      return this.buildSubOrder(orderId, vendorId, vendorLines, {
+        now,
+        fulfilmentMode,
+        pickupLocationSnapshot,
+        // S4-SLOTS: the same snapshot reasoning, applied to time. `null` for a
+        // vendor who offers no windows, and never re-read from the vendor's
+        // templates afterwards.
+        slot: slots.get(vendorId) ?? null,
+      });
+    });
+  }
+
+  /**
+   * Takes one unit of capacity per booked sub-order (locked decision S2 — one
+   * sub-order, one unit, never items or weight), inside the placement's own
+   * transaction.
+   *
+   * **Deterministically ordered.** Two concurrent multi-vendor orders touching
+   * the same two windows would otherwise be free to lock them in opposite
+   * orders and deadlock; sorting by the row's own primary key means every
+   * placement in the system acquires these rows in the same sequence.
+   *
+   * Each vendor is consumed independently and a single failure aborts the
+   * whole order — the all-or-nothing rule every other placement precondition
+   * already follows. No other window is tried.
+   */
+  private async consumeSlots(
+    scope: TransactionScope,
+    slots: ReadonlyMap<VendorId, ResolvedSlot>,
+  ): Promise<void> {
+    if (slots.size === 0) return;
+
+    const repository = this.deps.slotAvailabilityRepository.withTransaction(scope);
+    const ordered = [...slots.entries()].sort(
+      ([vendorA, slotA], [vendorB, slotB]) =>
+        vendorA.localeCompare(vendorB) ||
+        slotA.date.localeCompare(slotB.date) ||
+        slotA.startMinute - slotB.startMinute,
+    );
+
+    for (const [vendorId, slot] of ordered) {
+      const consumed = await repository.consume(vendorId, slot);
+      if (!consumed) {
+        this.deps.logger.info(
+          { vendorId, slotDate: slot.date, slotStartMinute: slot.startMinute },
+          'Order refused: the chosen slot filled before placement',
+        );
+        throw new OrderSlotUnavailableError();
+      }
+    }
+  }
+
+  /**
    * `now`/`fulfilmentMode` travel as one object rather than as two more
    * positional arguments — S4-QR's addition of the mode pushed this past the
    * four-parameter budget, and the two are always decided together by the
@@ -513,9 +633,10 @@ export class PlaceOrderUseCase {
       readonly now: Date;
       readonly fulfilmentMode: FulfilmentMode;
       readonly pickupLocationSnapshot: PickupLocationSnapshot | null;
+      readonly slot: ResolvedSlot | null;
     },
   ): SubOrder {
-    const { now, fulfilmentMode, pickupLocationSnapshot } = context;
+    const { now, fulfilmentMode, pickupLocationSnapshot, slot } = context;
     const { idGenerator } = this.deps;
     // `groupByVendor` never produces an empty group — every entry in its
     // map came from pushing at least one line onto it — but `lines[0]` is
@@ -556,6 +677,10 @@ export class PlaceOrderUseCase {
       fulfilmentMode,
       vendorShopNameSnapshot: vendorShopName,
       pickupLocationSnapshot,
+      slot:
+        slot === null
+          ? null
+          : { date: slot.date, startMinute: slot.startMinute, endMinute: slot.endMinute },
       totalAmount: sumMoney(items.map((item) => item.lineAmount)),
       items,
       now,

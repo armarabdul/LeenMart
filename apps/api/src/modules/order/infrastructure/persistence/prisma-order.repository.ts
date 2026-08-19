@@ -4,7 +4,11 @@ import { toProductId, toProductVariantId } from '../../../catalogue/index.js';
 import { toUserId, toVendorId, type UserId } from '../../../identity/index.js';
 import { Order, type OrderAddressSnapshot } from '../../domain/entities/order.entity.js';
 import { OrderItem, type TaxSnapshot } from '../../domain/entities/order-item.entity.js';
-import { SubOrder, type PickupLocationSnapshot } from '../../domain/entities/sub-order.entity.js';
+import {
+  SubOrder,
+  type PickupLocationSnapshot,
+  type SlotSnapshot,
+} from '../../domain/entities/sub-order.entity.js';
 import type { OrderRepository, OrderSummary } from '../../domain/repositories/order.repository.js';
 import { SubOrderConcurrentlyModifiedError } from '../../domain/errors/order-errors.js';
 import { toOrderId, type OrderId } from '../../domain/value-objects/order-id.value-object.js';
@@ -66,6 +70,42 @@ const toPickupLocationSnapshot = (row: {
   };
 };
 
+/**
+ * S4-SLOTS. The same all-or-nothing collapse as the pickup location above, and
+ * for the same reason: the three columns are only ever written as a set, and a
+ * database CHECK enforces that, so any one being null means "no slot".
+ */
+const slotColumns = (
+  slot: SlotSnapshot | null,
+): {
+  slotDate: Date | null;
+  slotStartMinute: number | null;
+  slotEndMinute: number | null;
+} => ({
+  // A `@db.Date` column: the string is already an IST calendar day, and
+  // appending Z keeps it at that day rather than shifting it — the same
+  // conversion `PrismaBusinessHoursRepository` uses for a dated closure.
+  slotDate: slot === null ? null : new Date(slot.date + 'T00:00:00Z'),
+  slotStartMinute: slot === null ? null : slot.startMinute,
+  slotEndMinute: slot === null ? null : slot.endMinute,
+});
+
+const toSlotSnapshot = (row: {
+  slotDate: Date | null;
+  slotStartMinute: number | null;
+  slotEndMinute: number | null;
+}): SlotSnapshot | null => {
+  const { slotDate, slotStartMinute, slotEndMinute } = row;
+  if (slotDate === null || slotStartMinute === null || slotEndMinute === null) {
+    return null;
+  }
+  return {
+    date: slotDate.toISOString().slice(0, 10),
+    startMinute: slotStartMinute,
+    endMinute: slotEndMinute,
+  };
+};
+
 const toTaxSnapshot = (row: {
   taxResolved: boolean;
   taxRateBasisPoints: number | null;
@@ -110,6 +150,7 @@ const toSubOrder = (row: OrderRow['subOrders'][number]): SubOrder =>
     fulfilmentMode: FulfilmentMode.fromName(row.fulfilmentMode),
     vendorShopNameSnapshot: row.vendorShopNameSnapshot,
     pickupLocationSnapshot: toPickupLocationSnapshot(row),
+    slot: toSlotSnapshot(row),
     totalAmount: Money.fromMinor(row.totalAmount, row.totalCurrency as 'INR'),
     items: row.items.map(toOrderItem),
     createdAt: row.createdAt,
@@ -211,6 +252,7 @@ export class PrismaOrderRepository implements OrderRepository {
             fulfilmentMode: subOrder.fulfilmentMode.name,
             vendorShopNameSnapshot: subOrder.vendorShopNameSnapshot,
             ...pickupLocationColumns(subOrder.pickupLocationSnapshot),
+            ...slotColumns(subOrder.slot),
             totalAmount: subOrder.totalAmount.amountMinor,
             totalCurrency: subOrder.totalAmount.currency,
             createdAt: subOrder.createdAt,

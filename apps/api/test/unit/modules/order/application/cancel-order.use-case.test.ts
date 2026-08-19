@@ -8,6 +8,7 @@ import { toSessionId } from '../../../../../src/modules/identity/domain/value-ob
 import { toUserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 import { toVendorId } from '../../../../../src/modules/identity/index.js';
 import type { Principal } from '../../../../../src/modules/identity/application/ports/principal.js';
+import type { SlotAvailabilityRepository } from '../../../../../src/modules/vendor/domain/repositories/delivery-slot.repository.js';
 import type { OutboxWriter } from '../../../../../src/shared/application/ports/outbox-writer.port.js';
 import { CancelOrderUseCase } from '../../../../../src/modules/order/application/use-cases/cancel-order.use-case.js';
 import { Order } from '../../../../../src/modules/order/domain/entities/order.entity.js';
@@ -51,7 +52,9 @@ const address = {
   label: 'Home',
 };
 
-const buildOrder = (status: OrderStatus): Order => {
+const SLOT = { date: '2026-08-18', startMinute: 540, endMinute: 660 };
+
+const buildOrder = (status: OrderStatus, slot: typeof SLOT | null = null): Order => {
   const subOrderId = toSubOrderId(ids.generate());
   const item = OrderItem.reconstitute({
     id: toOrderItemId(ids.generate()),
@@ -80,6 +83,7 @@ const buildOrder = (status: OrderStatus): Order => {
     fulfilmentMode: FulfilmentMode.DELIVERY,
     vendorShopNameSnapshot: 'Test Shop',
     pickupLocationSnapshot: null,
+    slot,
     totalAmount: Money.fromMajor(597),
     items: [item],
     createdAt: NOW,
@@ -138,9 +142,25 @@ const runner = (): TransactionRunner => ({
   run: async (work) => work({} as TransactionScope),
 });
 
+/** S4-SLOTS: records every release so a test can assert one unit came back per booked sub-order. */
+const slotRepo = (): SlotAvailabilityRepository & { release: ReturnType<typeof vi.fn> } => {
+  const release = vi.fn().mockResolvedValue(undefined);
+  const repository = {
+    withTransaction: () => repository,
+    findTemplatesForVendors: vi.fn().mockResolvedValue(new Map()),
+    findBookingsForVendors: vi.fn().mockResolvedValue(new Map()),
+    consume: vi.fn().mockResolvedValue(true),
+    release,
+  };
+  return repository as unknown as SlotAvailabilityRepository & {
+    release: ReturnType<typeof vi.fn>;
+  };
+};
+
 interface BuildOverrides {
   orderRepository?: OrderRepository;
   inventoryRepository?: InventoryRepository;
+  slotAvailabilityRepository?: SlotAvailabilityRepository;
   outboxWriter?: OutboxWriter;
 }
 
@@ -148,6 +168,7 @@ const buildUseCase = (overrides: BuildOverrides = {}): CancelOrderUseCase =>
   new CancelOrderUseCase({
     orderRepository: overrides.orderRepository ?? orderRepo(),
     inventoryRepository: overrides.inventoryRepository ?? inventoryRepo(),
+    slotAvailabilityRepository: overrides.slotAvailabilityRepository ?? slotRepo(),
     outboxWriter: overrides.outboxWriter ?? outboxWriter(),
     transactionRunner: runner(),
     clock,
@@ -226,5 +247,46 @@ describe('CancelOrderUseCase', () => {
     expect(outbox.write).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: 'order.cancelled', aggregateType: 'Order' }),
     );
+  });
+
+  describe('slot capacity release (S4-SLOTS, locked decision S8)', () => {
+    it('returns one unit per booked sub-order, in the same transaction', async () => {
+      const slots = slotRepo();
+      const orderRepository = orderRepo({
+        findByIdAndCustomerId: vi
+          .fn()
+          .mockResolvedValue(buildOrder(OrderStatus.PENDING_PAYMENT, SLOT)),
+      });
+
+      await buildUseCase({ orderRepository, slotAvailabilityRepository: slots }).execute(input);
+
+      expect(slots.release).toHaveBeenCalledTimes(1);
+      expect(slots.release).toHaveBeenCalledWith(vendorId, {
+        date: SLOT.date,
+        startMinute: SLOT.startMinute,
+      });
+    });
+
+    it('releases nothing for a sub-order that booked no window', async () => {
+      const slots = slotRepo();
+
+      await buildUseCase({ slotAvailabilityRepository: slots }).execute(input);
+
+      expect(slots.release).not.toHaveBeenCalled();
+    });
+
+    it('releases nothing when the cancellation is refused', async () => {
+      // The inverse must not run when the forward operation did not — the
+      // same rule the stock restore above already follows.
+      const slots = slotRepo();
+      const orderRepository = orderRepo({
+        findByIdAndCustomerId: vi.fn().mockResolvedValue(buildOrder(OrderStatus.PROCESSING, SLOT)),
+      });
+
+      await expect(
+        buildUseCase({ orderRepository, slotAvailabilityRepository: slots }).execute(input),
+      ).rejects.toThrow(OrderCancellationNotAllowedError);
+      expect(slots.release).not.toHaveBeenCalled();
+    });
   });
 });

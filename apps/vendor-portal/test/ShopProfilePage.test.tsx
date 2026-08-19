@@ -5,9 +5,11 @@ import { createStore } from '@/app/store';
 import { ShopProfilePage } from '@/pages/ShopProfilePage';
 import {
   useGetBusinessHoursQuery,
+  useGetDeliverySlotsQuery,
   useGetServiceablePincodesQuery,
   useGetShopProfileQuery,
   useSetBusinessHoursMutation,
+  useSetDeliverySlotsMutation,
   useSetServiceablePincodesMutation,
   useSetShopAddressMutation,
 } from '@/features/shop-profile/shop-profile.api';
@@ -19,6 +21,8 @@ vi.mock('@/features/shop-profile/shop-profile.api', () => ({
   useSetServiceablePincodesMutation: vi.fn(),
   useGetBusinessHoursQuery: vi.fn(),
   useSetBusinessHoursMutation: vi.fn(),
+  useGetDeliverySlotsQuery: vi.fn(),
+  useSetDeliverySlotsMutation: vi.fn(),
 }));
 
 const mockedUseGetShopProfileQuery = vi.mocked(useGetShopProfileQuery);
@@ -27,6 +31,8 @@ const mockedUseGetServiceablePincodesQuery = vi.mocked(useGetServiceablePincodes
 const mockedUseSetServiceablePincodesMutation = vi.mocked(useSetServiceablePincodesMutation);
 const mockedUseGetBusinessHoursQuery = vi.mocked(useGetBusinessHoursQuery);
 const mockedUseSetBusinessHoursMutation = vi.mocked(useSetBusinessHoursMutation);
+const mockedUseGetDeliverySlotsQuery = vi.mocked(useGetDeliverySlotsQuery);
+const mockedUseSetDeliverySlotsMutation = vi.mocked(useSetDeliverySlotsMutation);
 
 /** S4-HOURS. Defaults keep every earlier expectation in this file unaffected. */
 const setBusinessHours = vi.fn();
@@ -55,6 +61,33 @@ const stubHours = (options: HoursStub = {}): void => {
     setBusinessHours,
     { isLoading: false, error: undefined },
   ] as unknown as ReturnType<typeof useSetBusinessHoursMutation>);
+};
+
+/** S4-SLOTS. Defaults keep every earlier expectation in this file unaffected. */
+const setDeliverySlots = vi.fn();
+interface SlotsStub {
+  configured?: boolean;
+  slots?: { weekday: number; startMinute: number; endMinute: number; capacity: number }[];
+  bookings?: { date: string; startMinute: number; booked: number }[];
+}
+const stubSlots = (options: SlotsStub = {}): void => {
+  setDeliverySlots.mockClear();
+  mockedUseGetDeliverySlotsQuery.mockReturnValue({
+    data: {
+      id: 'vendor-1',
+      configured: options.configured ?? false,
+      slots: options.slots ?? [],
+      bookings: options.bookings ?? [],
+    },
+    isLoading: false,
+    isError: false,
+    error: undefined,
+  } as unknown as ReturnType<typeof useGetDeliverySlotsQuery>);
+  setDeliverySlots.mockReturnValue({ unwrap: () => Promise.resolve({}) });
+  mockedUseSetDeliverySlotsMutation.mockReturnValue([
+    setDeliverySlots,
+    { isLoading: false, error: undefined },
+  ] as unknown as ReturnType<typeof useSetDeliverySlotsMutation>);
 };
 
 /** S4-SERV. Defaults keep every S4-ADDR expectation in this file unaffected. */
@@ -100,6 +133,7 @@ const renderPage = (options: {
   saveRejects?: boolean;
   pincodes?: { configured?: boolean; pincodes?: string[] };
   hours?: HoursStub;
+  slots?: SlotsStub;
 }): { setShopAddress: ReturnType<typeof vi.fn> } => {
   mockedUseGetShopProfileQuery.mockReturnValue({
     data: options.isError === true ? undefined : (options.profile ?? PROFILE),
@@ -121,6 +155,7 @@ const renderPage = (options: {
 
   stubPincodes(options.pincodes);
   stubHours(options.hours);
+  stubSlots(options.slots);
 
   render(
     <Provider store={createStore()}>
@@ -297,7 +332,9 @@ describe('ShopProfilePage — business hours (S4-HOURS)', () => {
   it('states that hours are IST and that pickup is unaffected', () => {
     renderPage({});
 
-    expect(screen.getByText(/All times are IST/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/All times are IST\. A day with no hours is a day you do not deliver/),
+    ).toBeInTheDocument();
     expect(screen.getByText(/Pickup orders are never affected by these hours/)).toBeInTheDocument();
   });
 
@@ -393,5 +430,146 @@ describe('ShopProfilePage — business hours (S4-HOURS)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
 
     expect(screen.getByText(/Closed — no delivery on Monday/)).toBeInTheDocument();
+  });
+});
+
+// A sibling top-level block, for the same function-length reason the
+// business-hours block above is one.
+describe('ShopProfilePage — time slots (S4-SLOTS)', () => {
+  it('tells a vendor with no slots that customers order without choosing one', () => {
+    renderPage({ slots: { configured: false } });
+
+    expect(screen.getByText(/customers order from you without choosing one/i)).toBeInTheDocument();
+  });
+
+  it('does not show that notice once slots are configured', () => {
+    renderPage({
+      slots: {
+        configured: true,
+        slots: [{ weekday: 1, startMinute: 540, endMinute: 660, capacity: 5 }],
+      },
+    });
+
+    expect(
+      screen.queryByText(/customers order from you without choosing one/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it('states that capacity counts orders and that slots cover pickup too', () => {
+    renderPage({});
+
+    expect(screen.getByText(/how many orders you will accept in that window/i)).toBeInTheDocument();
+    expect(screen.getByText(/apply to both delivery and pickup/i)).toBeInTheDocument();
+  });
+
+  it('marks a weekday with no windows as offering none', () => {
+    renderPage({});
+
+    expect(screen.getByText(/No slots offered on Monday/)).toBeInTheDocument();
+  });
+
+  it('prefills a stored window as clock times and a capacity', () => {
+    renderPage({
+      slots: {
+        configured: true,
+        slots: [{ weekday: 1, startMinute: 540, endMinute: 660, capacity: 7 }],
+      },
+    });
+
+    expect(screen.getByLabelText('Monday slot start')).toHaveValue('09:00');
+    expect(screen.getByLabelText('Monday slot end')).toHaveValue('11:00');
+    expect(screen.getByLabelText('Orders')).toHaveValue(7);
+  });
+
+  it('shows how many orders are already booked into a window', () => {
+    renderPage({
+      slots: {
+        configured: true,
+        slots: [{ weekday: 1, startMinute: 540, endMinute: 660, capacity: 7 }],
+        // 2026-08-17 is a Monday.
+        bookings: [{ date: '2026-08-17', startMinute: 540, booked: 3 }],
+      },
+    });
+
+    expect(screen.getByText(/3 booked in the next 7 days/)).toBeInTheDocument();
+  });
+
+  it('submits windows as minutes since midnight, with their capacity', async () => {
+    renderPage({
+      slots: {
+        configured: true,
+        slots: [{ weekday: 2, startMinute: 420, endMinute: 660, capacity: 4 }],
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save slots' }));
+
+    expect(setDeliverySlots).toHaveBeenCalledWith({
+      slots: [{ weekday: 2, startMinute: 420, endMinute: 660, capacity: 4 }],
+    });
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Slots saved.'));
+  });
+
+  it('refuses to submit a window that ends before it starts', () => {
+    renderPage({
+      slots: {
+        configured: true,
+        slots: [{ weekday: 1, startMinute: 540, endMinute: 660, capacity: 4 }],
+      },
+    });
+
+    fireEvent.change(screen.getByLabelText('Monday slot end'), { target: { value: '08:00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save slots' }));
+
+    expect(screen.getByText(/must start before it ends/i)).toBeInTheDocument();
+    expect(setDeliverySlots).not.toHaveBeenCalled();
+  });
+
+  it('refuses to submit a window that accepts no orders', () => {
+    renderPage({
+      slots: {
+        configured: true,
+        slots: [{ weekday: 1, startMinute: 540, endMinute: 660, capacity: 4 }],
+      },
+    });
+
+    // Cleared rather than set to `0`: the input carries `min={1}`, so a typed
+    // zero fails the browser's own constraint validation and the form never
+    // submits at all. An empty box is the path that actually reaches the
+    // component's guard — and is what a vendor does when they mean to retype.
+    fireEvent.change(screen.getByLabelText('Orders'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save slots' }));
+
+    expect(screen.getByText(/must accept at least one order/i)).toBeInTheDocument();
+    expect(setDeliverySlots).not.toHaveBeenCalled();
+  });
+
+  it('lets the browser refuse a zero before the form is ever submitted', () => {
+    // The other half of the same rule: `min={1}` is not decoration, it stops
+    // an impossible capacity reaching the server at all.
+    renderPage({
+      slots: {
+        configured: true,
+        slots: [{ weekday: 1, startMinute: 540, endMinute: 660, capacity: 4 }],
+      },
+    });
+
+    fireEvent.change(screen.getByLabelText('Orders'), { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save slots' }));
+
+    expect(setDeliverySlots).not.toHaveBeenCalled();
+  });
+
+  it('removes a window, returning the day to offering none', () => {
+    renderPage({
+      slots: {
+        configured: true,
+        slots: [{ weekday: 1, startMinute: 540, endMinute: 660, capacity: 4 }],
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+
+    expect(screen.getByText(/No slots offered on Monday/)).toBeInTheDocument();
   });
 });

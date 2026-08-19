@@ -25,6 +25,22 @@ export const orderStatusSchema = z.enum([
 export const fulfilmentModeSchema = z.enum(['DELIVERY', 'PICKUP']);
 
 /**
+ * The fulfilment window chosen from one vendor (S4-SLOTS).
+ *
+ * Only the date and the start minute: the window's end and its capacity are
+ * read from the vendor's own template server-side, so a client cannot widen a
+ * window or inflate a capacity by sending different numbers.
+ */
+export const slotSelectionSchema = z
+  .object({
+    vendorId: uuidSchema,
+    /** `YYYY-MM-DD`, IST. */
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be a YYYY-MM-DD date'),
+    startMinute: z.number().int().min(0).max(1439),
+  })
+  .strict();
+
+/**
  * POST /api/v1/orders. `paymentMethod` is narrowed to the literal `'ONLINE'`
  * — COD is not accepted in S3-3A (approved decision: "verified customer
  * address" is undefined and trust-score infrastructure is Stage 6, so COD
@@ -40,8 +56,64 @@ export const placeOrderRequestSchema = z
     addressId: uuidSchema,
     paymentMethod: z.literal('ONLINE'),
     pickupVendorIds: z.array(uuidSchema).optional(),
+    /**
+     * S4-SLOTS. One entry per vendor that offers windows, `PICKUP` and
+     * `DELIVERY` alike (locked decision S4). A vendor that offers windows and
+     * appears here with none fails the whole placement rather than being
+     * assigned one; a vendor that offers none and appears here anyway is
+     * refused rather than silently ignored.
+     */
+    slotSelections: z.array(slotSelectionSchema).max(50).optional(),
   })
   .strict();
+
+/**
+ * GET /api/v1/orders/slot-availability query (S4-SLOTS).
+ *
+ * `days` is bounded rather than open, per PERF-08's "mandatory limit with a
+ * hard ceiling": the availability view expands templates across dates, so an
+ * unbounded horizon would be an unbounded response.
+ */
+export const slotAvailabilityQuerySchema = z
+  .object({
+    days: z.coerce.number().int().min(1).max(14).optional(),
+  })
+  .strict();
+
+/** One dated window a customer can choose, with how much room is left. */
+export const availableSlotSchema = z.object({
+  /** `YYYY-MM-DD`, IST. */
+  date: z.string(),
+  startMinute: z.number().int(),
+  endMinute: z.number().int(),
+  capacity: z.number().int(),
+  booked: z.number().int(),
+  /**
+   * `capacity - booked`, never below zero. **A snapshot, not a promise**: a
+   * window shown with room may be full by the time the order is placed, which
+   * is why placement re-resolves and consumes atomically rather than trusting
+   * this number.
+   */
+  remaining: z.number().int(),
+});
+
+/**
+ * GET /api/v1/orders/slot-availability (S4-SLOTS).
+ *
+ * Scoped to the caller's own cart — the request names no vendor, so there is
+ * no id to substitute and no way to enumerate another shop's operating
+ * pattern. An empty `slots` array means that vendor offers no windows, and so
+ * needs none chosen; it never means the vendor is unavailable.
+ */
+export const slotAvailabilityResponseSchema = z.object({
+  vendors: z.array(
+    z.object({
+      vendorId: uuidSchema,
+      shopName: z.string().nullable(),
+      slots: z.array(availableSlotSchema),
+    }),
+  ),
+});
 
 /**
  * The order's address snapshot — reuses `addressResponseSchema` (no
@@ -115,6 +187,20 @@ export const subOrderResponseSchema = z.object({
    * collect from.
    */
   pickupLocation: pickupLocationSnapshotSchema.nullable(),
+  /**
+   * S4-SLOTS. The window this sub-order was booked into, read from the
+   * sub-order's own snapshot columns and never re-resolved from the vendor's
+   * templates — so a vendor who later re-times or withdraws a window cannot
+   * change when an existing order says to arrive. `null` where the vendor
+   * offered no windows, and for every order placed before this milestone.
+   */
+  slot: z
+    .object({
+      date: z.string(),
+      startMinute: z.number().int(),
+      endMinute: z.number().int(),
+    })
+    .nullable(),
   totalAmount: moneySchema,
   items: z.array(orderItemResponseSchema),
 });
@@ -235,6 +321,10 @@ export const redeemPickupTokenRequestSchema = z
 export type OrderStatusDto = z.infer<typeof orderStatusSchema>;
 export type FulfilmentModeDto = z.infer<typeof fulfilmentModeSchema>;
 export type PlaceOrderRequest = z.infer<typeof placeOrderRequestSchema>;
+export type SlotSelectionDto = z.infer<typeof slotSelectionSchema>;
+export type SlotAvailabilityQuery = z.infer<typeof slotAvailabilityQuerySchema>;
+export type AvailableSlotDto = z.infer<typeof availableSlotSchema>;
+export type SlotAvailabilityResponse = z.infer<typeof slotAvailabilityResponseSchema>;
 export type OrderAddressSnapshotDto = z.infer<typeof orderAddressSnapshotSchema>;
 export type OrderItemTaxDto = z.infer<typeof orderItemTaxSchema>;
 export type OrderItemResponse = z.infer<typeof orderItemResponseSchema>;

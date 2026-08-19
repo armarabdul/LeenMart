@@ -7,6 +7,7 @@ import type {
   PaymentInitiationResponse,
   PickupTokenResponse,
   PlaceOrderRequest,
+  SlotAvailabilityResponse,
   SubOrderResponse,
 } from '@leen-mart/contracts';
 import { getRequestId } from '../../../../shared/interface/http/middleware/request-context.js';
@@ -24,6 +25,7 @@ import type { CancelOrderUseCase } from '../../application/use-cases/cancel-orde
 import type { ConfirmPaymentUseCase } from '../../application/use-cases/confirm-payment.use-case.js';
 import type { GetOrderUseCase } from '../../application/use-cases/get-order.use-case.js';
 import type { GetOrIssuePickupTokenUseCase } from '../../application/use-cases/get-or-issue-pickup-token.use-case.js';
+import type { GetSlotAvailabilityUseCase } from '../../application/use-cases/get-slot-availability.use-case.js';
 import type { InitiatePaymentUseCase } from '../../application/use-cases/initiate-payment.use-case.js';
 import type { ListOrdersUseCase } from '../../application/use-cases/list-orders.use-case.js';
 import type { PlaceOrderUseCase } from '../../application/use-cases/place-order.use-case.js';
@@ -36,6 +38,7 @@ export interface OrderController {
   readonly initiatePayment: (req: Request, res: Response) => Promise<void>;
   readonly confirmPayment: (req: Request, res: Response) => Promise<void>;
   readonly getPickupToken: (req: Request, res: Response) => Promise<void>;
+  readonly getSlotAvailability: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface OrderControllerDeps {
@@ -46,6 +49,7 @@ export interface OrderControllerDeps {
   readonly initiatePaymentUseCase: InitiatePaymentUseCase;
   readonly confirmPaymentUseCase: ConfirmPaymentUseCase;
   readonly getOrIssuePickupTokenUseCase: GetOrIssuePickupTokenUseCase;
+  readonly getSlotAvailabilityUseCase: GetSlotAvailabilityUseCase;
 }
 
 /**
@@ -87,6 +91,7 @@ const toSubOrderResponse = (subOrder: SubOrder): SubOrderResponse => ({
   // change where an existing order says to collect. `null` for every DELIVERY
   // sub-order by construction.
   pickupLocation: subOrder.pickupLocationSnapshot,
+  slot: subOrder.slot,
   totalAmount: subOrder.totalAmount.toJSON(),
   items: subOrder.items.map(toOrderItemResponse),
 });
@@ -148,9 +153,49 @@ const placeOrderHandler =
       addressId: toAddressId(body.addressId),
       paymentMethod: body.paymentMethod,
       pickupVendorIds: body.pickupVendorIds?.map(toVendorId),
+      // S4-SLOTS. Mapped to pairs here rather than passed as the wire shape:
+      // the use case keys them by vendor, and building the map at the boundary
+      // keeps the application layer free of the request's own array shape.
+      slotSelections: body.slotSelections?.map(
+        (selection) =>
+          [
+            toVendorId(selection.vendorId),
+            { date: selection.date, startMinute: selection.startMinute },
+          ] as const,
+      ),
     });
 
     res.status(201).json({ data: toOrderResponse(order), meta: { requestId: getRequestId() } });
+  };
+
+/**
+ * S4-SLOTS. A read, so no idempotency wrapper and no permission beyond
+ * `PLACE_ORDER` — the caller is asking what they may choose at their own
+ * checkout. Scoped entirely to their own cart: the request names no vendor.
+ */
+const getSlotAvailabilityHandler =
+  (deps: OrderControllerDeps) =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'GET /orders/slot-availability reached without authenticate() middleware - req.principal is unset.',
+      );
+    }
+    const { query } = validatedData<unknown, { days?: number }>(req);
+
+    const vendors = await deps.getSlotAvailabilityUseCase.execute({
+      principal: req.principal,
+      ...(query?.days === undefined ? {} : { days: query.days }),
+    });
+
+    const data: SlotAvailabilityResponse = {
+      vendors: vendors.map((vendor) => ({
+        vendorId: vendor.vendorId,
+        shopName: vendor.shopName,
+        slots: vendor.slots.map((slot) => ({ ...slot })),
+      })),
+    };
+    res.status(200).json({ data, meta: { requestId: getRequestId() } });
   };
 
 const getOrderHandler =
@@ -275,4 +320,5 @@ export const createOrderController = (deps: OrderControllerDeps): OrderControlle
   initiatePayment: initiatePaymentHandler(deps),
   confirmPayment: confirmPaymentHandler(deps),
   getPickupToken: getPickupTokenHandler(deps),
+  getSlotAvailability: getSlotAvailabilityHandler(deps),
 });

@@ -24,6 +24,8 @@ import type { VendorTenantResolver } from '../../shared/interface/http/middlewar
 import { PlaceOrderUseCase } from './application/use-cases/place-order.use-case.js';
 import { ResolveServiceabilityUseCase } from './application/use-cases/resolve-serviceability.use-case.js';
 import { ResolveBusinessHoursUseCase } from './application/use-cases/resolve-business-hours.use-case.js';
+import { ResolveSlotSelectionUseCase } from './application/use-cases/resolve-slot-selection.use-case.js';
+import { GetSlotAvailabilityUseCase } from './application/use-cases/get-slot-availability.use-case.js';
 import { DeliverSubOrderUseCase } from './application/use-cases/deliver-sub-order.use-case.js';
 import { GetOrderUseCase } from './application/use-cases/get-order.use-case.js';
 import { GetOrIssuePickupTokenUseCase } from './application/use-cases/get-or-issue-pickup-token.use-case.js';
@@ -45,6 +47,7 @@ import { PrismaPaymentAttemptRepository } from './infrastructure/persistence/pri
 import { PrismaPickupTokenRepository } from './infrastructure/persistence/prisma-pickup-token.repository.js';
 import { PrismaServiceabilityRepository } from './infrastructure/persistence/prisma-serviceability.repository.js';
 import { PrismaBusinessHoursLookupRepository } from '../vendor/infrastructure/persistence/prisma-business-hours.repository.js';
+import { PrismaSlotAvailabilityRepository } from '../vendor/infrastructure/persistence/prisma-delivery-slot.repository.js';
 import { PrismaVendorOrderRepository } from './infrastructure/persistence/prisma-vendor-order.repository.js';
 import { MockPaymentGateway } from './infrastructure/payment/mock-payment-gateway.js';
 import { createOrderController } from './interface/http/order.controller.js';
@@ -106,6 +109,7 @@ interface OrderRepositories {
   readonly transactionRunner: CheckoutTransactionRunner;
   readonly serviceabilityRepository: PrismaServiceabilityRepository;
   readonly businessHoursLookupRepository: PrismaBusinessHoursLookupRepository;
+  readonly slotAvailabilityRepository: PrismaSlotAvailabilityRepository;
 }
 
 /**
@@ -143,6 +147,10 @@ const buildOrderRepositories = (
     // checkout is the only role besides the owning vendor granted SELECT on
     // the business-hours tables.
     businessHoursLookupRepository: new PrismaBusinessHoursLookupRepository(checkoutPrisma),
+    // S4-SLOTS. Same credential again, and the only one that may move the
+    // `booked` counter — the `inventory` precedent, applied to a second hot
+    // row.
+    slotAvailabilityRepository: new PrismaSlotAvailabilityRepository(checkoutPrisma),
   };
 };
 
@@ -154,6 +162,7 @@ interface OrderUseCases {
   readonly initiatePaymentUseCase: InitiatePaymentUseCase;
   readonly confirmPaymentUseCase: ConfirmPaymentUseCase;
   readonly getOrIssuePickupTokenUseCase: GetOrIssuePickupTokenUseCase;
+  readonly getSlotAvailabilityUseCase: GetSlotAvailabilityUseCase;
 }
 
 interface BuildOrderUseCasesDeps {
@@ -181,6 +190,11 @@ const buildPlaceOrderUseCase = (deps: BuildOrderUseCasesDeps): PlaceOrderUseCase
       businessHoursLookupRepository: deps.repositories.businessHoursLookupRepository,
       clock: deps.clock,
     }),
+    resolveSlotSelectionUseCase: new ResolveSlotSelectionUseCase({
+      slotAvailabilityRepository: deps.repositories.slotAvailabilityRepository,
+      clock: deps.clock,
+    }),
+    slotAvailabilityRepository: deps.repositories.slotAvailabilityRepository,
     resolveCommissionUseCase: deps.resolveCommissionUseCase,
     resolveTaxUseCase: deps.resolveTaxUseCase,
     idGenerator: deps.idGenerator,
@@ -191,13 +205,23 @@ const buildPlaceOrderUseCase = (deps: BuildOrderUseCasesDeps): PlaceOrderUseCase
 /** S4-QR's customer-facing token issuance — its own builder so `buildCheckoutUseCases` stays within this file's function-length budget. */
 const buildPickupTokenUseCase = (
   deps: BuildOrderUseCasesDeps,
-): Pick<OrderUseCases, 'getOrIssuePickupTokenUseCase'> => ({
+): Pick<OrderUseCases, 'getOrIssuePickupTokenUseCase' | 'getSlotAvailabilityUseCase'> => ({
   getOrIssuePickupTokenUseCase: new GetOrIssuePickupTokenUseCase({
     orderRepository: deps.repositories.orderRepository,
     pickupTokenRepository: deps.repositories.pickupTokenRepository,
     pickupTokenSigner: deps.pickupTokenSigner,
     idGenerator: deps.idGenerator,
     logger: deps.logger,
+  }),
+  // S4-SLOTS. Shares this builder rather than adding a fourth, for the same
+  // function-length reason the others were split.
+  getSlotAvailabilityUseCase: new GetSlotAvailabilityUseCase({
+    cartRepository: deps.repositories.cartRepository,
+    cartItemRepository: deps.repositories.cartItemRepository,
+    productVariantRepository: deps.repositories.productVariantRepository,
+    vendorRepository: deps.repositories.vendorRepository,
+    slotAvailabilityRepository: deps.repositories.slotAvailabilityRepository,
+    clock: deps.clock,
   }),
 });
 
@@ -211,6 +235,7 @@ const buildCheckoutUseCases = (
   | 'listOrdersUseCase'
   | 'cancelOrderUseCase'
   | 'getOrIssuePickupTokenUseCase'
+  | 'getSlotAvailabilityUseCase'
 > => {
   const { repositories, clock, logger } = deps;
   const { inventoryRepository, orderRepository, outboxWriter, transactionRunner } = repositories;
@@ -221,6 +246,7 @@ const buildCheckoutUseCases = (
   const cancelOrderUseCase = new CancelOrderUseCase({
     orderRepository,
     inventoryRepository,
+    slotAvailabilityRepository: repositories.slotAvailabilityRepository,
     outboxWriter,
     transactionRunner,
     clock,

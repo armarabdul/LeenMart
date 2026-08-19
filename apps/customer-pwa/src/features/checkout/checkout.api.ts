@@ -3,6 +3,7 @@ import type {
   OrderSummaryResponse,
   PickupTokenResponse,
   PlaceOrderRequest,
+  SlotAvailabilityResponse,
 } from '@leen-mart/contracts';
 import type { SuccessEnvelope } from '@/shared/api/base-api';
 import { baseApi } from '@/shared/api/base-api';
@@ -30,6 +31,19 @@ export const checkoutApi = baseApi.injectEndpoints({
       // The order clears the caller's cart server-side (best-effort) — the
       // cart cache must be treated as stale too, not just `Order`.
       invalidatesTags: ['Cart', 'Order'],
+    }),
+    /**
+     * S4-SLOTS. Scoped to the caller's own cart server-side — no vendor id is
+     * sent. Tagged `Cart` so changing the cart re-fetches what can be chosen:
+     * removing the last item from a vendor removes that vendor's slots too.
+     *
+     * `refetchOnMountOrArgChange` is deliberately left off: the numbers are a
+     * snapshot, never a promise, and placement re-checks capacity atomically.
+     */
+    getSlotAvailability: builder.query<SlotAvailabilityResponse, void>({
+      query: () => '/orders/slot-availability',
+      transformResponse: (response: SuccessEnvelope<SlotAvailabilityResponse>) => response.data,
+      providesTags: ['Cart'],
     }),
     getOrder: builder.query<OrderResponse, string>({
       query: (orderId) => `/orders/${encodeURIComponent(orderId)}`,
@@ -78,4 +92,5 @@ export const {
   useListOrdersQuery,
   useCancelOrderMutation,
   useGetPickupTokenQuery,
+  useGetSlotAvailabilityQuery,
 } = checkoutApi;

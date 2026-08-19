@@ -642,6 +642,20 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     classification: 'SELF_SCOPED',
     why: 'Replaces the caller’s own operating schedule (S4-HOURS); RLS additionally confines every row to app.vendor_id, and isolation is asserted directly in business-hours.test.ts.',
   },
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendors',
+    path: '/me/delivery-slots',
+    classification: 'SELF_SCOPED',
+    why: 'Reads the caller’s own slot offer and its bookings (S4-SLOTS); resolved from the principal, with no vendor id in the request to swap for another owner’s.',
+  },
+  {
+    method: 'PUT',
+    prefix: '/api/v1/vendors',
+    path: '/me/delivery-slots',
+    classification: 'SELF_SCOPED',
+    why: 'Replaces the caller’s own slot offer (S4-SLOTS); RLS additionally confines every row to app.vendor_id, and isolation is asserted directly in delivery-slots.test.ts.',
+  },
 
   // --- admin KYC: /api/v1/admin/kyc ---
   {
@@ -1174,6 +1188,13 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     path: '/',
     classification: 'SELF_SCOPED',
     why: 'Lists only the caller’s own orders (S3-4, "My Orders"); takes no resource id.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/orders',
+    path: '/slot-availability',
+    classification: 'SELF_SCOPED',
+    why: 'Returns the slots offered by the vendors already in the caller’s own cart (S4-SLOTS); the request names no vendor, so there is no id to substitute.',
   },
   {
     method: 'GET',

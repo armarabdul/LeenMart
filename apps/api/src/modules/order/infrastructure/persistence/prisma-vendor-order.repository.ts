@@ -4,7 +4,11 @@ import { toProductId, toProductVariantId } from '../../../catalogue/index.js';
 import { toVendorId } from '../../../identity/index.js';
 import type { OrderAddressSnapshot } from '../../domain/entities/order.entity.js';
 import { OrderItem, type TaxSnapshot } from '../../domain/entities/order-item.entity.js';
-import { SubOrder, type PickupLocationSnapshot } from '../../domain/entities/sub-order.entity.js';
+import {
+  SubOrder,
+  type PickupLocationSnapshot,
+  type SlotSnapshot,
+} from '../../domain/entities/sub-order.entity.js';
 import type {
   VendorOrderRepository,
   VendorSubOrderDetail,
@@ -51,6 +55,23 @@ const toPickupLocationSnapshot = (row: {
     city: pickupLocationCity,
     state: pickupLocationState,
     pincode: pickupLocationPincode,
+  };
+};
+
+/** S4-SLOTS. The same all-or-nothing collapse, enforced by a database CHECK. */
+const toSlotSnapshot = (row: {
+  slotDate: Date | null;
+  slotStartMinute: number | null;
+  slotEndMinute: number | null;
+}): SlotSnapshot | null => {
+  const { slotDate, slotStartMinute, slotEndMinute } = row;
+  if (slotDate === null || slotStartMinute === null || slotEndMinute === null) {
+    return null;
+  }
+  return {
+    date: slotDate.toISOString().slice(0, 10),
+    startMinute: slotStartMinute,
+    endMinute: slotEndMinute,
   };
 };
 
@@ -132,6 +153,7 @@ const toSubOrder = (row: SubOrderDetailRow): SubOrder =>
     fulfilmentMode: FulfilmentMode.fromName(row.fulfilmentMode),
     vendorShopNameSnapshot: row.vendorShopNameSnapshot,
     pickupLocationSnapshot: toPickupLocationSnapshot(row),
+    slot: toSlotSnapshot(row),
     totalAmount: Money.fromMinor(row.totalAmount, row.totalCurrency as 'INR'),
     items: row.items.map(toOrderItem),
     createdAt: row.createdAt,

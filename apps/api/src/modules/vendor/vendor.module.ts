@@ -46,6 +46,11 @@ import {
   SetVendorBusinessHoursUseCase,
 } from './application/use-cases/manage-vendor-business-hours.use-case.js';
 import { PrismaBusinessHoursRepository } from './infrastructure/persistence/prisma-business-hours.repository.js';
+import { PrismaDeliverySlotRepository } from './infrastructure/persistence/prisma-delivery-slot.repository.js';
+import {
+  GetVendorDeliverySlotsUseCase,
+  SetVendorDeliverySlotsUseCase,
+} from './application/use-cases/manage-vendor-delivery-slots.use-case.js';
 import { SetVendorShopNameUseCase } from './application/use-cases/set-vendor-shop-name.use-case.js';
 import { ActivateVendorUseCase } from './application/use-cases/activate-vendor.use-case.js';
 import { createVendorController } from './interface/http/vendor.controller.js';
@@ -332,6 +337,7 @@ const buildShopProfileUseCases = (params: {
   vendorRepository: PrismaVendorRepository;
   serviceablePincodeRepository: PrismaServiceablePincodeRepository;
   businessHoursRepository: PrismaBusinessHoursRepository;
+  deliverySlotRepository: PrismaDeliverySlotRepository;
   transactionRunner: PrismaTransactionRunner;
   clock: Clock;
   logger: Logger;
@@ -344,6 +350,8 @@ const buildShopProfileUseCases = (params: {
   setVendorServiceablePincodesUseCase: SetVendorServiceablePincodesUseCase;
   getVendorBusinessHoursUseCase: GetVendorBusinessHoursUseCase;
   setVendorBusinessHoursUseCase: SetVendorBusinessHoursUseCase;
+  getVendorDeliverySlotsUseCase: GetVendorDeliverySlotsUseCase;
+  setVendorDeliverySlotsUseCase: SetVendorDeliverySlotsUseCase;
 } => ({
   setVendorShopNameUseCase: buildSetVendorShopNameUseCase(params),
   setVendorPickupCapabilityUseCase: buildSetVendorPickupCapabilityUseCase(params),
@@ -355,6 +363,8 @@ const buildShopProfileUseCases = (params: {
   setVendorServiceablePincodesUseCase: new SetVendorServiceablePincodesUseCase(params),
   getVendorBusinessHoursUseCase: new GetVendorBusinessHoursUseCase(params),
   setVendorBusinessHoursUseCase: new SetVendorBusinessHoursUseCase(params),
+  getVendorDeliverySlotsUseCase: new GetVendorDeliverySlotsUseCase(params),
+  setVendorDeliverySlotsUseCase: new SetVendorDeliverySlotsUseCase(params),
 });
 
 interface VendorFacingUseCasesParams {
@@ -382,6 +392,8 @@ interface VendorFacingUseCasesResult {
   setVendorServiceablePincodesUseCase: SetVendorServiceablePincodesUseCase;
   getVendorBusinessHoursUseCase: GetVendorBusinessHoursUseCase;
   setVendorBusinessHoursUseCase: SetVendorBusinessHoursUseCase;
+  getVendorDeliverySlotsUseCase: GetVendorDeliverySlotsUseCase;
+  setVendorDeliverySlotsUseCase: SetVendorDeliverySlotsUseCase;
 }
 
 /**
@@ -444,6 +456,10 @@ const buildVendorFacingUseCases = (
       // `business_hour_closures_vendor_*` confine every statement to the
       // caller's own vendor.
       businessHoursRepository: new PrismaBusinessHoursRepository(prisma),
+      // S4-SLOTS: the tenant-scoped client, so `delivery_slots_vendor_*`
+      // confines every management statement to the caller's own vendor. The
+      // capacity counter is read here too, and written only by checkout.
+      deliverySlotRepository: new PrismaDeliverySlotRepository(prisma),
       transactionRunner,
       clock,
       logger,

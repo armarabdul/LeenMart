@@ -1,5 +1,6 @@
 import { toUuid, type Clock, type Logger, type TransactionRunner } from '@leen-mart/domain-kit';
 import type { InventoryRepository } from '../../../catalogue/index.js';
+import type { SlotAvailabilityRepository } from '../../../vendor/domain/repositories/delivery-slot.repository.js';
 import type { Principal } from '../../../identity/index.js';
 import type { OutboxWriter } from '../../../../shared/application/ports/outbox-writer.port.js';
 import { ORDER_AUDIT_ACTIONS, ORDER_AUDIT_ENTITY_TYPES } from '../../domain/audit-actions.js';
@@ -16,6 +17,8 @@ export interface CancelOrderInput {
 export interface CancelOrderDeps {
   readonly orderRepository: OrderRepository;
   readonly inventoryRepository: InventoryRepository;
+  /** S4-SLOTS. The same credential that consumed the capacity releases it (locked decision S8). */
+  readonly slotAvailabilityRepository: SlotAvailabilityRepository;
   readonly outboxWriter: OutboxWriter;
   readonly transactionRunner: TransactionRunner;
   readonly clock: Clock;
@@ -44,8 +47,15 @@ export class CancelOrderUseCase {
   constructor(private readonly deps: CancelOrderDeps) {}
 
   async execute(input: CancelOrderInput): Promise<Order> {
-    const { orderRepository, inventoryRepository, outboxWriter, transactionRunner, clock, logger } =
-      this.deps;
+    const {
+      orderRepository,
+      inventoryRepository,
+      slotAvailabilityRepository,
+      outboxWriter,
+      transactionRunner,
+      clock,
+      logger,
+    } = this.deps;
     const { principal, orderId } = input;
 
     return transactionRunner.run(async (scope) => {
@@ -63,9 +73,24 @@ export class CancelOrderUseCase {
       await repository.updateStatus(cancelled);
 
       const inventory = inventoryRepository.withTransaction(scope);
+      const slots = slotAvailabilityRepository.withTransaction(scope);
       for (const subOrder of cancelled.subOrders) {
         for (const item of subOrder.items) {
           await inventory.restoreAvailability(item.variantId, item.quantity);
+        }
+        // S4-SLOTS (locked decision S8): one sub-order took one unit, so one
+        // sub-order returns one unit — the exact inverse of placement, in the
+        // same transaction as the status write, exactly as the stock restore
+        // above already is. A sub-order whose vendor offered no windows
+        // carries no snapshot and releases nothing.
+        //
+        // No cutoff and no no-show rule: neither was decided, so neither is
+        // invented here.
+        if (subOrder.slot) {
+          await slots.release(subOrder.vendorId, {
+            date: subOrder.slot.date,
+            startMinute: subOrder.slot.startMinute,
+          });
         }
       }
 

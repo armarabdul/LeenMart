@@ -310,6 +310,69 @@ export class VendorClosedForDeliveryError extends DomainRuleError {
 }
 
 /**
+ * `PlaceOrderUseCase`'s slot precondition (S4-SLOTS, SDD 4.2 step 4c): a
+ * vendor in the cart offers fulfilment windows, and the request named none for
+ * them.
+ *
+ * Refused rather than defaulted. Choosing a window on the customer's behalf
+ * would commit them to a time they never agreed to, and picking "the next
+ * available" would quietly make the busiest vendors look emptier than they
+ * are. This applies to `PICKUP` exactly as to `DELIVERY` (locked decision S4).
+ */
+export class OrderSlotRequiredError extends DomainRuleError {
+  constructor(options: AppErrorOptions = {}) {
+    super(
+      'ORDER_SLOT_REQUIRED',
+      'Choose a time slot for every seller in your cart that offers them.',
+      options,
+    );
+  }
+}
+
+/**
+ * The named window is not one this vendor offers on that date, or it has
+ * already ended (S4-SLOTS).
+ *
+ * Also raised when a slot is named for a vendor who offers none: silently
+ * dropping the selection would tell the customer their choice was honoured
+ * when nothing recorded it.
+ *
+ * The message names no alternative window, and the server never substitutes
+ * one — the same "never silently downgrade" rule
+ * `PickupNotSupportedByVendorError` states, applied to time rather than to
+ * fulfilment mode.
+ */
+export class OrderSlotNotOfferedError extends DomainRuleError {
+  constructor(options: AppErrorOptions = {}) {
+    super(
+      'ORDER_SLOT_INVALID',
+      'That time slot is no longer available. Please choose another.',
+      options,
+    );
+  }
+}
+
+/**
+ * The window filled between the customer seeing it and the order being placed
+ * (S4-SLOTS, SC-13).
+ *
+ * This is the *expected* outcome of the atomic conditional UPDATE losing a
+ * race, not an exceptional one — it is how the design refuses to overbook.
+ * The whole order is refused rather than partially placed or moved to another
+ * window (all-or-nothing, consistent with `AddressNotServiceableError` and
+ * `VendorClosedForDeliveryError`).
+ */
+export class OrderSlotUnavailableError extends DomainRuleError {
+  constructor(options: AppErrorOptions = {}) {
+    super(
+      'ORDER_SLOT_UNAVAILABLE',
+      'That time slot has just been taken. Please choose another.',
+      options,
+    );
+  }
+}
+
+/**
  * `GetOrIssuePickupTokenUseCase`'s own precondition (S4-QR): a pickup
  * credential only means anything once the vendor has actually marked the
  * sub-order `READY_FOR_PICKUP` — issuing one earlier (or after `COMPLETED`)

@@ -9,7 +9,11 @@ import { useGetCartQuery } from '@/features/cart/cart.api';
 import { AddressSelector } from '@/features/address/components/AddressSelector';
 import { FulfilmentModeSelector } from '@/features/checkout/components/FulfilmentModeSelector';
 import { groupCartByVendor } from '@/features/checkout/lib/group-cart-by-vendor';
-import { usePlaceOrderMutation } from '@/features/checkout/checkout.api';
+import { SlotSelector, type SlotChoice } from '@/features/checkout/components/SlotSelector';
+import {
+  useGetSlotAvailabilityQuery,
+  usePlaceOrderMutation,
+} from '@/features/checkout/checkout.api';
 
 /**
  * S4-SERV. Switched on `error.code`, never on the message — the code is the
@@ -27,6 +31,54 @@ const isNotServiceable = (error: unknown): boolean =>
  */
 const isVendorClosed = (error: unknown): boolean =>
   isApiError(error) && error.data.error.code === 'ORDER_VENDOR_CLOSED';
+
+/**
+ * S4-SLOTS. Three codes, one message class: the slot the customer chose can no
+ * longer be honoured, and the action is the same in every case — choose
+ * another. The server never substitutes one, so the customer must.
+ */
+const isSlotProblem = (error: unknown): boolean =>
+  isApiError(error) &&
+  ['ORDER_SLOT_REQUIRED', 'ORDER_SLOT_INVALID', 'ORDER_SLOT_UNAVAILABLE'].includes(
+    error.data.error.code,
+  );
+
+/**
+ * The placement failure, in words the customer can act on.
+ *
+ * Every branch switches on `error.code` — the contract — never on the server's
+ * wording, and each adds the next step the code itself does not state. Anything
+ * unrecognised falls through to the server's own message rather than being
+ * flattened into a generic apology.
+ */
+const PlacementError = ({ error }: { readonly error: unknown }): JSX.Element => {
+  const message = isNotServiceable(error)
+    ? 'One or more sellers in your cart do not deliver to this address. Choose a different delivery address, or remove those items to continue.'
+    : isVendorClosed(error)
+      ? 'One or more sellers in your cart are closed for delivery right now. Try again during their opening hours, or choose pickup where it is offered.'
+      : isSlotProblem(error)
+        ? 'Please choose an available time slot for every seller in your cart. A slot you picked may have just been taken.'
+        : apiErrorMessage(error, 'Your order could not be placed. Please try again.');
+
+  return (
+    <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+      {message}
+    </p>
+  );
+};
+
+/** S3-3A's honest disclosure: there is no real gateway behind this checkout. */
+const TestPaymentNotice = (): JSX.Element => (
+  <section className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
+    <h2 className="text-sm font-semibold uppercase tracking-wide text-amber-800">
+      Payment — TEST / DEMO mode
+    </h2>
+    <p className="text-sm text-amber-800">
+      This is a test environment — no real payment provider is contacted. After you place your order
+      you&apos;ll complete a simulated test payment on the next screen.
+    </p>
+  </section>
+);
 
 const CheckoutSkeleton = (): JSX.Element => (
   <div className="flex flex-col gap-4">
@@ -124,6 +176,9 @@ export const CheckoutPage = (): JSX.Element => {
   // S4-QR: DELIVERY is the default, so this starts empty and only ever holds
   // vendors the customer explicitly chose to pick up from.
   const [pickupVendorIds, setPickupVendorIds] = useState<readonly string[]>([]);
+  // S4-SLOTS. Scoped server-side to this cart's vendors; no vendor id is sent.
+  const { data: slotAvailability } = useGetSlotAvailabilityQuery();
+  const [slotSelections, setSlotSelections] = useState<readonly SlotChoice[]>([]);
   const [placeOrder, { isLoading: isPlacing, error: placeError }] = usePlaceOrderMutation();
   const navigate = useNavigate();
 
@@ -144,6 +199,13 @@ export const CheckoutPage = (): JSX.Element => {
     );
   };
 
+  const selectSlot = (choice: SlotChoice): void => {
+    setSlotSelections((current) => [
+      ...current.filter((existing) => existing.vendorId !== choice.vendorId),
+      choice,
+    ]);
+  };
+
   const handlePlaceOrder = async (): Promise<void> => {
     if (!selectedAddressId) return;
     try {
@@ -154,6 +216,9 @@ export const CheckoutPage = (): JSX.Element => {
         // Omitted entirely when empty, so an all-delivery checkout sends
         // exactly the request shape it did before S4-QR.
         ...(pickupVendorIds.length > 0 ? { pickupVendorIds: [...pickupVendorIds] } : {}),
+        // Omitted entirely when empty, so a cart whose vendors offer no
+        // windows sends exactly the request shape it did before S4-SLOTS.
+        ...(slotSelections.length > 0 ? { slotSelections: [...slotSelections] } : {}),
       }).unwrap();
       void navigate(`/orders/${order.id}`, { replace: true });
     } catch {
@@ -216,30 +281,17 @@ export const CheckoutPage = (): JSX.Element => {
         onToggle={togglePickup}
       />
 
+      <SlotSelector
+        availability={slotAvailability}
+        selections={slotSelections}
+        onSelect={selectSlot}
+      />
+
       <OrderReviewSection items={items} knownVariants={knownVariants} subtotal={subtotal} />
 
-      <section className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-amber-800">
-          Payment — TEST / DEMO mode
-        </h2>
-        <p className="text-sm text-amber-800">
-          This is a test environment — no real payment provider is contacted. After you place your
-          order you&apos;ll complete a simulated test payment on the next screen.
-        </p>
-      </section>
+      <TestPaymentNotice />
 
-      {placeError !== undefined && (
-        <p
-          role="alert"
-          className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700"
-        >
-          {isNotServiceable(placeError)
-            ? 'One or more sellers in your cart do not deliver to this address. Choose a different delivery address, or remove those items to continue.'
-            : isVendorClosed(placeError)
-              ? 'One or more sellers in your cart are closed for delivery right now. Try again during their opening hours, or choose pickup where it is offered.'
-              : apiErrorMessage(placeError, 'Your order could not be placed. Please try again.')}
-        </p>
-      )}
+      {placeError !== undefined && <PlacementError error={placeError} />}
 
       <button
         type="button"

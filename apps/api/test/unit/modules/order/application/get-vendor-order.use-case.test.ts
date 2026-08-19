@@ -78,6 +78,7 @@ const detail: VendorSubOrderDetail = {
     fulfilmentMode: FulfilmentMode.DELIVERY,
     vendorShopNameSnapshot: 'Test Shop',
     pickupLocationSnapshot: null,
+    slot: null,
     totalAmount: Money.fromMajor(199),
     items: [],
     createdAt: NOW,

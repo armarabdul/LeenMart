@@ -4,28 +4,37 @@ import { Provider } from 'react-redux';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type {
   AddressResponse,
+  AvailableSlotDto,
   CartItemResponse,
   CartResponse,
   OrderResponse,
+  SlotAvailabilityResponse,
 } from '@leen-mart/contracts';
 import { createStore } from '@/app/store';
 import { variantsObserved } from '@/shared/state/known-variants.slice';
 import { CheckoutPage } from '@/pages/CheckoutPage';
 import { useGetCartQuery } from '@/features/cart/cart.api';
 import { useAddAddressMutation, useGetAddressesQuery } from '@/features/address/address.api';
-import { usePlaceOrderMutation } from '@/features/checkout/checkout.api';
+import {
+  useGetSlotAvailabilityQuery,
+  usePlaceOrderMutation,
+} from '@/features/checkout/checkout.api';
 
 vi.mock('@/features/cart/cart.api', () => ({ useGetCartQuery: vi.fn() }));
 vi.mock('@/features/address/address.api', () => ({
   useGetAddressesQuery: vi.fn(),
   useAddAddressMutation: vi.fn(),
 }));
-vi.mock('@/features/checkout/checkout.api', () => ({ usePlaceOrderMutation: vi.fn() }));
+vi.mock('@/features/checkout/checkout.api', () => ({
+  usePlaceOrderMutation: vi.fn(),
+  useGetSlotAvailabilityQuery: vi.fn(),
+}));
 
 const mockedUseGetCartQuery = vi.mocked(useGetCartQuery);
 const mockedUseGetAddressesQuery = vi.mocked(useGetAddressesQuery);
 const mockedUseAddAddressMutation = vi.mocked(useAddAddressMutation);
 const mockedUsePlaceOrderMutation = vi.mocked(usePlaceOrderMutation);
+const mockedUseGetSlotAvailabilityQuery = vi.mocked(useGetSlotAvailabilityQuery);
 
 const cartItem = (overrides: Partial<CartItemResponse> = {}): CartItemResponse => ({
   id: 'item-1',
@@ -82,6 +91,19 @@ const renderCheckout = (
     isCartError?: boolean;
     knownVariant?: boolean;
     placeOrderError?: unknown;
+    /** S4-SLOTS. Omitted means no vendor in the cart offers windows. */
+    slotVendors?: {
+      vendorId: string;
+      shopName: string | null;
+      slots: {
+        date: string;
+        startMinute: number;
+        endMinute: number;
+        capacity: number;
+        booked: number;
+        remaining: number;
+      }[];
+    }[];
   } = {},
 ): { placeOrder: ReturnType<typeof vi.fn> } => {
   const placeOrder = vi.fn();
@@ -103,6 +125,14 @@ const renderCheckout = (
     addAddress,
     { isLoading: false, error: undefined },
   ] as unknown as ReturnType<typeof useAddAddressMutation>);
+  // S4-SLOTS. No vendor in these carts offers windows, so the selector renders
+  // nothing and every expectation written before this milestone still holds.
+  mockedUseGetSlotAvailabilityQuery.mockReturnValue({
+    data: { vendors: options.slotVendors ?? [] },
+    isLoading: false,
+    isError: false,
+    error: undefined,
+  } as unknown as ReturnType<typeof useGetSlotAvailabilityQuery>);
   mockedUsePlaceOrderMutation.mockReturnValue([
     placeOrder,
     { isLoading: false, error: options.placeOrderError },
@@ -228,5 +258,123 @@ describe('CheckoutPage', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent('Not enough stock.');
     expect(screen.queryByText('Order confirmation page')).not.toBeInTheDocument();
+  });
+});
+
+describe('CheckoutPage — time slots (S4-SLOTS)', () => {
+  /** A two-hour window; the end follows the start so the rendered label is coherent. */
+  const window = (
+    overrides: Partial<{ startMinute: number; remaining: number }> = {},
+  ): AvailableSlotDto => {
+    const startMinute = overrides.startMinute ?? 540;
+    const remaining = overrides.remaining ?? 5;
+    return {
+      date: '2026-08-18',
+      startMinute,
+      endMinute: startMinute + 120,
+      capacity: 5,
+      booked: 5 - remaining,
+      remaining,
+    };
+  };
+
+  const vendorWithSlots = (
+    slots: AvailableSlotDto[] = [window()],
+  ): SlotAvailabilityResponse['vendors'] => [
+    { vendorId: 'vendor-1', shopName: 'Ratnagiri Orchards', slots },
+  ];
+
+  it('renders nothing when no seller in the cart offers windows', () => {
+    renderCheckout({ id: 'cart-1', items: [cartItem()] }, { knownVariant: true });
+
+    expect(screen.queryByRole('heading', { name: 'Time slot' })).not.toBeInTheDocument();
+  });
+
+  it('lists a seller’s windows with how much room is left', () => {
+    renderCheckout(
+      { id: 'cart-1', items: [cartItem()] },
+      { knownVariant: true, slotVendors: vendorWithSlots() },
+    );
+
+    expect(screen.getByRole('heading', { name: 'Time slot' })).toBeInTheDocument();
+    expect(screen.getByText('Ratnagiri Orchards')).toBeInTheDocument();
+    expect(screen.getByText(/09:00–11:00/)).toBeInTheDocument();
+    expect(screen.getByText('5 left')).toBeInTheDocument();
+  });
+
+  it('shows a full window as full, and refuses to let it be chosen', () => {
+    // Hidden would read as "this seller stopped offering mornings", which is
+    // a different fact entirely.
+    renderCheckout(
+      { id: 'cart-1', items: [cartItem()] },
+      { knownVariant: true, slotVendors: vendorWithSlots([window({ remaining: 0 })]) },
+    );
+
+    expect(screen.getByText('Full')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /09:00–11:00/ })).toBeDisabled();
+  });
+
+  it('sends the chosen window with the order', async () => {
+    const { placeOrder } = renderCheckout(
+      { id: 'cart-1', items: [cartItem()] },
+      { knownVariant: true, slotVendors: vendorWithSlots() },
+    );
+    placeOrder.mockReturnValue({ unwrap: () => Promise.resolve(orderResponse) });
+
+    fireEvent.click(screen.getByRole('radio', { name: /Delivery address|Asha/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /09:00–11:00/ }));
+    fireEvent.click(screen.getByRole('button', { name: /place order/i }));
+
+    await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(1));
+    const call = placeOrder.mock.calls[0]?.[0] as { slotSelections?: unknown };
+    // Only the date and the start minute: the window's end and its capacity
+    // are the server's to read from the vendor's own template.
+    expect(call.slotSelections).toEqual([
+      { vendorId: 'vendor-1', date: '2026-08-18', startMinute: 540 },
+    ]);
+  });
+
+  it('keeps one choice per seller when the customer changes their mind', async () => {
+    const { placeOrder } = renderCheckout(
+      { id: 'cart-1', items: [cartItem()] },
+      {
+        knownVariant: true,
+        slotVendors: vendorWithSlots([window(), window({ startMinute: 960 })]),
+      },
+    );
+    placeOrder.mockReturnValue({ unwrap: () => Promise.resolve(orderResponse) });
+
+    fireEvent.click(screen.getByRole('radio', { name: /Delivery address|Asha/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /09:00–11:00/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /16:00–18:00/ }));
+    fireEvent.click(screen.getByRole('button', { name: /place order/i }));
+
+    await waitFor(() => expect(placeOrder).toHaveBeenCalledTimes(1));
+    const call = placeOrder.mock.calls[0]?.[0] as {
+      slotSelections?: { startMinute: number }[];
+    };
+    expect(call.slotSelections).toHaveLength(1);
+    expect(call.slotSelections?.[0]?.startMinute).toBe(960);
+  });
+
+  it('tells the customer to pick another window when the server refuses theirs', () => {
+    renderCheckout(
+      { id: 'cart-1', items: [cartItem()] },
+      {
+        knownVariant: true,
+        slotVendors: vendorWithSlots(),
+        placeOrderError: {
+          status: 422,
+          data: {
+            error: {
+              code: 'ORDER_SLOT_UNAVAILABLE',
+              message: 'That time slot has just been taken.',
+            },
+          },
+        },
+      },
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/choose an available time slot/i);
   });
 });

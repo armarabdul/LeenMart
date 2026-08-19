@@ -323,8 +323,77 @@ model VendorProfile {
   serviceablePincodes ServiceablePincode[]
   businessHours       BusinessHour[]
   businessHourClosures BusinessHourClosure[]
+  deliverySlots       DeliverySlot[]
+  slotCapacity        SlotCapacity[]
 
   @@map("vendors")
+}
+
+/// One recurring window a vendor offers on one weekday (S4-SLOTS, SDD 5 module
+/// 10 `delivery_slots`; FR-27).
+///
+/// **Times are minutes since local midnight, never timestamps** — the same
+/// reasoning `BusinessHour` records. 0 = 00:00, 1440 = 24:00, IST only
+/// (ASM-01). No overnight windows: a CHECK enforces `start < end`.
+///
+/// Several rows may share a weekday, which is how a vendor offers a morning
+/// and an evening window on the same day. A weekday with no rows is a weekday
+/// the vendor offers no slots — and a vendor with *no rows at all* takes
+/// orders without a slot, the backward-compatible default `ServiceablePincode`
+/// (D7) and `BusinessHour` (H4-A) each already established.
+///
+/// `capacity` is the vendor-declared integer that limits how many sub-orders
+/// fit in the window (locked decision S1). One sub-order consumes exactly one
+/// unit (S2) — never items, weight or volume.
+model DeliverySlot {
+  vendorId String @map("vendor_id") @db.Uuid
+  /// 0 = Sunday … 6 = Saturday, matching `Date.getUTCDay()`.
+  weekday     Int
+  startMinute Int @map("start_minute")
+  endMinute   Int @map("end_minute")
+  capacity    Int
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  vendor VendorProfile @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@id([vendorId, weekday, startMinute])
+  @@index([vendorId, weekday], map: "idx_delivery_slots_vendor_weekday")
+  @@map("delivery_slots")
+}
+
+/// The dated booking counter for one window on one calendar day (S4-SLOTS,
+/// SDD 5 module 10 `slot_capacity`; PERF-09's "precomputed slot rows with a
+/// `booked` counter"; SC-13's hot row).
+///
+/// **Materialised lazily** (locked decision S3): the row is created by the
+/// first booking for that vendor/date/window, not by a generator job. There is
+/// therefore no scheduler, no rolling horizon and no sweep to keep correct.
+///
+/// `capacity` is copied from `DeliverySlot` when the row is first created and
+/// never re-read from it. A vendor lowering tomorrow's capacity must not
+/// retroactively invalidate bookings already taken — the same snapshot
+/// reasoning that governs `SubOrder`'s pickup-location columns.
+///
+/// `booked` moves only through a single atomic conditional UPDATE, guarded by
+/// `CHECK (booked >= 0 AND booked <= capacity)` — so the database itself makes
+/// overbooking impossible regardless of application bugs (S12, SDD 6.1).
+model SlotCapacity {
+  vendorId    String   @map("vendor_id") @db.Uuid
+  slotDate    DateTime @map("slot_date") @db.Date
+  startMinute Int      @map("start_minute")
+  endMinute   Int      @map("end_minute")
+  capacity    Int
+  booked      Int      @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  vendor VendorProfile @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+
+  @@id([vendorId, slotDate, startMinute])
+  @@index([vendorId, slotDate], map: "idx_slot_capacity_vendor_date")
+  @@map("slot_capacity")
 }
 
 /// One interval a vendor trades on one weekday (S4-HOURS, SDD 5 module 3
@@ -1438,6 +1507,16 @@ model SubOrder {
   pickupLocationCity    String? @map("pickup_location_city") @db.VarChar(100)
   pickupLocationState   String? @map("pickup_location_state") @db.VarChar(100)
   pickupLocationPincode String? @map("pickup_location_pincode") @db.VarChar(6)
+
+  /// The chosen fulfilment window, snapshotted (S4-SLOTS). All three columns
+  /// move together or stay null — a vendor who offers no windows still takes
+  /// orders, and every order placed before S4-SLOTS has none. Snapshot columns
+  /// rather than a foreign key to `slot_capacity`: an order is immutable
+  /// evidence of what was agreed (SDD 6.3), so a vendor re-timing or deleting
+  /// a window must not rewrite when an existing order said to arrive.
+  slotDate        DateTime? @map("slot_date") @db.Date
+  slotStartMinute Int?      @map("slot_start_minute")
+  slotEndMinute   Int?      @map("slot_end_minute")
 
   totalAmount            BigInt         @map("total_amount")
   totalCurrency          String         @default("INR") @map("total_currency") @db.VarChar(3)

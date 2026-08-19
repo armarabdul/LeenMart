@@ -77,6 +77,7 @@ export const baseApi = createApi({
     'ShopProfile',
     'ServiceablePincodes',
     'BusinessHours',
+    'DeliverySlots',
   ],
   endpoints: () => ({}),
   refetchOnReconnect: true,
