@@ -147,7 +147,7 @@ describe('tenant context', () => {
   });
 
   describe('model registry', () => {
-    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a, S2-6b, S3-5, S3-8, S4-QR, S4-SERV, S4-HOURS and S4-SLOTS protect', () => {
+    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a, S2-6b, S3-5, S3-8, S4-QR, S4-SERV, S4-HOURS, S4-SLOTS and S6-NOTIFY-INAPP protect', () => {
       expect([...TENANT_SCOPED_MODELS].sort()).toEqual([
         // S4-HOURS: vendor operating schedule and closures, scoped by vendor_id.
         'BusinessHour',
@@ -162,6 +162,10 @@ describe('tenant context', () => {
         // ledger posting already uses.
         'LedgerEntry',
         'LedgerJournal',
+        // S6-NOTIFY-INAPP: user-scoped rather than vendor-scoped, and in the
+        // registry for the same reason as everything else — the boundary is
+        // what sets the GUC its policies read.
+        'Notification',
         // S3-5: the vendor-order surface's own repository reads/writes these
         // through the wrapped `prisma` client, alongside — not instead of —
         // the unwrapped `leenmart_checkout` path the customer-facing order

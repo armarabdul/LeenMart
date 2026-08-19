@@ -6,6 +6,7 @@ import {
   selectIsAuthenticated,
   selectRefreshToken,
 } from '@/shared/api/session.slice';
+import { NotificationBell } from '@/features/notification/components/NotificationBell';
 import { env } from '@/shared/config/env';
 
 const navLinkClassName = ({ isActive }: { isActive: boolean }): string =>
@@ -53,6 +54,7 @@ export const AppLayout = (): JSX.Element => {
               <NavLink to="/pickup/redeem" end className={navLinkClassName}>
                 Redeem pickup
               </NavLink>
+              <NotificationBell />
             </nav>
           )}
           <div className="ml-auto flex items-center gap-3">

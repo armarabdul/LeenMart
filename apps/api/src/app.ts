@@ -12,6 +12,7 @@ import {
 } from './shared/interface/http/middleware/error-handler.js';
 import { createHealthRouter } from './shared/interface/http/routes/health.routes.js';
 import { createCartModule } from './modules/cart/index.js';
+import { createNotificationModule } from './modules/notification/index.js';
 import { createCatalogueModule } from './modules/catalogue/index.js';
 import { createCustomerModule } from './modules/customer/index.js';
 import { createLedgerModule } from './modules/ledger/index.js';
@@ -88,6 +89,21 @@ const mountBusinessModules = (
   // `customerModule` above.
   const cartModule = createCartModule(params);
   app.use('/api/v1/me', cartModule.router);
+
+  // The in-app notification surface (S6-NOTIFY-INAPP, SDD 11): the same
+  // `/api/v1/me` prefix, and one route family for both audiences — a vendor
+  // owner is a `users` row that also sells, so the portal and the PWA differ
+  // only by the `kind` they ask for. Unlike its neighbours this one *does*
+  // establish a tenant context: `notifications` is RLS-scoped by
+  // `app.user_id`, which `tenantContext` is what sets.
+  const notificationModule = createNotificationModule({
+    prisma: params.prisma,
+    accessTokenService: params.accessTokenService,
+    sessionDenylist: params.sessionDenylist,
+    resolveVendorTenant: vendorModule.resolveVendorTenant,
+    clock: params.clock,
+  });
+  app.use('/api/v1/me', notificationModule.router);
 
   // The taxonomy admin surface (SDD 9.4). No tenant context: categories are
   // platform-owned and carry no vendor column for one to scope.

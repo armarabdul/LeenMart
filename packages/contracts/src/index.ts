@@ -13,6 +13,7 @@ export * from './customer/address.contract.js';
 export * from './health/health.contract.js';
 export * from './identity/identity.contract.js';
 export * from './ledger/vendor-earnings.contract.js';
+export * from './notification/notification.contract.js';
 export * from './order/order.contract.js';
 export * from './vendor/kyc.contract.js';
 export * from './vendor/kyc-review.contract.js';

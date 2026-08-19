@@ -4,6 +4,7 @@ import { useAppSelector } from '@/app/hooks';
 import { selectCurrentUser, selectIsAuthenticated } from '@/shared/api/session.slice';
 import { SearchBar } from '@/features/catalogue/components/SearchBar';
 import { useGetCartQuery } from '@/features/cart/cart.api';
+import { NotificationBell } from '@/features/notification/components/NotificationBell';
 import { env } from '@/shared/config/env';
 
 const navLinkClassName = ({ isActive }: { isActive: boolean }): string =>
@@ -67,6 +68,7 @@ export const Header = (): JSX.Element => {
 
         <div className="ml-auto hidden items-center gap-2 sm:flex">
           <CartLink />
+          <NotificationBell />
           {isAuthenticated ? (
             <Link
               to="/account"
@@ -122,6 +124,15 @@ export const Header = (): JSX.Element => {
           >
             Cart
           </NavLink>
+          {isAuthenticated && (
+            <NavLink
+              to="/notifications"
+              className={navLinkClassName}
+              onClick={() => setIsMobileNavOpen(false)}
+            >
+              Notifications
+            </NavLink>
+          )}
           {isAuthenticated ? (
             <NavLink
               to="/account"

@@ -122,6 +122,7 @@ model User {
   // claimed it and the administrator who decided it as separate people.
   kycReviewed   VendorKycSubmission[] @relation("KycReviewer")
   kycDecided    VendorKycSubmission[] @relation("KycDecider")
+  notifications Notification[]
 
   @@map("users")
 }
@@ -404,6 +405,63 @@ model SlotCapacity {
   @@id([vendorId, slotDate, startMinute])
   @@index([vendorId, slotDate], map: "idx_slot_capacity_vendor_date")
   @@map("slot_capacity")
+}
+
+/// Who a notification is for. The same person may hold both inboxes — a
+/// vendor owner is also a `users` row — so this is what keeps the vendor
+/// portal's list distinct from the customer PWA's (S6-NOTIFY-INAPP).
+enum NotificationRecipientKind {
+  CUSTOMER
+  VENDOR
+}
+
+/// SDD 11.2 names four channels; S6-NOTIFY-INAPP implements the one with no
+/// external dependency. Email/SMS/push join this enum when their milestones do.
+enum NotificationChannel {
+  IN_APP
+}
+
+/// One in-app notification (S6-NOTIFY-INAPP, SDD 5 module 16, SDD 11).
+///
+/// Written by the notification worker after the outbox relay hands it an
+/// event; read by the recipient and nobody else. **Range-partitioned by month**
+/// (SDD 6.5), which is why the primary key carries `createdAt`.
+///
+/// **Retention: 1 year** (SDD 22.5, BR-16/NFR-06). The sweeper that enforces it
+/// is a separate infrastructure milestone and deliberately absent here.
+model Notification {
+  id        String   @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  /// The user who receives this. `users` is one of the two shared identity
+  /// anchors a cross-module foreign key may reach (SDD 5.1/6.7).
+  recipientUserId String                    @map("recipient_user_id") @db.Uuid
+  recipientKind   NotificationRecipientKind @map("recipient_kind")
+
+  /// The outbox event this came from — two thirds of SDD 11.3's idempotency
+  /// key `(event_id, channel, recipient)`.
+  outboxEventId String              @map("outbox_event_id") @db.Uuid
+  channel       NotificationChannel @default(IN_APP)
+  eventType     String              @map("event_type") @db.VarChar(150)
+  /// The originating event payload, kept verbatim so a future template can
+  /// re-render from the facts rather than parsing the strings below (FR-59).
+  payload       Json
+  title         String              @db.VarChar(200)
+  body          String              @db.VarChar(500)
+
+  /// Read/unread, and nothing more: null is unread. Opening a list never sets
+  /// this — the user marks a notification read explicitly.
+  readAt DateTime? @map("read_at") @db.Timestamptz(6)
+
+  recipient User @relation(fields: [recipientUserId], references: [id], onDelete: Restrict)
+
+  @@id([id, createdAt])
+  /// The inbox query: this user, unread first, newest first.
+  @@index([recipientUserId, readAt, createdAt(sort: Desc)], map: "idx_notifications_recipient_inbox")
+  /// A partitioned unique index must carry the partition key, so this is a
+  /// backstop rather than SDD 11.3's global guarantee — see the migration.
+  @@unique([outboxEventId, channel, recipientUserId, createdAt], map: "uq_notifications_event_channel_recipient")
+  @@map("notifications")
 }
 
 /// One interval a vendor trades on one weekday (S4-HOURS, SDD 5 module 3

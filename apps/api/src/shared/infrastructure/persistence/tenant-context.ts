@@ -72,20 +72,33 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   // vendor role reads it.
   'DeliverySlot',
   'SlotCapacity',
+  // S6-NOTIFY-INAPP: the first **user**-scoped member. Every other model here
+  // is confined by `app.vendor_id`; `notifications` is confined by
+  // `app.user_id`, which the same boundary already sets.
+  'Notification',
 ]);
 
 /**
- * The tenant *root*: reachable with a user context alone, because that is the
- * only way a vendor can ever come into existence.
+ * Models reachable with a **user** context alone — no resolved vendor.
  *
- * Registration inserts a `vendors` row at a moment when the caller has no
- * vendor, so requiring `app.vendor_id` would make the operation that creates a
- * tenant impossible. The database still constrains it — the INSERT policy
- * demands `user_id = app.user_id`, so a caller can create a vendor for
- * themselves and for nobody else, and the SELECT policy lets them read back
- * only their own row. Every other model needs a resolved vendor.
+ * `VendorProfile` is here because it is the tenant *root*: registration inserts
+ * a `vendors` row at a moment when the caller has no vendor, so requiring
+ * `app.vendor_id` would make the operation that creates a tenant impossible.
+ * The database still constrains it — the INSERT policy demands
+ * `user_id = app.user_id`, so a caller can create a vendor for themselves and
+ * for nobody else.
+ *
+ * `Notification` is here for a different reason, and it is the first of its
+ * kind: it is **user-scoped rather than vendor-scoped**. Its policies compare
+ * `recipient_user_id` against `app.user_id` and never mention `app.vendor_id`,
+ * so a customer — who has no vendor and never will — must still be able to read
+ * their own inbox. Requiring a vendor here would lock every customer out of
+ * their own notifications while protecting nothing.
+ *
+ * Membership is not a relaxation: every model here is still confined by a
+ * policy, and the boundary still refuses a query with no context at all.
  */
-export const USER_ROOTED_MODELS: ReadonlySet<string> = new Set(['VendorProfile']);
+export const USER_ROOTED_MODELS: ReadonlySet<string> = new Set(['VendorProfile', 'Notification']);
 
 /**
  * Who a unit of work is running as, for the purpose of database isolation.

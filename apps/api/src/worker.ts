@@ -1,5 +1,9 @@
 import { type Container, createContainer } from './container.js';
 import { createCatalogueMediaWorker } from './modules/catalogue/index.js';
+import {
+  createNotificationWorker,
+  createNotificationWorkerModule,
+} from './modules/notification/index.js';
 import { createOutboxHandlerRegistry } from './shared/application/ports/outbox-handler.port.js';
 import { OutboxRelay } from './shared/application/services/outbox-relay.js';
 import { PrismaOutboxRelayStore } from './shared/infrastructure/persistence/prisma-outbox-relay-store.js';
@@ -36,7 +40,8 @@ let shuttingDown = false;
 
 const startWorker = async (): Promise<void> => {
   const container = createContainer();
-  const { env, rootLogger, prisma, bullRedis, idGenerator, clock, logger } = container;
+  const { env, rootLogger, prisma, checkoutPrisma, bullRedis, idGenerator, clock, logger } =
+    container;
 
   const worker = createCatalogueMediaWorker({
     prisma,
@@ -54,9 +59,32 @@ const startWorker = async (): Promise<void> => {
   // process would double the deployment surface to run a one-second timer.
   // `outbox_events` is not tenant-scoped, so unlike the media worker this needs
   // no `runWithTenant` — there is no tenant to establish.
+  // S6-NOTIFY-INAPP. The notification half is built here rather than beside the
+  // API, because only the worker may write notifications: the handler that
+  // reaches the relay can enqueue and nothing else, and the orchestrator that
+  // can write sits behind the queue.
+  const notifications = createNotificationWorkerModule({
+    checkoutPrisma,
+    bullRedis,
+    idGenerator,
+    clock,
+    logger,
+  });
+  const notificationWorker = createNotificationWorker({
+    connection: bullRedis,
+    deliverNotificationUseCase: notifications.deliverNotificationUseCase,
+    logger,
+  });
+  await notificationWorker.waitUntilReady();
+
   const relay = new OutboxRelay({
     store: new PrismaOutboxRelayStore(prisma, clock),
-    registry: createOutboxHandlerRegistry([createLoggingOutboxHandler(logger)]),
+    // The logging handler stays: it is how an operator sees the relay working
+    // for the six event types notifications deliberately ignore.
+    registry: createOutboxHandlerRegistry([
+      createLoggingOutboxHandler(logger),
+      notifications.outboxHandler,
+    ]),
     logger,
   });
   const relayRunner = startOutboxRelay(relay, logger);
@@ -66,15 +94,28 @@ const startWorker = async (): Promise<void> => {
     'Leen Mart media worker started',
   );
   rootLogger.info({ intervalMs: OUTBOX_POLL_INTERVAL_MS }, 'Outbox relay started');
+  rootLogger.info({ queue: notificationWorker.name }, 'Notification worker started');
 
-  registerShutdownHandlers(worker, relayRunner, container);
+  registerShutdownHandlers(
+    { media: worker, notifications: notificationWorker, queue: notifications.queue },
+    relayRunner,
+    container,
+  );
   registerCrashHandlers(container);
 };
 
 type MediaWorker = ReturnType<typeof createCatalogueMediaWorker>;
+type NotificationWorker = ReturnType<typeof createNotificationWorker>;
+
+/** Everything this process must drain, in one value rather than three parameters. */
+interface Workers {
+  readonly media: MediaWorker;
+  readonly notifications: NotificationWorker;
+  readonly queue: { close(): Promise<void> };
+}
 
 const registerShutdownHandlers = (
-  worker: MediaWorker,
+  workers: Workers,
   relayRunner: OutboxRelayRunner,
   container: Container,
 ): void => {
@@ -99,8 +140,13 @@ const registerShutdownHandlers = (
         // The relay stops first: it claims rows, and draining it before the
         // connections close is what keeps a shutdown from stranding a batch
         // mid-dispatch.
+        // Order matters: the relay stops first so nothing new is enqueued,
+        // then the queue's producer, then the consumers drain what is already
+        // in flight, and only then are the connections released.
         await relayRunner.close();
-        await worker.close();
+        await workers.queue.close();
+        await workers.media.close();
+        await workers.notifications.close();
         await container.dispose();
         rootLogger.info({}, 'Shutdown complete');
         process.exit(0);

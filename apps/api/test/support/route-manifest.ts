@@ -657,6 +657,36 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     why: 'Replaces the caller’s own slot offer (S4-SLOTS); RLS additionally confines every row to app.vendor_id, and isolation is asserted directly in delivery-slots.test.ts.',
   },
 
+  // --- notifications: /api/v1/me (S6-NOTIFY-INAPP) ---
+  {
+    method: 'GET',
+    prefix: '/api/v1/me',
+    path: '/notifications',
+    classification: 'SELF_SCOPED',
+    why: 'Lists only the caller’s own notifications (S6-NOTIFY-INAPP); resolved from the principal, and RLS additionally confines every row to app.user_id.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/me',
+    path: '/notifications/unread-count',
+    classification: 'SELF_SCOPED',
+    why: 'Counts only the caller’s own unread notifications (S6-NOTIFY-INAPP); takes no resource id.',
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/me',
+    path: '/notifications/read-all',
+    classification: 'SELF_SCOPED',
+    why: 'Marks the caller’s own notifications read (S6-NOTIFY-INAPP); takes no resource id.',
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/me',
+    path: '/notifications/:id/read',
+    classification: 'SELF_SCOPED',
+    why: 'Accepts a notification id, but RLS makes another user’s row invisible, so the write affects zero rows and the response is an honest updated:false rather than a 404 that would confirm the row exists (S6-NOTIFY-INAPP).',
+  },
+
   // --- admin KYC: /api/v1/admin/kyc ---
   {
     method: 'GET',

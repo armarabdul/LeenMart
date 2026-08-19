@@ -518,6 +518,10 @@ describe('database role separation', () => {
         // append-only guarantee is asserted directly in `ledger.test.ts`.
         'ledger_entries',
         'ledger_journals',
+        // S6-NOTIFY-INAPP: the orchestrator's own reach. SELECT for the
+        // idempotency check and INSERT to deliver — never UPDATE, because
+        // read state belongs to the recipient, not the worker.
+        'notifications',
         'order_items',
         'orders',
         'outbox_events',
@@ -570,6 +574,9 @@ describe('database role separation', () => {
         // half of what makes it append-only.
         'ledger_entries',
         'ledger_journals',
+        // S6-NOTIFY-INAPP: user-scoped RLS (`app.user_id`), unlike every
+        // vendor-scoped table around it.
+        'notifications',
         'order_items',
         'orders',
         // S4-QR: a pickup token is the credential that completes a

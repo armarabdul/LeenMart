@@ -78,6 +78,7 @@ export const baseApi = createApi({
     'ServiceablePincodes',
     'BusinessHours',
     'DeliverySlots',
+    'Notification',
   ],
   endpoints: () => ({}),
   refetchOnReconnect: true,

@@ -163,6 +163,11 @@ describe('tenant RLS isolation', () => {
         // what makes it append-only.
         'ledger_entries',
         'ledger_journals',
+        // S6-NOTIFY-INAPP: the first user-scoped table here. Its policies
+        // compare `recipient_user_id` against `app.user_id` rather than
+        // `app.vendor_id`, and it has no admin policy at all — see the
+        // admin-credential assertion below.
+        'notifications',
         'order_items',
         'orders',
         // S4-QR: a pickup token is the credential that completes a sub-order,

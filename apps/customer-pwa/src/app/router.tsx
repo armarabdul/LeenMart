@@ -36,6 +36,9 @@ const OrderConfirmationPage = lazy(() =>
 const OrderHistoryPage = lazy(() =>
   import('@/pages/OrderHistoryPage').then((module) => ({ default: module.OrderHistoryPage })),
 );
+const NotificationsPage = lazy(() =>
+  import('@/pages/NotificationsPage').then((module) => ({ default: module.NotificationsPage })),
+);
 const NotFoundPage = lazy(() =>
   import('@/pages/NotFoundPage').then((module) => ({ default: module.NotFoundPage })),
 );
@@ -83,6 +86,7 @@ const router = createBrowserRouter([
           { path: '/checkout', element: withBoundary(<CheckoutPage />) },
           { path: '/orders', element: withBoundary(<OrderHistoryPage />) },
           { path: '/orders/:id', element: withBoundary(<OrderConfirmationPage />) },
+          { path: '/notifications', element: withBoundary(<NotificationsPage />) },
         ],
       },
     ],
