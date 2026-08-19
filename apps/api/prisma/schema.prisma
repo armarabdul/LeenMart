@@ -48,6 +48,14 @@ model OutboxEvent {
   processedAt   DateTime? @map("processed_at") @db.Timestamptz(6)
   attempts      Int       @default(0)
   lastError     String?   @map("last_error")
+  /// S5-OUTBOX. When this event becomes claimable again. Moved forward by the
+  /// claim itself, so a relay that dies mid-dispatch leaves the event to be
+  /// retried after the backoff rather than immediately.
+  nextAttemptAt DateTime  @default(now()) @map("next_attempt_at") @db.Timestamptz(6)
+  /// S5-OUTBOX. The explicit terminal state, set once the attempt budget is
+  /// spent. Derivable from `attempts`, but an operator asking "what stopped?"
+  /// should be able to query the fact rather than reconstruct it.
+  deadLetteredAt DateTime? @map("dead_lettered_at") @db.Timestamptz(6)
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   // Partial index: the relay only ever scans unprocessed rows, so the index
@@ -59,6 +67,8 @@ model OutboxEvent {
   // absent until now. Partitioning makes it earn its place twice over — it is
   // also the column every partition-pruned scan filters on.
   @@index([createdAt], map: "idx_outbox_created_at")
+  /// S5-OUTBOX. The relay's claim query - due, unfinished, oldest first.
+  @@index([nextAttemptAt, occurredAt], map: "idx_outbox_claimable")
   @@map("outbox_events")
 }
 

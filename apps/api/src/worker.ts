@@ -1,5 +1,14 @@
 import { type Container, createContainer } from './container.js';
 import { createCatalogueMediaWorker } from './modules/catalogue/index.js';
+import { createOutboxHandlerRegistry } from './shared/application/ports/outbox-handler.port.js';
+import { OutboxRelay } from './shared/application/services/outbox-relay.js';
+import { PrismaOutboxRelayStore } from './shared/infrastructure/persistence/prisma-outbox-relay-store.js';
+import { createLoggingOutboxHandler } from './shared/infrastructure/jobs/logging-outbox-handler.js';
+import {
+  OUTBOX_POLL_INTERVAL_MS,
+  startOutboxRelay,
+  type OutboxRelayRunner,
+} from './shared/infrastructure/jobs/outbox-relay-runner.js';
 
 /**
  * The background worker process (S2-6b, SDD 12.2 step 5).
@@ -40,18 +49,35 @@ const startWorker = async (): Promise<void> => {
 
   await worker.waitUntilReady();
 
+  // S5-OUTBOX. The relay lives beside the media worker rather than in its own
+  // process: both are background work on the same container, and a second
+  // process would double the deployment surface to run a one-second timer.
+  // `outbox_events` is not tenant-scoped, so unlike the media worker this needs
+  // no `runWithTenant` — there is no tenant to establish.
+  const relay = new OutboxRelay({
+    store: new PrismaOutboxRelayStore(prisma, clock),
+    registry: createOutboxHandlerRegistry([createLoggingOutboxHandler(logger)]),
+    logger,
+  });
+  const relayRunner = startOutboxRelay(relay, logger);
+
   rootLogger.info(
     { env: env.NODE_ENV, version: env.APP_VERSION, queue: worker.name },
     'Leen Mart media worker started',
   );
+  rootLogger.info({ intervalMs: OUTBOX_POLL_INTERVAL_MS }, 'Outbox relay started');
 
-  registerShutdownHandlers(worker, container);
+  registerShutdownHandlers(worker, relayRunner, container);
   registerCrashHandlers(container);
 };
 
 type MediaWorker = ReturnType<typeof createCatalogueMediaWorker>;
 
-const registerShutdownHandlers = (worker: MediaWorker, container: Container): void => {
+const registerShutdownHandlers = (
+  worker: MediaWorker,
+  relayRunner: OutboxRelayRunner,
+  container: Container,
+): void => {
   const { env, rootLogger } = container;
 
   const shutdown = (signal: string): void => {
@@ -70,6 +96,10 @@ const registerShutdownHandlers = (worker: MediaWorker, container: Container): vo
 
     void (async (): Promise<void> => {
       try {
+        // The relay stops first: it claims rows, and draining it before the
+        // connections close is what keeps a shutdown from stranding a batch
+        // mid-dispatch.
+        await relayRunner.close();
         await worker.close();
         await container.dispose();
         rootLogger.info({}, 'Shutdown complete');
