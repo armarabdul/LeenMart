@@ -18,6 +18,7 @@ import { createCatalogueModule } from './modules/catalogue/index.js';
 import { createCustomerModule } from './modules/customer/index.js';
 import { createLedgerModule } from './modules/ledger/index.js';
 import { createOrderModule, createOrderStreamModule } from './modules/order/index.js';
+import { createReviewModule } from './modules/review/index.js';
 import {
   createIdentityModule,
   type AccessTokenService,
@@ -197,7 +198,40 @@ const mountBusinessModules = (
 
   mountOrderStreamRouter(app, params, vendorModule.resolveVendorTenant);
 
+  mountReviewModule(app, params, vendorModule.resolveVendorTenant);
+
   // Further business modules mount here as they are built.
+};
+
+/**
+ * The review surface (SDD 5 module #14, S8-REVIEWS V1 slice) — a customer's
+ * own reviews at the same `/api/v1/me` prefix as addresses/cart/
+ * notifications, the public approved-only listing nested under
+ * `/api/v1/catalogue/products/:productId` alongside the product-detail
+ * surface, and the moderator queue at its own `/api/v1/admin/reviews`
+ * prefix. Split out of `mountBusinessModules` purely to stay under this
+ * file's max-lines-per-function budget, the same reason
+ * `mountOrderStreamRouter` was.
+ */
+const mountReviewModule = (
+  app: Express,
+  params: {
+    prisma: Container['prisma'];
+    adminPrisma: Container['adminPrisma'];
+    publicPrisma: Container['publicPrisma'];
+    checkoutPrisma: Container['checkoutPrisma'];
+    accessTokenService: AccessTokenService;
+    sessionDenylist: SessionDenylist;
+    idGenerator: Container['idGenerator'];
+    clock: Container['clock'];
+    logger: Container['logger'];
+  },
+  resolveVendorTenant: VendorTenantResolver,
+): void => {
+  const reviewModule = createReviewModule({ ...params, resolveVendorTenant });
+  app.use('/api/v1/me', reviewModule.router);
+  app.use('/api/v1/catalogue', reviewModule.publicRouter);
+  app.use('/api/v1/admin/reviews', reviewModule.adminRouter);
 };
 
 /**

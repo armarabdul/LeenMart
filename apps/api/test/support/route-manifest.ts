@@ -1427,6 +1427,51 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     classification: 'SELF_SCOPED',
     why: 'Streams only the caller’s own resolved vendor’s order-placed alerts — vendor identity comes from tenantContext, never a client-supplied id; cross-vendor isolation is hand-tested in the dedicated vendor-stream integration suite.',
   },
+
+  // --- reviews: /api/v1/me/reviews, /api/v1/catalogue/products/:id/reviews, /api/v1/admin/reviews (S8-REVIEWS) ---
+  {
+    method: 'POST',
+    prefix: '/api/v1/me',
+    path: '/reviews',
+    classification: 'SELF_SCOPED',
+    why: 'Creates under the caller’s own principal; takes no resource id in the URL. `orderItemId` in the body references an existing purchase, but is re-verified server-side against the real order records (customer ownership + DELIVERED/COMPLETED) rather than trusted — this is not the generic URL-path-id shape TENANT_OWNED drives, and is exercised precisely by the dedicated review integration suite instead (cross-user purchase ownership, non-terminal sub-order, duplicate purchase).',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/me',
+    path: '/reviews',
+    classification: 'SELF_SCOPED',
+    why: 'Lists only the caller’s own reviews; takes no resource id.',
+  },
+  // Unauthenticated and tenant-free for the same underlying reason
+  // `/api/v1/catalogue/products/:id` above is PUBLIC: `reviews_public_read`
+  // (20260820180000) is what confines this route to APPROVED rows on
+  // `leenmart_public` — not a tenant boundary this manifest's TENANT_OWNED
+  // matrix would need to drive.
+  {
+    method: 'GET',
+    prefix: '/api/v1/catalogue',
+    path: '/products/:productId/reviews',
+    classification: 'PUBLIC',
+    why: 'Unauthenticated public review listing and rating summary; RLS on leenmart_public (reviews_public_read) confines results to APPROVED rows regardless of tenant.',
+  },
+  // Cross-tenant by definition, mirrors `/admin/products/submissions/:productId/decision`:
+  // every review, from every vendor's products, on the `leenmart_admin`
+  // credential — no tenant context to establish.
+  {
+    method: 'GET',
+    prefix: '/api/v1/admin/reviews',
+    path: '/',
+    classification: 'ADMIN',
+    why: 'Admin/moderator review queue across every customer and vendor (MODERATE_REVIEWS, SDD 8.2).',
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/admin/reviews',
+    path: '/:reviewId/decision',
+    classification: 'ADMIN',
+    why: 'Admin approve/hide decision across every customer’s review (MODERATE_REVIEWS, SDD 8.2).',
+  },
 ];
 
 export const isTenantOwned = (route: ManifestRoute): route is TenantOwnedRoute =>

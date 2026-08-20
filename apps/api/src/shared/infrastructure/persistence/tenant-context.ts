@@ -76,6 +76,10 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   // is confined by `app.vendor_id`; `notifications` is confined by
   // `app.user_id`, which the same boundary already sets.
   'Notification',
+  // S8-REVIEWS: the second user-scoped member, same reasoning as
+  // `Notification` — a customer has no vendor and writes/reads their own
+  // reviews by `app.user_id` alone.
+  'Review',
 ]);
 
 /**
@@ -97,8 +101,17 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
  *
  * Membership is not a relaxation: every model here is still confined by a
  * policy, and the boundary still refuses a query with no context at all.
+ *
+ * `Review` (S8-REVIEWS) joins for the identical reason `Notification` did: a
+ * customer writing and reading their own reviews has no vendor and never
+ * will, so requiring one would lock every customer out while protecting
+ * nothing.
  */
-export const USER_ROOTED_MODELS: ReadonlySet<string> = new Set(['VendorProfile', 'Notification']);
+export const USER_ROOTED_MODELS: ReadonlySet<string> = new Set([
+  'VendorProfile',
+  'Notification',
+  'Review',
+]);
 
 /**
  * Who a unit of work is running as, for the purpose of database isolation.

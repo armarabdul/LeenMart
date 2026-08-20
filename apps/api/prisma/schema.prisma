@@ -123,6 +123,7 @@ model User {
   kycReviewed   VendorKycSubmission[] @relation("KycReviewer")
   kycDecided    VendorKycSubmission[] @relation("KycDecider")
   notifications Notification[]
+  reviews       Review[]
 
   @@map("users")
 }
@@ -1886,4 +1887,68 @@ model LedgerEntry {
   @@index([journalId], map: "idx_ledger_entries_journal")
   @@index([accountCode, vendorId], map: "idx_ledger_entries_account_vendor")
   @@map("ledger_entries")
+}
+
+/// SDD 5's `review` module (#14), V1 slice (S8-REVIEWS): verified-purchase
+/// product reviews only. `review_moderation`/`review_aggregates` as separate
+/// tables and shop-level reviews are the SDD's fuller vision, deliberately
+/// not built here — moderation status is one column, and the rating average
+/// is computed from approved rows rather than stored (see the S8-REVIEWS
+/// use case's own comment).
+enum ReviewModerationStatus {
+  SUBMITTED
+  APPROVED
+  HIDDEN
+}
+
+/// One customer's review of one verified purchase (S8-REVIEWS, SDD module
+/// #14). `productId`/`variantId`/`subOrderId`/`orderItemId` are plain `uuid`
+/// columns with **no database foreign key** — `catalogue` and `order` are
+/// different modules, and SDD 5.1 forbids a FK crossing a module boundary
+/// except to `users`/`vendors` (the two shared identity anchors). Existence
+/// and ownership are verified at the application layer, at write time,
+/// against the real order/sub-order/order-item records — the same
+/// `cart_items.variant_id` precedent (S3-1) for the FK-less columns, and the
+/// same `checkoutPrisma`-backed verified-purchase read S7-SCHED's own
+/// `PrismaPickupReminderCandidateQuery` established for reaching across
+/// modules without one.
+///
+/// `orderItemId` is `@unique` — the strongest available database-level
+/// enforcement of "one review per verified purchase" (locked scope): an
+/// `OrderItem` is already the atomic unit of one product/variant bought once
+/// within one sub-order (`PlaceOrderUseCase` creates exactly one per priced
+/// cart line), so a unique index on it is exactly "one review per purchase,"
+/// not an approximation of it.
+model Review {
+  id         String @id @db.Uuid
+  customerId String @map("customer_id") @db.Uuid
+  productId  String @map("product_id") @db.Uuid
+  variantId  String @map("variant_id") @db.Uuid
+  subOrderId String @map("sub_order_id") @db.Uuid
+  /// The purchase this review is about. Unique — see this model's own doc
+  /// comment for why that is the whole of the "one review per purchase"
+  /// enforcement, not a backstop for it.
+  orderItemId String @unique @map("order_item_id") @db.Uuid
+
+  rating Int
+  /// Plain `body`, not `reviewBody`: `Review` is this column's only owner, so
+  /// the type-name prefix other tables use to disambiguate a shared concept
+  /// (`rejectionReason` vs `rejectionNote` elsewhere) has nothing to
+  /// disambiguate here.
+  body String @db.VarChar(2000)
+
+  status ReviewModerationStatus @default(SUBMITTED)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  customer User @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  /// The public product page: approved reviews for one product, newest first.
+  @@index([productId, status, createdAt(sort: Desc)], map: "idx_reviews_product_status_created")
+  /// "My reviews" / reviewability lookups: this customer's own reviews.
+  @@index([customerId, createdAt(sort: Desc)], map: "idx_reviews_customer_created")
+  /// The moderation queue: everything awaiting a decision, oldest first.
+  @@index([status, createdAt], map: "idx_reviews_status_created")
+  @@map("reviews")
 }

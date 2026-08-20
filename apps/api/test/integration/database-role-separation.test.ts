@@ -394,10 +394,12 @@ describe('database role separation', () => {
       ).rejects.toThrow(/permission denied for table products/);
     });
 
-    it('has no table grants beyond the four SELECT-only ones S2-7 and S3-1 issue', async () => {
+    it('has no table grants beyond the SELECT-only ones its milestones issue', async () => {
       // S2-7 granted `products`/`product_media`; S3-1 (cart eligibility and
-      // availability checks) added `product_variants`/`inventory` — the
-      // same narrow, per-table enumeration, never a schema-wide default.
+      // availability checks) added `product_variants`/`inventory`; S8-REVIEWS
+      // added `reviews`, whose own policy narrows the grant to APPROVED rows
+      // only — the same narrow, per-table enumeration, never a schema-wide
+      // default.
       const rows = await owner.$queryRaw<{ relname: string }[]>`
         SELECT DISTINCT c.relname
         FROM pg_class c
@@ -411,6 +413,7 @@ describe('database role separation', () => {
         'product_media',
         'product_variants',
         'products',
+        'reviews',
       ]);
     });
   });
@@ -659,6 +662,9 @@ describe('database role separation', () => {
         'product_media_variants',
         'product_variants',
         'products',
+        // S8-REVIEWS: user-scoped RLS (`app.user_id`) like `notifications`,
+        // plus a public policy that exposes APPROVED rows only.
+        'reviews',
         // S4-SERV: vendor-declared delivery serviceability, scoped by
         // vendor_id like every other vendor-owned table.
         'serviceable_pincodes',

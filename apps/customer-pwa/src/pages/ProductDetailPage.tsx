@@ -7,6 +7,7 @@ import { AvailabilityBadge } from '@/features/product/components/AvailabilityBad
 import { AddToCartButton } from '@/features/product/components/AddToCartButton';
 import { QuantityControl } from '@/shared/components/QuantityControl';
 import { useAddCartItemMutation } from '@/features/cart/cart.api';
+import { ProductReviews } from '@/features/review/components/ProductReviews';
 import { formatMoney } from '@/shared/lib/format-money';
 import { apiErrorMessage } from '@/shared/api/base-api';
 
@@ -225,6 +226,8 @@ export const ProductDetailPage = (): JSX.Element => {
           <ProductPurchasePanel product={product} />
         </div>
       </div>
+
+      <ProductReviews productId={product.id} />
     </main>
   );
 };

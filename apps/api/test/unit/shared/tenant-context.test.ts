@@ -147,7 +147,7 @@ describe('tenant context', () => {
   });
 
   describe('model registry', () => {
-    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a, S2-6b, S3-5, S3-8, S4-QR, S4-SERV, S4-HOURS, S4-SLOTS and S6-NOTIFY-INAPP protect', () => {
+    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a, S2-6b, S3-5, S3-8, S4-QR, S4-SERV, S4-HOURS, S4-SLOTS, S6-NOTIFY-INAPP and S8-REVIEWS protect', () => {
       expect([...TENANT_SCOPED_MODELS].sort()).toEqual([
         // S4-HOURS: vendor operating schedule and closures, scoped by vendor_id.
         'BusinessHour',
@@ -183,6 +183,10 @@ describe('tenant context', () => {
         // never on the admin credential.
         'ProductMediaVariant',
         'ProductVariant',
+        // S8-REVIEWS: the second user-scoped member, same reasoning as
+        // `Notification` — a customer has no vendor and writes/reads their
+        // own reviews by `app.user_id` alone.
+        'Review',
         // S4-SERV: a vendor's declared delivery pincodes are vendor-owned
         // configuration, scoped by vendor_id like every other tenant table.
         'ServiceablePincode',
@@ -201,6 +205,13 @@ describe('tenant context', () => {
       expect(USER_ROOTED_MODELS.has('VendorProfile')).toBe(true);
       expect(USER_ROOTED_MODELS.has('KycDocument')).toBe(false);
       expect(USER_ROOTED_MODELS.has('VendorKycSubmission')).toBe(false);
+    });
+
+    it('marks Review as user-scoped rather than vendor-scoped (S8-REVIEWS)', () => {
+      // A customer has no vendor and never will, so writing/reading their own
+      // reviews must not require one — the same reasoning `Notification`
+      // already established.
+      expect(USER_ROOTED_MODELS.has('Review')).toBe(true);
     });
 
     it.each(['User', 'RefreshToken', 'Otp', 'MfaSecret', 'MfaChallenge'])(

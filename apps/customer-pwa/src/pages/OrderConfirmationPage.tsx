@@ -8,6 +8,7 @@ import { PickupQrPanel } from '@/features/checkout/components/PickupQrPanel';
 import { useGetOrderQuery } from '@/features/checkout/checkout.api';
 import { TestPaymentPanel } from '@/features/payment/components/TestPaymentPanel';
 import { CancelOrderButton } from '@/features/checkout/components/CancelOrderButton';
+import { WriteReviewControl } from '@/features/review/components/WriteReviewControl';
 
 const OrderSkeleton = (): JSX.Element => (
   <div className="flex flex-col gap-4">
@@ -23,11 +24,19 @@ const OrderSkeleton = (): JSX.Element => (
  * editing a price or a product later must never change what this page shows
  * for an order already placed (SDD 6.3).
  */
-const OrderItemRow = ({ item }: { readonly item: OrderItemResponse }): JSX.Element => (
+const OrderItemRow = ({
+  item,
+  subOrderStatus,
+}: {
+  readonly item: OrderItemResponse;
+  readonly subOrderStatus: string;
+}): JSX.Element => (
   <li className="flex items-center justify-between py-2 text-sm">
     <span className="text-slate-700">
       {item.productName} — {item.variantName}{' '}
       <span className="text-slate-400">× {item.quantity}</span>
+      {/* S8-REVIEWS: only once this item's sub-order has reached DELIVERED/COMPLETED. */}
+      <WriteReviewControl orderItemId={item.id} subOrderStatus={subOrderStatus} />
     </span>
     <span className="text-right">
       <span className="block font-medium text-slate-900">{formatMoney(item.lineAmount)}</span>
@@ -54,7 +63,7 @@ const SubOrderCard = ({
     </div>
     <ul className="divide-y divide-slate-100">
       {subOrder.items.map((item) => (
-        <OrderItemRow key={item.id} item={item} />
+        <OrderItemRow key={item.id} item={item} subOrderStatus={subOrder.status} />
       ))}
     </ul>
     {/* S4-ADDR: where to collect, from the order's own snapshot. Shown for

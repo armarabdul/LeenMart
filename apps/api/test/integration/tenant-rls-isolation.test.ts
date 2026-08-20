@@ -177,6 +177,9 @@ describe('tenant RLS isolation', () => {
         'product_media_variants',
         'product_variants',
         'products',
+        // S8-REVIEWS: user-scoped RLS (`app.user_id`) like `notifications`,
+        // plus a public policy that exposes APPROVED rows only.
+        'reviews',
         // S4-SERV: the vendor's declared delivery pincodes.
         'serviceable_pincodes',
         // S4-SLOTS: the dated capacity counter. Vendor-readable, but only
@@ -527,7 +530,7 @@ describe('tenant RLS isolation', () => {
       expect(await owner.vendorKycSubmission.findUnique({ where: { id: kycA } })).not.toBeNull();
     });
 
-    it('holds exactly the read-only policies its milestones intend, and only three writes', async () => {
+    it('holds exactly the read-only policies its milestones intend, and only four writes', async () => {
       // The narrowness assertion. A later `FOR ALL` added "because the role
       // exists" would fail here rather than quietly widening the boundary.
       // `product_variants`/`inventory`/`product_media`/`product_media_variants`
@@ -559,6 +562,11 @@ describe('tenant RLS isolation', () => {
         { tablename: 'product_variants', cmd: 'SELECT' },
         { tablename: 'products', cmd: 'SELECT' },
         { tablename: 'products', cmd: 'UPDATE' },
+        // S8-REVIEWS: the moderation queue reads every review and the
+        // decision flips `status` — the fourth admin write, alongside
+        // products/vendors/vendor_kyc_submissions.
+        { tablename: 'reviews', cmd: 'SELECT' },
+        { tablename: 'reviews', cmd: 'UPDATE' },
         { tablename: 'serviceable_pincodes', cmd: 'SELECT' },
         { tablename: 'slot_capacity', cmd: 'SELECT' },
         { tablename: 'vendor_kyc_submissions', cmd: 'SELECT' },
