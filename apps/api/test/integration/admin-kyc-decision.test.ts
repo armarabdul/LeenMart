@@ -13,6 +13,7 @@ import { DecideVendorKycUseCase } from '../../src/modules/vendor/application/use
 import { PrismaVendorKycRepository } from '../../src/modules/vendor/infrastructure/persistence/prisma-vendor-kyc.repository.js';
 import { PrismaVendorRepository } from '../../src/modules/vendor/infrastructure/persistence/prisma-vendor.repository.js';
 import { AdminTransactionRunner } from '../../src/shared/infrastructure/persistence/tenant-prisma.js';
+import { PrismaOutboxWriter } from '../../src/shared/infrastructure/persistence/prisma-outbox-writer.js';
 import { toKycId } from '../../src/modules/vendor/domain/value-objects/kyc-id.value-object.js';
 import { toSessionId } from '../../src/modules/identity/domain/value-objects/session-id.value-object.js';
 import type { Principal } from '../../src/modules/identity/application/ports/principal.js';
@@ -449,6 +450,51 @@ describe('admin KYC decisions', () => {
     });
   });
 
+  describe('published events (S6-NOTIFY-LIFECYCLE)', () => {
+    const eventsFor = async (
+      vendorId: string,
+    ): Promise<{ eventType: string; payload: unknown }[]> =>
+      (await db.outboxEvent.findMany({
+        where: { aggregateId: vendorId },
+        select: { eventType: true, payload: true },
+      })) as { eventType: string; payload: unknown }[];
+
+    it('writes exactly one kyc.approved row when an approval commits', async () => {
+      const { token, userId } = await adminFor('RISK_ANALYST');
+      const { kycId, vendorId } = await seedSubmission({ claimedBy: userId });
+
+      await decide(token, kycId, { decision: 'APPROVE' }).expect(200);
+
+      const events = await eventsFor(vendorId);
+      expect(events).toHaveLength(1);
+      expect(events[0]?.eventType).toBe('kyc.approved');
+      expect(events[0]?.payload).toMatchObject({ vendorId });
+    });
+
+    it('writes exactly one kyc.rejected row, carrying no reason and no note', async () => {
+      const { token, userId } = await adminFor('RISK_ANALYST');
+      const { kycId, vendorId } = await seedSubmission({ claimedBy: userId });
+      const note = 'internal reviewer prose about this vendor';
+
+      await decide(token, kycId, { decision: 'REJECT', reason: 'OTHER', note }).expect(200);
+
+      const events = await eventsFor(vendorId);
+      expect(events).toHaveLength(1);
+      expect(events[0]?.eventType).toBe('kyc.rejected');
+      expect(JSON.stringify(events)).not.toContain(note);
+    });
+
+    it('writes no event when the decision is refused', async () => {
+      // Nobody claimed the submission, so the decision never commits.
+      const { token } = await adminFor('RISK_ANALYST');
+      const { kycId, vendorId } = await seedSubmission({});
+
+      await decide(token, kycId, { decision: 'APPROVE' }).expect(422);
+
+      expect(await eventsFor(vendorId)).toHaveLength(0);
+    });
+  });
+
   describe('concurrency', () => {
     it('lets exactly one of two simultaneous claims win', async () => {
       const { kycId } = await seedSubmission();
@@ -577,6 +623,13 @@ describe('admin KYC decisions', () => {
           vendorRepository,
           transactionRunner,
           auditWriter,
+          // S6-NOTIFY-LIFECYCLE: the decision publishes an event in the same
+          // transaction, so the real writer is what these tests exercise.
+          outboxWriter: new PrismaOutboxWriter(
+            container.adminPrisma,
+            container.idGenerator,
+            container.clock,
+          ),
           clock,
           logger: new NullLogger(),
         }),

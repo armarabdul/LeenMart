@@ -17,6 +17,10 @@ import type {
   AuditWriter,
   AuditWriterInput,
 } from '../../../../../src/modules/audit/application/ports/audit-writer.port.js';
+import type {
+  OutboxWriter,
+  OutboxWriterInput,
+} from '../../../../../src/shared/application/ports/outbox-writer.port.js';
 import type { PasswordHasher } from '../../../../../src/modules/identity/application/ports/password-hasher.port.js';
 import type { RefreshTokenHasher } from '../../../../../src/modules/identity/application/ports/refresh-token-hasher.port.js';
 import type { RefreshTokenRepository } from '../../../../../src/modules/identity/application/ports/refresh-token-repository.port.js';
@@ -376,6 +380,26 @@ export class RecordingAuditWriter implements AuditWriter {
 
   record(input: AuditWriterInput): Promise<void> {
     this.entries.push(input);
+    return Promise.resolve();
+  }
+}
+
+/**
+ * Captures what each use case asked to publish to the outbox
+ * (S6-NOTIFY-LIFECYCLE). Same shape and same reasoning as
+ * `RecordingAuditWriter` above: there is no in-memory transaction to bind to,
+ * so `withTransaction` returns the same recorder. The rollback assertions are
+ * driven by the fake transaction runner, not by this.
+ */
+export class RecordingOutboxWriter implements OutboxWriter {
+  readonly events: OutboxWriterInput[] = [];
+
+  withTransaction(): OutboxWriter {
+    return this;
+  }
+
+  write(input: OutboxWriterInput): Promise<void> {
+    this.events.push(input);
     return Promise.resolve();
   }
 }

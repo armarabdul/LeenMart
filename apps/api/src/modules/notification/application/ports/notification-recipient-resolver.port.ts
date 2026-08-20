@@ -27,4 +27,18 @@ export interface NotificationRecipientResolver {
    * resolved is omitted rather than guessed at.
    */
   vendorUserIdsForOrder(orderId: string): Promise<readonly string[]>;
+
+  /**
+   * The owning user of one vendor (S6-NOTIFY-LIFECYCLE).
+   *
+   * Product-moderation and KYC events name their vendor directly — they are
+   * decisions *about* a vendor, so unlike the order events above there is no
+   * missing side to look up, only the vendor's owner to resolve.
+   *
+   * `null` when no owner can be resolved, which the caller treats as "nobody
+   * to notify" rather than substituting anyone else. Same restraint as
+   * `vendorUserIdsForOrder`: a vendor whose owner cannot be resolved is
+   * omitted, never guessed at.
+   */
+  vendorOwnerUserId(vendorId: string): Promise<string | null>;
 }

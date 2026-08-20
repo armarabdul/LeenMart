@@ -17,6 +17,7 @@ import { DecideProductUseCase } from '../../src/modules/catalogue/application/us
 import { PrismaProductRepository } from '../../src/modules/catalogue/infrastructure/persistence/prisma-product.repository.js';
 import { PrismaProductMediaRepository } from '../../src/modules/catalogue/infrastructure/persistence/prisma-product-media.repository.js';
 import { AdminTransactionRunner } from '../../src/shared/infrastructure/persistence/tenant-prisma.js';
+import { PrismaOutboxWriter } from '../../src/shared/infrastructure/persistence/prisma-outbox-writer.js';
 import { toProductId } from '../../src/modules/catalogue/domain/value-objects/product-id.value-object.js';
 import { toSessionId } from '../../src/modules/identity/domain/value-objects/session-id.value-object.js';
 import { toUserId } from '../../src/modules/identity/domain/value-objects/user-id.value-object.js';
@@ -321,6 +322,60 @@ describe('product moderation', () => {
         expect(body.data.rejectionReason).toBeNull();
         expect(body.data.rejectionNote).toBeNull();
       });
+    });
+  });
+
+  describe('published events (S6-NOTIFY-LIFECYCLE)', () => {
+    const eventsFor = async (
+      productId: string,
+    ): Promise<{ eventType: string; payload: unknown }[]> =>
+      (await db.outboxEvent.findMany({
+        where: { aggregateId: productId },
+        select: { eventType: true, payload: true },
+      })) as { eventType: string; payload: unknown }[];
+
+    it('writes exactly one product.approved row when an approval commits', async () => {
+      const productId = await seedProduct(vendor);
+      await submit(vendor, productId).expect(200);
+      await seedReadyMedia(productId, vendor);
+      const admin = await adminFor('CATALOGUE_MODERATOR');
+
+      await decide(admin.token, productId, { decision: 'APPROVE' }).expect(200);
+
+      const events = await eventsFor(productId);
+      expect(events).toHaveLength(1);
+      expect(events[0]?.eventType).toBe('product.approved');
+      expect(events[0]?.payload).toMatchObject({ productId, vendorId: vendor.vendorId });
+    });
+
+    it('writes exactly one product.rejected row, carrying no reason and no note', async () => {
+      const productId = await seedProduct(vendor);
+      await submit(vendor, productId).expect(200);
+      const admin = await adminFor('CATALOGUE_MODERATOR');
+      const note = 'internal reviewer prose about this vendor';
+
+      await decide(admin.token, productId, {
+        decision: 'REJECT',
+        reason: 'POLICY_VIOLATION',
+        note,
+      }).expect(200);
+
+      const events = await eventsFor(productId);
+      expect(events).toHaveLength(1);
+      expect(events[0]?.eventType).toBe('product.rejected');
+      const serialised = JSON.stringify(events);
+      expect(serialised).not.toContain(note);
+      expect(serialised).not.toContain('POLICY_VIOLATION');
+    });
+
+    it('writes no event when the decision is refused', async () => {
+      // A product outside PENDING_REVIEW never reaches the outbox write.
+      const productId = await seedProduct(vendor);
+      const admin = await adminFor('CATALOGUE_MODERATOR');
+
+      await decide(admin.token, productId, { decision: 'APPROVE' }).expect(422);
+
+      expect(await eventsFor(productId)).toHaveLength(0);
     });
   });
 
@@ -676,6 +731,14 @@ describe('product moderation', () => {
           productMediaRepository,
           transactionRunner,
           auditWriter: new FailingAuditWriter(),
+          // Real writer: the point of this test is that a failing audit write
+          // rolls the whole transaction back, and S6-NOTIFY-LIFECYCLE's event
+          // must roll back with it.
+          outboxWriter: new PrismaOutboxWriter(
+            harness.container.adminPrisma,
+            harness.container.idGenerator,
+            harness.container.clock,
+          ),
           clock,
           logger: new NullLogger(),
         });

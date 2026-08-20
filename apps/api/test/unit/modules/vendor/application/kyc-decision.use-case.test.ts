@@ -24,7 +24,11 @@ import { toSessionId } from '../../../../../src/modules/identity/domain/value-ob
 import { toUserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 import { toVendorId } from '../../../../../src/modules/identity/domain/value-objects/vendor-id.value-object.js';
 import type { Principal } from '../../../../../src/modules/identity/application/ports/principal.js';
-import { FailingAuditWriter, RecordingAuditWriter } from '../../identity/application/fakes.js';
+import {
+  FailingAuditWriter,
+  RecordingAuditWriter,
+  RecordingOutboxWriter,
+} from '../../identity/application/fakes.js';
 
 const ids = new UuidV7Generator();
 const NOW = new Date('2026-02-01T00:00:00.000Z');
@@ -293,9 +297,95 @@ describe('DecideVendorKycUseCase', () => {
       vendorRepository: vendor,
       transactionRunner: runner(onRollback),
       auditWriter,
+      outboxWriter: new RecordingOutboxWriter(),
       clock,
       logger: new NullLogger(),
     });
+
+  describe('published events (S6-NOTIFY-LIFECYCLE)', () => {
+    /** Built directly rather than through `build`, so the recorder is reachable for assertions. */
+    const withOutbox = (
+      outboxWriter: RecordingOutboxWriter,
+      auditWriter: AuditWriter = new RecordingAuditWriter(),
+      onRollback?: () => void,
+    ): DecideVendorKycUseCase =>
+      new DecideVendorKycUseCase({
+        vendorKycRepository: kycRepo({ findById: vi.fn().mockResolvedValue(claimed()) }),
+        vendorRepository: vendorRepo(),
+        transactionRunner: runner(onRollback),
+        auditWriter,
+        outboxWriter,
+        clock,
+        logger: new NullLogger(),
+      });
+    it('publishes exactly one kyc.approved on approval', async () => {
+      const outbox = new RecordingOutboxWriter();
+
+      await withOutbox(outbox).execute({
+        principal: principalOf(),
+        kycId,
+        command: { decision: 'APPROVE' },
+      });
+
+      expect(outbox.events).toHaveLength(1);
+      expect(outbox.events[0]).toMatchObject({
+        eventType: 'kyc.approved',
+        aggregateType: 'VendorProfile',
+      });
+    });
+
+    it('publishes exactly one kyc.rejected on rejection', async () => {
+      const outbox = new RecordingOutboxWriter();
+
+      await withOutbox(outbox).execute({
+        principal: principalOf(),
+        kycId,
+        command: { decision: 'REJECT', reason: 'OTHER', note: 'reviewer prose' },
+      });
+
+      expect(outbox.events).toHaveLength(1);
+      expect(outbox.events[0]?.eventType).toBe('kyc.rejected');
+    });
+
+    it('names the vendor, which is the only identity the consumer needs', async () => {
+      const outbox = new RecordingOutboxWriter();
+
+      await withOutbox(outbox).execute({
+        principal: principalOf(),
+        kycId,
+        command: { decision: 'APPROVE' },
+      });
+
+      expect(outbox.events[0]?.payload).toHaveProperty('vendorId');
+    });
+
+    it('never puts the rejection reason or the reviewer’s note in the payload', async () => {
+      const outbox = new RecordingOutboxWriter();
+      const note = 'internal reviewer prose about this vendor';
+
+      await withOutbox(outbox).execute({
+        principal: principalOf(),
+        kycId,
+        command: { decision: 'REJECT', reason: 'OTHER', note },
+      });
+
+      expect(JSON.stringify(outbox.events)).not.toContain(note);
+    });
+
+    it('publishes nothing when the transaction rolls back', async () => {
+      const outbox = new RecordingOutboxWriter();
+      let rolledBack = false;
+
+      await expect(
+        withOutbox(outbox, new FailingAuditWriter(), () => {
+          rolledBack = true;
+        }).execute({ principal: principalOf(), kycId, command: { decision: 'APPROVE' } }),
+      ).rejects.toThrow();
+
+      expect(rolledBack).toBe(true);
+      expect(outbox.events).toHaveLength(0);
+    });
+  });
 
   describe('approval', () => {
     it('records the deciding administrator and the time', async () => {

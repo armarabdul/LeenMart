@@ -25,8 +25,12 @@ const repo = (existing: readonly string[] = [], missing: readonly string[] = [])
   }),
 });
 
-const resolver = (vendorUserIds: readonly string[] = []): NotificationRecipientResolver => ({
+const resolver = (
+  vendorUserIds: readonly string[] = [],
+  ownerUserId: string | null = null,
+): NotificationRecipientResolver => ({
   vendorUserIdsForOrder: vi.fn().mockResolvedValue(vendorUserIds),
+  vendorOwnerUserId: vi.fn().mockResolvedValue(ownerUserId),
 });
 
 const useCase = (
@@ -146,6 +150,122 @@ describe('DeliverNotificationUseCase (S6-NOTIFY-INAPP)', () => {
 
       expect(result).toMatchObject({ created: 0, recipients: 0 });
       expect(repository.createIfAbsent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('lifecycle mappings (S6-NOTIFY-LIFECYCLE)', () => {
+    const VENDOR_ID = '01a06666-6666-7666-8666-666666666666';
+    const OWNER_USER = '01a07777-7777-7777-8777-777777777777';
+
+    const lifecycleEvent = (
+      eventType: string,
+      payload: Record<string, unknown>,
+    ): Parameters<DeliverNotificationUseCase['execute']>[0] => ({
+      outboxEventId: OUTBOX_EVENT_ID,
+      eventType,
+      payload,
+    });
+
+    it.each(['product.approved', 'product.rejected'] as const)(
+      'resolves %s to the owner of the vendor named in the payload',
+      async (eventType) => {
+        const repository = repo();
+        const recipients = resolver([], OWNER_USER);
+
+        const result = await useCase(repository, recipients).execute(
+          lifecycleEvent(eventType, { productId: ORDER_ID, vendorId: VENDOR_ID }),
+        );
+
+        expect(recipients.vendorOwnerUserId).toHaveBeenCalledWith(VENDOR_ID);
+        expect(result).toMatchObject({ created: 1, recipients: 1 });
+        expect(repository.createIfAbsent).toHaveBeenCalledWith(
+          expect.objectContaining({ recipientUserId: OWNER_USER, recipientKind: 'VENDOR' }),
+        );
+      },
+    );
+
+    it.each(['kyc.approved', 'kyc.rejected'] as const)(
+      'resolves %s to the vendor owner without needing any subject reference',
+      async (eventType) => {
+        const repository = repo();
+        const recipients = resolver([], OWNER_USER);
+
+        const result = await useCase(repository, recipients).execute(
+          lifecycleEvent(eventType, { vendorId: VENDOR_ID, kycId: ORDER_ID }),
+        );
+
+        expect(result).toMatchObject({ created: 1, recipients: 1 });
+        expect(repository.createIfAbsent).toHaveBeenCalledWith(
+          expect.objectContaining({ recipientKind: 'VENDOR' }),
+        );
+      },
+    );
+
+    it('never asks the order resolver for a lifecycle event', async () => {
+      const recipients = resolver([], OWNER_USER);
+
+      await useCase(repo(), recipients).execute(
+        lifecycleEvent('product.approved', { productId: ORDER_ID, vendorId: VENDOR_ID }),
+      );
+
+      expect(recipients.vendorUserIdsForOrder).not.toHaveBeenCalled();
+    });
+
+    it('creates nothing when the vendor owner cannot be resolved — never substitutes anyone', async () => {
+      // There is no second candidate who should read another vendor's
+      // moderation outcome.
+      const repository = repo();
+
+      const result = await useCase(repository, resolver([], null)).execute(
+        lifecycleEvent('product.rejected', { productId: ORDER_ID, vendorId: VENDOR_ID }),
+      );
+
+      expect(result).toMatchObject({ created: 0, recipients: 0 });
+      expect(repository.createIfAbsent).not.toHaveBeenCalled();
+    });
+
+    it('creates nothing when a lifecycle event carries no vendorId', async () => {
+      const repository = repo();
+      const recipients = resolver([], OWNER_USER);
+
+      const result = await useCase(repository, recipients).execute(
+        lifecycleEvent('kyc.approved', { kycId: ORDER_ID }),
+      );
+
+      expect(result).toMatchObject({ created: 0, recipients: 0 });
+      expect(recipients.vendorOwnerUserId).not.toHaveBeenCalled();
+      expect(repository.createIfAbsent).not.toHaveBeenCalled();
+    });
+
+    it('creates nothing when a product event does not name its product', async () => {
+      const repository = repo();
+
+      const result = await useCase(repository, resolver([], OWNER_USER)).execute(
+        lifecycleEvent('product.approved', { vendorId: VENDOR_ID }),
+      );
+
+      expect(result).toMatchObject({ created: 0 });
+      expect(repository.createIfAbsent).not.toHaveBeenCalled();
+    });
+
+    it('stores no rejection reason even when the payload somehow carries one', async () => {
+      // Defence in depth: the producer does not put a reason in the payload,
+      // and the content function would not read one if it did.
+      const repository = repo();
+
+      await useCase(repository, resolver([], OWNER_USER)).execute(
+        lifecycleEvent('product.rejected', {
+          productId: ORDER_ID,
+          vendorId: VENDOR_ID,
+          rejectionReason: 'PROHIBITED_ITEM',
+        }),
+      );
+
+      const written = repository.createIfAbsent.mock.calls[0]?.[0] as {
+        title: string;
+        body: string;
+      };
+      expect(`${written.title} ${written.body}`).not.toContain('PROHIBITED_ITEM');
     });
   });
 

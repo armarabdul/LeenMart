@@ -33,16 +33,43 @@ const NOT_NOTIFIED = [
 const ORDER_ID = '01a01234-5678-7abc-9def-0123456789ab';
 
 describe('notification event mapping (S6-NOTIFY-INAPP)', () => {
-  it('notifies on exactly four event types', () => {
+  it('notifies on exactly eight event types — S6-NOTIFY-INAPP’s four plus S6-NOTIFY-LIFECYCLE’s four', () => {
     // The map is closed on purpose: an event type without a row in SDD 11.2
     // has no requirement behind it, and notifying anyway would be inventing
     // one.
     expect(Object.keys(NOTIFIED_EVENT_TYPES).sort()).toEqual([
+      'kyc.approved',
+      'kyc.rejected',
       'order.cancelled',
       'order.confirmed',
       'order.payment_failed',
       'order.placed',
+      'product.approved',
+      'product.rejected',
     ]);
+  });
+
+  it.each(['product.approved', 'product.rejected', 'kyc.approved', 'kyc.rejected'] as const)(
+    'accepts %s and files it in the VENDOR inbox',
+    (eventType) => {
+      // SDD 11.2's "Product approved/rejected" and "KYC status" rows both
+      // describe an outcome the seller is told about.
+      expect(isNotifiedEventType(eventType)).toBe(true);
+      expect(recipientKindFor(eventType)).toBe('VENDOR');
+    },
+  );
+
+  it.each([
+    'product.submitted_for_review',
+    'kyc.submitted',
+    'kyc.review.started',
+    'vendor.activated',
+    'catalogue.product.approved',
+    'vendor.kyc.approved',
+  ])('still rejects %s — outside the locked set', (eventType) => {
+    // The last two matter: the *audit action* names differ from the
+    // published event names on purpose, and only the published names notify.
+    expect(isNotifiedEventType(eventType)).toBe(false);
   });
 
   it('sends order.confirmed to the customer', () => {
@@ -78,7 +105,7 @@ describe('notification event mapping (S6-NOTIFY-INAPP)', () => {
 
 describe('notification content (S6-NOTIFY-INAPP)', () => {
   it('names the event and the order, and nothing else', () => {
-    const content = contentFor('order.confirmed', { orderId: ORDER_ID });
+    const content = contentFor('order.confirmed', { subjectId: ORDER_ID });
 
     expect(content.title).toBe('Order confirmed');
     expect(content.body).toContain('confirmed');
@@ -88,13 +115,13 @@ describe('notification content (S6-NOTIFY-INAPP)', () => {
   it('gives every notified type its own wording', () => {
     const titles = (
       ['order.confirmed', 'order.placed', 'order.payment_failed', 'order.cancelled'] as const
-    ).map((eventType) => contentFor(eventType, { orderId: ORDER_ID }).title);
+    ).map((eventType) => contentFor(eventType, { subjectId: ORDER_ID }).title);
 
     expect(new Set(titles).size).toBe(4);
   });
 
   it('shortens the order reference rather than printing the whole key', () => {
-    const { body } = contentFor('order.placed', { orderId: ORDER_ID });
+    const { body } = contentFor('order.placed', { subjectId: ORDER_ID });
 
     expect(body).not.toContain(ORDER_ID);
     expect(body).toContain(ORDER_ID.slice(-8).toUpperCase());
@@ -104,7 +131,7 @@ describe('notification content (S6-NOTIFY-INAPP)', () => {
     // A notification list is a surface a shoulder-surfer reads; none of that is
     // needed to know what happened.
     for (const eventType of ['order.confirmed', 'order.payment_failed'] as const) {
-      const { title, body } = contentFor(eventType, { orderId: ORDER_ID });
+      const { title, body } = contentFor(eventType, { subjectId: ORDER_ID });
       const text = `${title} ${body}`;
       // Razorpay-style references and any currency figure. The order's own
       // short reference is the one identifier that belongs here, so it is
@@ -115,7 +142,7 @@ describe('notification content (S6-NOTIFY-INAPP)', () => {
   });
 
   it('says nothing a customer could mistake for an instruction', () => {
-    const { body } = contentFor('order.payment_failed', { orderId: ORDER_ID });
+    const { body } = contentFor('order.payment_failed', { subjectId: ORDER_ID });
 
     expect(body).not.toMatch(/click|tap|please|sorry/i);
   });

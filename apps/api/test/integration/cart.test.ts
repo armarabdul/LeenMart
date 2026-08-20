@@ -17,6 +17,7 @@ import {
 } from '../support/actors.js';
 import { AmbientAuditWriter } from '../../src/modules/audit/index.js';
 import { PrismaAuditLogRepository } from '../../src/modules/audit/infrastructure/persistence/prisma-audit-log.repository.js';
+import { PrismaOutboxWriter } from '../../src/shared/infrastructure/persistence/prisma-outbox-writer.js';
 import { DecideProductUseCase } from '../../src/modules/catalogue/application/use-cases/decide-product.use-case.js';
 import { PrismaProductRepository } from '../../src/modules/catalogue/infrastructure/persistence/prisma-product.repository.js';
 import { PrismaProductMediaRepository } from '../../src/modules/catalogue/infrastructure/persistence/prisma-product-media.repository.js';
@@ -131,6 +132,13 @@ describe('cart', () => {
         idGenerator: harness.container.idGenerator,
         clock: harness.container.clock,
       }),
+      // S6-NOTIFY-LIFECYCLE: the decision now publishes an event in its own
+      // transaction, so this harness supplies the real writer.
+      outboxWriter: new PrismaOutboxWriter(
+        harness.container.adminPrisma,
+        harness.container.idGenerator,
+        harness.container.clock,
+      ),
       clock: harness.container.clock,
       logger: new NullLogger(),
     });

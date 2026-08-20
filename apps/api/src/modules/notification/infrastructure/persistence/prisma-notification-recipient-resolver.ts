@@ -40,4 +40,22 @@ export class PrismaNotificationRecipientResolver implements NotificationRecipien
     });
     return vendors.map((vendor) => vendor.userId);
   }
+
+  /**
+   * One bounded lookup on the same credential and the same `vendors` SELECT
+   * the method above already relies on (S6-NOTIFY-LIFECYCLE).
+   *
+   * No grant is widened for this: `leenmart_checkout` already holds SELECT on
+   * `vendors` via `vendors_checkout_read`, which is why the product and KYC
+   * events carry `vendorId` rather than, say, a product id — resolving a
+   * product would have needed a grant on `products` that this credential
+   * deliberately does not have.
+   */
+  async vendorOwnerUserId(vendorId: string): Promise<string | null> {
+    const vendor = await this.checkoutPrisma.vendorProfile.findUnique({
+      where: { id: vendorId },
+      select: { userId: true },
+    });
+    return vendor?.userId ?? null;
+  }
 }

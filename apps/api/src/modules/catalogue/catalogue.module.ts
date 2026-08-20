@@ -4,6 +4,7 @@ import type { Redis } from 'ioredis';
 import type { Clock, IdGenerator, Logger, TransactionRunner } from '@leen-mart/domain-kit';
 import { AmbientAuditWriter, type AuditWriter } from '../audit/index.js';
 import { PrismaAuditLogRepository } from '../audit/infrastructure/persistence/prisma-audit-log.repository.js';
+import { PrismaOutboxWriter } from '../../shared/infrastructure/persistence/prisma-outbox-writer.js';
 import type { AccessTokenService, SessionDenylist } from '../identity/index.js';
 import type { Env } from '../../shared/config/env.js';
 import { AdminTransactionRunner } from '../../shared/infrastructure/persistence/tenant-prisma.js';
@@ -435,6 +436,11 @@ const buildAdminProductRouter = (params: {
     idGenerator,
     clock,
   });
+  // S6-NOTIFY-LIFECYCLE. `adminPrisma` for the same reason the audit writer
+  // above uses it — the event has to join the decision's own transaction.
+  // `outbox_events` carries no RLS and `leenmart_admin` already holds INSERT,
+  // so this needs no grant of its own.
+  const outboxWriter = new PrismaOutboxWriter(adminPrisma, idGenerator, clock);
 
   return createAdminProductRouter(
     createAdminProductController({
@@ -448,6 +454,7 @@ const buildAdminProductRouter = (params: {
         productMediaRepository,
         transactionRunner,
         auditWriter,
+        outboxWriter,
         clock,
         logger,
       }),

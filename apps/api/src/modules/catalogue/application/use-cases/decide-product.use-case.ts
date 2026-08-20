@@ -5,6 +5,8 @@ import {
   CATALOGUE_AUDIT_ACTIONS,
   CATALOGUE_AUDIT_ENTITY_TYPES,
 } from '../../domain/audit-actions.js';
+import { CATALOGUE_OUTBOX_EVENTS } from '../../domain/outbox-events.js';
+import type { OutboxWriter } from '../../../../shared/application/ports/outbox-writer.port.js';
 import type { Product } from '../../domain/entities/product.entity.js';
 import {
   ProductAlreadyDecidedError,
@@ -57,6 +59,11 @@ export interface DecideProductDeps {
   readonly productMediaRepository: ProductMediaRepository;
   readonly transactionRunner: TransactionRunner;
   readonly auditWriter: AuditWriter;
+  /**
+   * S6-NOTIFY-LIFECYCLE. Written inside the decision's own transaction, so a
+   * rollback leaves no event announcing a decision that never happened.
+   */
+  readonly outboxWriter: OutboxWriter;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -106,6 +113,7 @@ export class DecideProductUseCase {
       productMediaRepository,
       transactionRunner,
       auditWriter,
+      outboxWriter,
       clock,
       logger,
     } = this.deps;
@@ -152,6 +160,22 @@ export class DecideProductUseCase {
         reason: decided.rejectionReason?.name ?? null,
         before: { status: existing.status },
         after: { status: decided.status },
+      });
+
+      // Same transaction as the decision and the audit row above, so the
+      // three commit or roll back together (SDD 4.2). The payload names the
+      // vendor explicitly because the consumer resolves recipients on a
+      // credential with no reach into `products` — and deliberately carries
+      // neither the coded reason nor the reviewer's note, matching the
+      // restraint the audit row and the log line already apply.
+      await outboxWriter.withTransaction(scope).write({
+        aggregateType: CATALOGUE_AUDIT_ENTITY_TYPES.PRODUCT,
+        aggregateId: toUuid(decided.id),
+        eventType:
+          input.command.decision === 'APPROVE'
+            ? CATALOGUE_OUTBOX_EVENTS.PRODUCT_APPROVED
+            : CATALOGUE_OUTBOX_EVENTS.PRODUCT_REJECTED,
+        payload: { productId: decided.id, vendorId: decided.vendorId },
       });
 
       logger.info(

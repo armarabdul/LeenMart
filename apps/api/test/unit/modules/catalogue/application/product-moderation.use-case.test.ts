@@ -31,7 +31,11 @@ import { toSessionId } from '../../../../../src/modules/identity/domain/value-ob
 import { toUserId } from '../../../../../src/modules/identity/domain/value-objects/user-id.value-object.js';
 import { toVendorId } from '../../../../../src/modules/identity/domain/value-objects/vendor-id.value-object.js';
 import type { Principal } from '../../../../../src/modules/identity/application/ports/principal.js';
-import { FailingAuditWriter, RecordingAuditWriter } from '../../identity/application/fakes.js';
+import {
+  FailingAuditWriter,
+  RecordingAuditWriter,
+  RecordingOutboxWriter,
+} from '../../identity/application/fakes.js';
 
 const ids = new UuidV7Generator();
 const NOW = new Date('2026-03-01T00:00:00.000Z');
@@ -411,9 +415,107 @@ describe('DecideProductUseCase', () => {
       productMediaRepository: media,
       transactionRunner: runner(onRollback),
       auditWriter,
+      outboxWriter: new RecordingOutboxWriter(),
       clock,
       logger: new NullLogger(),
     });
+
+  describe('published events (S6-NOTIFY-LIFECYCLE)', () => {
+    /** Built directly rather than through `build`, so the recorder is reachable for assertions. */
+    const withOutbox = (
+      outboxWriter: RecordingOutboxWriter,
+      auditWriter: AuditWriter = new RecordingAuditWriter(),
+      onRollback?: () => void,
+    ): DecideProductUseCase =>
+      new DecideProductUseCase({
+        productRepository: productRepo({ findById: vi.fn().mockResolvedValue(pendingProduct()) }),
+        productMediaRepository: mediaRepo(),
+        transactionRunner: runner(onRollback),
+        auditWriter,
+        outboxWriter,
+        clock,
+        logger: new NullLogger(),
+      });
+    it('publishes exactly one product.approved on approval', async () => {
+      const outbox = new RecordingOutboxWriter();
+
+      await withOutbox(outbox).execute({
+        principal: adminPrincipal(),
+        productId: toProductId(ids.generate()),
+        command: { decision: 'APPROVE' },
+      });
+
+      expect(outbox.events).toHaveLength(1);
+      expect(outbox.events[0]).toMatchObject({
+        eventType: 'product.approved',
+        aggregateType: 'Product',
+      });
+    });
+
+    it('publishes exactly one product.rejected on rejection', async () => {
+      const outbox = new RecordingOutboxWriter();
+
+      await withOutbox(outbox).execute({
+        principal: adminPrincipal(),
+        productId: toProductId(ids.generate()),
+        command: { decision: 'REJECT', reason: 'POLICY_VIOLATION', note: 'reviewer prose' },
+      });
+
+      expect(outbox.events).toHaveLength(1);
+      expect(outbox.events[0]?.eventType).toBe('product.rejected');
+    });
+
+    it('names the vendor in the payload, so the consumer needs no reach into products', async () => {
+      const outbox = new RecordingOutboxWriter();
+
+      await withOutbox(outbox).execute({
+        principal: adminPrincipal(),
+        productId: toProductId(ids.generate()),
+        command: { decision: 'APPROVE' },
+      });
+
+      expect(outbox.events[0]?.payload).toHaveProperty('vendorId');
+      expect(outbox.events[0]?.payload).toHaveProperty('productId');
+    });
+
+    it('never puts the rejection reason or the reviewer’s note in the payload', async () => {
+      // The same restraint the audit row and the log line already apply.
+      const outbox = new RecordingOutboxWriter();
+      const note = 'internal reviewer prose about this vendor';
+
+      await withOutbox(outbox).execute({
+        principal: adminPrincipal(),
+        productId: toProductId(ids.generate()),
+        command: { decision: 'REJECT', reason: 'POLICY_VIOLATION', note },
+      });
+
+      const serialised = JSON.stringify(outbox.events);
+      expect(serialised).not.toContain(note);
+      expect(serialised).not.toContain('POLICY_VIOLATION');
+    });
+
+    it('publishes nothing when the transaction rolls back', async () => {
+      // A failing audit write aborts the transaction; the event must not
+      // survive to announce a decision that never committed.
+      const outbox = new RecordingOutboxWriter();
+      let rolledBack = false;
+
+      await expect(
+        withOutbox(outbox, new FailingAuditWriter(), () => {
+          rolledBack = true;
+        }).execute({
+          principal: adminPrincipal(),
+          productId: toProductId(ids.generate()),
+          command: { decision: 'APPROVE' },
+        }),
+      ).rejects.toThrow();
+
+      expect(rolledBack).toBe(true);
+      // The audit write throws before the outbox write is reached, so nothing
+      // was even attempted — and the real writer is transactional besides.
+      expect(outbox.events).toHaveLength(0);
+    });
+  });
 
   describe('approval', () => {
     it('moves the product to APPROVED', async () => {

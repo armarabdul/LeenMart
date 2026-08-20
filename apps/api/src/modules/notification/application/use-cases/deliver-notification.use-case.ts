@@ -5,6 +5,9 @@ import {
   contentFor,
   isNotifiedEventType,
   recipientKindFor,
+  subjectIdFieldOf,
+  subjectOf,
+  type NotificationSubject,
   type NotifiedEventType,
 } from '../../domain/services/notification-policy.js';
 import type { NotificationRecipientResolver } from '../ports/notification-recipient-resolver.port.js';
@@ -78,20 +81,21 @@ export class DeliverNotificationUseCase {
       return EMPTY;
     }
 
-    const orderId = stringField(payload, 'orderId');
-    if (orderId === null) {
-      // Every notified event is an order event and carries `orderId`. One that
-      // does not is malformed, and inventing a reference for it would put a
-      // wrong order number in front of a customer.
+    const subject = subjectOf(eventType);
+    const subjectIdField = subjectIdFieldOf(subject);
+    const subjectId = subjectIdField === null ? null : stringField(payload, subjectIdField);
+    if (subjectIdField !== null && subjectId === null) {
+      // The event does not name the thing it is about. Inventing a reference
+      // would put a wrong order or product number in front of someone.
       this.deps.logger.warn(
-        { outboxEventId, eventType },
-        'Notification skipped: event carries no orderId',
+        { outboxEventId, eventType, expectedField: subjectIdField },
+        'Notification skipped: event does not name its subject',
       );
       return EMPTY;
     }
 
-    const recipientUserIds = await this.resolveRecipients(eventType, payload, orderId);
-    const content = contentFor(eventType, { orderId });
+    const recipientUserIds = await this.resolveRecipients(eventType, payload, subject, subjectId);
+    const content = contentFor(eventType, { subjectId });
     const kind = recipientKindFor(eventType);
 
     let created = 0;
@@ -132,22 +136,49 @@ export class DeliverNotificationUseCase {
   }
 
   /**
-   * The customer comes from the payload; the vendors are looked up.
+   * Who the event reaches, which depends on what it is about.
    *
-   * Duplicates are collapsed — one person owning two of the order's vendors
-   * receives one "New order", not two, because the logical idempotency key is
-   * per user rather than per vendor.
+   * An order event carries one side and needs the other looked up: the
+   * customer is in the payload, the vendors are not. A product-moderation or
+   * KYC event is a decision *about* a vendor and names that vendor directly,
+   * so only the vendor's owner has to be resolved.
+   *
+   * Every branch resolves the recipient from persisted state or from a
+   * server-written payload field. Nothing here reads anything a client sent.
    */
   private async resolveRecipients(
     eventType: NotifiedEventType,
     payload: Record<string, unknown>,
-    orderId: string,
+    subject: NotificationSubject,
+    subjectId: string | null,
   ): Promise<readonly string[]> {
+    if (subject === 'PRODUCT' || subject === 'VENDOR_KYC') {
+      return this.resolveVendorOwner(payload);
+    }
     if (recipientKindFor(eventType) === 'CUSTOMER') {
       const customerId = stringField(payload, 'customerId');
       return customerId === null ? [] : [customerId];
     }
-    const vendorUserIds = await this.deps.recipients.vendorUserIdsForOrder(orderId);
+    // An ORDER/VENDOR event: `subjectId` is the order id, non-null because the
+    // caller already refused the event otherwise.
+    const vendorUserIds = await this.deps.recipients.vendorUserIdsForOrder(subjectId ?? '');
+    // Duplicates collapsed — one person owning two of the order's vendors
+    // receives one "New order", not two, because the logical idempotency key
+    // is per user rather than per vendor.
     return [...new Set(vendorUserIds)];
+  }
+
+  /**
+   * The owner of the vendor the decision was about (S6-NOTIFY-LIFECYCLE).
+   *
+   * A missing or unresolvable `vendorId` yields no recipients rather than a
+   * substitute: there is no second candidate who should read another vendor's
+   * moderation outcome.
+   */
+  private async resolveVendorOwner(payload: Record<string, unknown>): Promise<readonly string[]> {
+    const vendorId = stringField(payload, 'vendorId');
+    if (vendorId === null) return [];
+    const ownerUserId = await this.deps.recipients.vendorOwnerUserId(vendorId);
+    return ownerUserId === null ? [] : [ownerUserId];
   }
 }

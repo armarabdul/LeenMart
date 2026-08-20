@@ -1,8 +1,10 @@
-import type { Clock, Logger, TransactionRunner } from '@leen-mart/domain-kit';
+import type { Clock, Logger, TransactionRunner, TransactionScope } from '@leen-mart/domain-kit';
 import { toUuid } from '@leen-mart/domain-kit';
 import type { AuditWriter } from '../../../audit/index.js';
 import type { Principal } from '../../../identity/index.js';
 import { VENDOR_AUDIT_ACTIONS, VENDOR_AUDIT_ENTITY_TYPES } from '../../domain/audit-actions.js';
+import { VENDOR_OUTBOX_EVENTS } from '../../domain/outbox-events.js';
+import type { OutboxWriter } from '../../../../shared/application/ports/outbox-writer.port.js';
 import type { VendorKyc } from '../../domain/entities/vendor-kyc.entity.js';
 import type { VendorProfile } from '../../domain/entities/vendor-profile.entity.js';
 import {
@@ -40,6 +42,11 @@ export interface DecideVendorKycDeps {
   readonly vendorRepository: VendorRepository;
   readonly transactionRunner: TransactionRunner;
   readonly auditWriter: AuditWriter;
+  /**
+   * S6-NOTIFY-LIFECYCLE. Written inside the decision's own transaction, so a
+   * rollback leaves no event announcing a decision that never happened.
+   */
+  readonly outboxWriter: OutboxWriter;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -60,9 +67,54 @@ export interface DecideVendorKycDeps {
 export class DecideVendorKycUseCase {
   constructor(private readonly deps: DecideVendorKycDeps) {}
 
+  /**
+   * The audit row and the published event, split out of `execute` purely to
+   * keep it under this file's function-length budget — the same reason every
+   * other builder split in this codebase gives. Both take the caller's open
+   * `scope`, so they commit with the decision or not at all.
+   */
+  private async recordDecision(
+    scope: TransactionScope,
+    input: DecideVendorKycInput,
+    decided: VendorKyc,
+  ): Promise<void> {
+    const { auditWriter, outboxWriter } = this.deps;
+
+    // Only the winner reaches here — the loser threw above and this
+    // transaction never opened for them, so a lost race writes no audit
+    // row. The coded reason travels on a rejection; the reviewer's
+    // free-text note never does — it is a reviewer's prose about a named
+    // vendor, not a lifecycle fact.
+    await auditWriter.withTransaction(scope).record({
+      actorId: input.principal.userId,
+      actorRole: input.principal.role,
+      action:
+        input.command.decision === 'APPROVE'
+          ? VENDOR_AUDIT_ACTIONS.KYC_APPROVED
+          : VENDOR_AUDIT_ACTIONS.KYC_REJECTED,
+      entityType: VENDOR_AUDIT_ENTITY_TYPES.KYC,
+      entityId: toUuid(decided.id),
+      reason: decided.review?.rejectionReason?.name ?? null,
+      after: { vendorId: decided.vendorId },
+    });
+
+    // Same transaction as the decision, the vendor transition and the audit
+    // row above, so all four commit or roll back together (SDD 4.2). The
+    // payload names the vendor — the subject of the decision and the only
+    // identity the consumer needs — and carries neither the coded reason
+    // nor the reviewer's note.
+    await outboxWriter.withTransaction(scope).write({
+      aggregateType: VENDOR_AUDIT_ENTITY_TYPES.VENDOR,
+      aggregateId: toUuid(decided.vendorId),
+      eventType:
+        input.command.decision === 'APPROVE'
+          ? VENDOR_OUTBOX_EVENTS.KYC_APPROVED
+          : VENDOR_OUTBOX_EVENTS.KYC_REJECTED,
+      payload: { vendorId: decided.vendorId, kycId: decided.id },
+    });
+  }
   async execute(input: DecideVendorKycInput): Promise<DecideVendorKycResult> {
-    const { vendorKycRepository, vendorRepository, transactionRunner, auditWriter, clock, logger } =
-      this.deps;
+    const { vendorKycRepository, vendorRepository, transactionRunner, clock, logger } = this.deps;
 
     return transactionRunner.run(async (scope) => {
       const kycRepository = vendorKycRepository.withTransaction(scope);
@@ -99,23 +151,7 @@ export class DecideVendorKycUseCase {
       }
       await profileRepository.update(transitioned);
 
-      // Only the winner reaches here — the loser threw above and this
-      // transaction never opened for them, so a lost race writes no audit
-      // row. The coded reason travels on a rejection; the reviewer's
-      // free-text note never does — it is a reviewer's prose about a named
-      // vendor, not a lifecycle fact.
-      await auditWriter.withTransaction(scope).record({
-        actorId: input.principal.userId,
-        actorRole: input.principal.role,
-        action:
-          input.command.decision === 'APPROVE'
-            ? VENDOR_AUDIT_ACTIONS.KYC_APPROVED
-            : VENDOR_AUDIT_ACTIONS.KYC_REJECTED,
-        entityType: VENDOR_AUDIT_ENTITY_TYPES.KYC,
-        entityId: toUuid(decided.id),
-        reason: decided.review?.rejectionReason?.name ?? null,
-        after: { vendorId: decided.vendorId },
-      });
+      await this.recordDecision(scope, input, decided);
 
       // The decision and the id only — never the reason's free text, which is
       // a reviewer's prose about a named vendor.

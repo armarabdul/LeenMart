@@ -7,6 +7,8 @@ import type { Env } from '../../shared/config/env.js';
 import type { VendorTenantResolver } from '../../shared/interface/http/middleware/tenant-context.js';
 import { AmbientAuditWriter, type AuditWriter } from '../audit/index.js';
 import { PrismaAuditLogRepository } from '../audit/infrastructure/persistence/prisma-audit-log.repository.js';
+import { PrismaOutboxWriter } from '../../shared/infrastructure/persistence/prisma-outbox-writer.js';
+import type { OutboxWriter } from '../../shared/application/ports/outbox-writer.port.js';
 import type { AccessTokenService, SessionDenylist, UserId, VendorId } from '../identity/index.js';
 import {
   KYC_ALLOWED_CONTENT_TYPES,
@@ -252,6 +254,7 @@ const buildAdminKycDecisionUseCases = (params: {
   vendorRepository: PrismaVendorRepository;
   transactionRunner: AdminTransactionRunner;
   auditWriter: AuditWriter;
+  outboxWriter: OutboxWriter;
   clock: Clock;
   logger: Logger;
 }): {
@@ -495,6 +498,11 @@ const buildAdminKycRouter = (params: {
     idGenerator: params.idGenerator,
     clock: params.clock,
   });
+  // S6-NOTIFY-LIFECYCLE. `adminPrisma` for the same reason the audit writer
+  // above uses it — the event has to join the decision's own transaction.
+  // `outbox_events` carries no RLS and `leenmart_admin` already holds INSERT,
+  // so this needs no grant of its own.
+  const outboxWriter = new PrismaOutboxWriter(params.adminPrisma, params.idGenerator, params.clock);
 
   return createAdminKycRouter(
     createAdminKycController({
@@ -504,6 +512,7 @@ const buildAdminKycRouter = (params: {
         vendorRepository,
         transactionRunner,
         auditWriter,
+        outboxWriter,
         clock: params.clock,
         logger: params.logger,
       }),
