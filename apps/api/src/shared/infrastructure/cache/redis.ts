@@ -59,6 +59,42 @@ export const createBullMqRedisClient = (env: Env, logger: PinoLogger): Redis => 
   return client;
 };
 
+/**
+ * A third, dedicated connection for the vendor-stream Redis pub/sub
+ * subscriber (S4-SSE).
+ *
+ * **Subscribing, not `bullRedis`, is what needs its own connection.** Once an
+ * ioredis client issues `SUBSCRIBE`, the Redis protocol puts that connection
+ * into subscriber mode and refuses every other command on it — the same
+ * constraint `createBullMqRedisClient`'s own comment explains, one layer
+ * over. `bullRedis` stays free for ordinary commands (including the
+ * `PUBLISH` the S4-SSE outbox handler issues from the worker — verified
+ * directly: a `Queue` built on that connection does not itself subscribe,
+ * so an ordinary `PUBLISH` alongside it is safe), so only the *subscribing*
+ * half needs a new connection, never the publishing half.
+ *
+ * Built in every process via `createContainer` (the same "shared container,
+ * use what you need" shape `adminPrisma`/`publicPrisma` already follow) —
+ * only the API process ever calls `.subscribe()` on it; the worker process
+ * constructs but never uses it, which costs one idle connection, not a
+ * second definition of how to reach Redis.
+ */
+export const createPubSubRedisClient = (env: Env, logger: PinoLogger): Redis => {
+  const client = new Redis(env.REDIS_URL, {
+    maxRetriesPerRequest: 3,
+    enableReadyCheck: true,
+    lazyConnect: false,
+    retryStrategy: (times) => Math.min(times * 200, 5_000),
+    reconnectOnError: (error) => error.message.includes('READONLY'),
+  });
+
+  client.on('error', (error: Error) => {
+    logger.error({ err: error }, 'Pub/sub Redis connection error');
+  });
+
+  return client;
+};
+
 export interface CacheHealth {
   readonly healthy: boolean;
   readonly latencyMs: number;

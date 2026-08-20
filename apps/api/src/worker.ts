@@ -4,6 +4,7 @@ import {
   createNotificationWorker,
   createNotificationWorkerModule,
 } from './modules/notification/index.js';
+import { createOrderStreamWorkerModule } from './modules/order/index.js';
 import { createOutboxHandlerRegistry } from './shared/application/ports/outbox-handler.port.js';
 import { OutboxRelay } from './shared/application/services/outbox-relay.js';
 import { PrismaOutboxRelayStore } from './shared/infrastructure/persistence/prisma-outbox-relay-store.js';
@@ -77,6 +78,15 @@ const startWorker = async (): Promise<void> => {
   });
   await notificationWorker.waitUntilReady();
 
+  // S4-SSE. Publishes a live-alert signal on `order.placed`, alongside — not
+  // instead of — `notifications.outboxHandler`'s own handling of the exact
+  // same event type; `OutboxRelay.dispatch()` runs every matching handler
+  // independently, so neither knows the other exists. Reuses `bullRedis` for
+  // `PUBLISH` (locked decision N-3, verified directly that an ordinary
+  // command on a `Queue`-bound connection does not conflict with BullMQ) —
+  // no third Redis connection for publishing.
+  const orderStream = createOrderStreamWorkerModule({ checkoutPrisma, bullRedis, logger });
+
   const relay = new OutboxRelay({
     store: new PrismaOutboxRelayStore(prisma, clock),
     // The logging handler stays: it is how an operator sees the relay working
@@ -84,6 +94,7 @@ const startWorker = async (): Promise<void> => {
     registry: createOutboxHandlerRegistry([
       createLoggingOutboxHandler(logger),
       notifications.outboxHandler,
+      orderStream.outboxHandler,
     ]),
     logger,
   });

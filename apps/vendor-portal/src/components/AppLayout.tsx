@@ -7,6 +7,7 @@ import {
   selectRefreshToken,
 } from '@/shared/api/session.slice';
 import { NotificationBell } from '@/features/notification/components/NotificationBell';
+import { VendorStreamAlert } from '@/features/vendor-stream/VendorStreamAlert';
 import { env } from '@/shared/config/env';
 
 const navLinkClassName = ({ isActive }: { isActive: boolean }): string =>
@@ -35,6 +36,7 @@ export const AppLayout = (): JSX.Element => {
 
   return (
     <div className="flex min-h-screen flex-col bg-slate-50">
+      {isAuthenticated && <VendorStreamAlert />}
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-4xl items-center gap-4 px-4 py-3">
           <Link to="/" className="shrink-0 text-lg font-bold tracking-tight text-brand-700">

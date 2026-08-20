@@ -11,12 +11,13 @@ import {
   createNotFoundHandler,
 } from './shared/interface/http/middleware/error-handler.js';
 import { createHealthRouter } from './shared/interface/http/routes/health.routes.js';
+import type { VendorTenantResolver } from './shared/interface/http/middleware/tenant-context.js';
 import { createCartModule } from './modules/cart/index.js';
 import { createNotificationModule } from './modules/notification/index.js';
 import { createCatalogueModule } from './modules/catalogue/index.js';
 import { createCustomerModule } from './modules/customer/index.js';
 import { createLedgerModule } from './modules/ledger/index.js';
-import { createOrderModule } from './modules/order/index.js';
+import { createOrderModule, createOrderStreamModule } from './modules/order/index.js';
 import {
   createIdentityModule,
   type AccessTokenService,
@@ -44,6 +45,35 @@ const EXPOSED_HEADERS = [
 ];
 
 /**
+ * The vendor real-time order-alert surface (S4-SSE, FR-64, SDD §11.5) — its
+ * own top-level mount, not nested under `/vendor/orders`, since it is a
+ * long-lived SSE connection, not a request/response resource. Split out of
+ * `mountBusinessModules` purely to keep that function under this file's
+ * max-lines-per-function budget, the same reason `applySecurityMiddleware`
+ * was. `vendorModule.resolveVendorTenant` is the one resolver every
+ * vendor-facing router already receives (D-1) — nothing new crosses here.
+ */
+const mountOrderStreamRouter = (
+  app: Express,
+  params: {
+    accessTokenService: AccessTokenService;
+    sessionDenylist: SessionDenylist;
+    pubSubRedis: Container['pubSubRedis'];
+    logger: Container['logger'];
+  },
+  resolveVendorTenant: VendorTenantResolver,
+): void => {
+  const orderStreamModule = createOrderStreamModule({
+    accessTokenService: params.accessTokenService,
+    sessionDenylist: params.sessionDenylist,
+    resolveVendorTenant,
+    pubSubRedis: params.pubSubRedis,
+    logger: params.logger,
+  });
+  app.use('/api/v1/vendor/stream', orderStreamModule.router);
+};
+
+/**
  * Mounts every module beyond `identity` itself. Split out of `createApp`
  * purely to stay under this file's max-lines-per-function budget — each of
  * these modules shares identity's token verifier *and* its session denylist
@@ -61,6 +91,7 @@ const mountBusinessModules = (
     checkoutPrisma: Container['checkoutPrisma'];
     env: Container['env'];
     bullRedis: Container['bullRedis'];
+    pubSubRedis: Container['pubSubRedis'];
     redis: Container['redis'];
     accessTokenService: AccessTokenService;
     sessionDenylist: SessionDenylist;
@@ -164,6 +195,8 @@ const mountBusinessModules = (
   // a payout or settlement surface.
   app.use('/api/v1/vendor/earnings', ledgerModule.vendorRouter);
 
+  mountOrderStreamRouter(app, params, vendorModule.resolveVendorTenant);
+
   // Further business modules mount here as they are built.
 };
 
@@ -232,6 +265,7 @@ export const createApp = (container: Container): Express => {
     checkoutPrisma,
     redis,
     bullRedis,
+    pubSubRedis,
     clock,
     logger,
   } = container;
@@ -247,7 +281,17 @@ export const createApp = (container: Container): Express => {
 
   applySecurityMiddleware(app, env);
 
-  app.use(compression());
+  app.use(
+    compression({
+      // S4-SSE: gzip buffers and transforms writes, which works against an
+      // SSE connection's "push each frame immediately" requirement. Excluded
+      // by path — the smallest possible scoped change to this shared
+      // middleware, falling back to the package's own default filter for
+      // every other route.
+      filter: (req, res) =>
+        req.path === '/api/v1/vendor/stream' ? false : compression.filter(req, res),
+    }),
+  );
   app.use(json({ limit: env.BODY_LIMIT }));
   app.use(urlencoded({ extended: false, limit: env.BODY_LIMIT }));
 
@@ -267,6 +311,7 @@ export const createApp = (container: Container): Express => {
     checkoutPrisma,
     env,
     bullRedis,
+    pubSubRedis,
     redis,
     accessTokenService: identityModule.accessTokenService,
     sessionDenylist: identityModule.sessionDenylist,

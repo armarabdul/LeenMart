@@ -1394,6 +1394,21 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     classification: 'SELF_SCOPED',
     why: 'Reads only the caller’s own accrued earnings — the tenant-scoped client cannot return anyone else’s.',
   },
+  // --- vendor real-time order alerts: /api/v1/vendor/stream (S4-SSE) ---
+  //
+  // A single self-scoped `GET` (locked decision N-2) — there is no `:id` in
+  // this route at all; vendor identity comes exclusively from `tenantContext`,
+  // resolved from the verified principal, never a client-supplied id. Cross-
+  // vendor isolation is proven by a dedicated integration test (locked
+  // decision N-2's own requirement), not the generic `TENANT_OWNED` matrix,
+  // because there is no id here for that matrix to probe with.
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendor/stream',
+    path: '/',
+    classification: 'SELF_SCOPED',
+    why: 'Streams only the caller’s own resolved vendor’s order-placed alerts — vendor identity comes from tenantContext, never a client-supplied id; cross-vendor isolation is hand-tested in the dedicated vendor-stream integration suite.',
+  },
 ];
 
 export const isTenantOwned = (route: ManifestRoute): route is TenantOwnedRoute =>

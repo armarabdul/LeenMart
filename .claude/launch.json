@@ -12,6 +12,12 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@leen-mart/customer-pwa", "dev"],
       "port": 5173
+    },
+    {
+      "name": "vendor-portal",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@leen-mart/vendor-portal", "dev"],
+      "port": 5174
     }
   ]
 }

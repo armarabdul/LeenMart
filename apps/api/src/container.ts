@@ -15,7 +15,11 @@ import {
 } from './shared/infrastructure/observability/logger.js';
 import { createPrismaClient } from './shared/infrastructure/persistence/prisma.js';
 import { withTenantBoundary } from './shared/infrastructure/persistence/tenant-prisma.js';
-import { createBullMqRedisClient, createRedisClient } from './shared/infrastructure/cache/redis.js';
+import {
+  createBullMqRedisClient,
+  createPubSubRedisClient,
+  createRedisClient,
+} from './shared/infrastructure/cache/redis.js';
 
 /**
  * Composition root (SDD 2.3).
@@ -77,6 +81,13 @@ export interface Container {
    * built once here so neither reimplements the connection settings.
    */
   readonly bullRedis: Redis;
+  /**
+   * A third connection, dedicated to the vendor-stream pub/sub subscriber
+   * (S4-SSE) — see `createPubSubRedisClient`'s own comment for why this
+   * cannot be `redis` or `bullRedis`. Only the API process subscribes on it;
+   * the worker process constructs it but never calls `.subscribe()`.
+   */
+  readonly pubSubRedis: Redis;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
   dispose(): Promise<void>;
@@ -100,6 +111,7 @@ export const createContainer = (): Container => {
   const checkoutPrisma = createPrismaClient(env, rootLogger, 'checkout');
   const redis = createRedisClient(env, rootLogger);
   const bullRedis = createBullMqRedisClient(env, rootLogger);
+  const pubSubRedis = createPubSubRedisClient(env, rootLogger);
   const clock = new SystemClock();
   const idGenerator = new UuidV7Generator();
 
@@ -113,6 +125,7 @@ export const createContainer = (): Container => {
     ]);
     redis.disconnect();
     bullRedis.disconnect();
+    pubSubRedis.disconnect();
   };
 
   return {
@@ -125,6 +138,7 @@ export const createContainer = (): Container => {
     checkoutPrisma,
     redis,
     bullRedis,
+    pubSubRedis,
     clock,
     idGenerator,
     dispose,
