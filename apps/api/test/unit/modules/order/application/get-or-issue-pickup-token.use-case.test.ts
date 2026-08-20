@@ -7,6 +7,8 @@ import { toVendorId } from '../../../../../src/modules/identity/domain/value-obj
 import type { Principal } from '../../../../../src/modules/identity/application/ports/principal.js';
 import { GetOrIssuePickupTokenUseCase } from '../../../../../src/modules/order/application/use-cases/get-or-issue-pickup-token.use-case.js';
 import type { PickupTokenSigner } from '../../../../../src/modules/order/application/ports/pickup-token-signer.port.js';
+import type { PickupCodeGenerator } from '../../../../../src/modules/order/application/ports/pickup-code-generator.port.js';
+import type { PickupCodeHasher } from '../../../../../src/modules/order/application/ports/pickup-code-hasher.port.js';
 import { Order } from '../../../../../src/modules/order/domain/entities/order.entity.js';
 import { PickupToken } from '../../../../../src/modules/order/domain/entities/pickup-token.entity.js';
 import { SubOrder } from '../../../../../src/modules/order/domain/entities/sub-order.entity.js';
@@ -98,6 +100,7 @@ const pickupTokenRepo = (overrides: Partial<PickupTokenRepository> = {}): Pickup
     create: vi.fn(),
     rotate: vi.fn(),
     redeemIfIssued: vi.fn(),
+    recordManualCodeAttempt: vi.fn(),
     ...overrides,
   };
   return repository;
@@ -110,8 +113,20 @@ const SIGNED_TOKEN = {
   expiresAt: new Date(NOW.getTime() + 90_000),
 };
 
+const MANUAL_CODE = '4821';
+const MANUAL_CODE_HASH = '$argon2id$mock$fixture$';
+
 const signer = (): PickupTokenSigner => ({
   sign: vi.fn().mockReturnValue(SIGNED_TOKEN),
+  verify: vi.fn(),
+});
+
+const codeGenerator = (): PickupCodeGenerator => ({
+  generate: vi.fn().mockReturnValue(MANUAL_CODE),
+});
+
+const codeHasher = (): PickupCodeHasher => ({
+  hash: vi.fn().mockResolvedValue(MANUAL_CODE_HASH),
   verify: vi.fn(),
 });
 
@@ -120,12 +135,16 @@ const buildUseCase = (
     orderRepository?: OrderRepository;
     pickupTokenRepository?: PickupTokenRepository;
     pickupTokenSigner?: PickupTokenSigner;
+    pickupCodeGenerator?: PickupCodeGenerator;
+    pickupCodeHasher?: PickupCodeHasher;
   } = {},
 ): GetOrIssuePickupTokenUseCase =>
   new GetOrIssuePickupTokenUseCase({
     orderRepository: deps.orderRepository ?? orderRepo(),
     pickupTokenRepository: deps.pickupTokenRepository ?? pickupTokenRepo(),
     pickupTokenSigner: deps.pickupTokenSigner ?? signer(),
+    pickupCodeGenerator: deps.pickupCodeGenerator ?? codeGenerator(),
+    pickupCodeHasher: deps.pickupCodeHasher ?? codeHasher(),
     idGenerator: ids,
     logger: new NullLogger(),
   });
@@ -157,6 +176,46 @@ describe('GetOrIssuePickupTokenUseCase', () => {
     );
   });
 
+  it('mints a manual fallback code, stores only its hash, and returns the plaintext once (S4-QR-FALLBACK)', async () => {
+    const tokens = pickupTokenRepo();
+    const hasher = codeHasher();
+    const useCase = buildUseCase({ pickupTokenRepository: tokens, pickupCodeHasher: hasher });
+
+    const result = await useCase.execute(input);
+
+    expect(result.manualCode).toBe(MANUAL_CODE);
+    expect(hasher.hash).toHaveBeenCalledWith(MANUAL_CODE);
+    expect(tokens.create).toHaveBeenCalledWith(
+      expect.objectContaining({ manualCodeHash: MANUAL_CODE_HASH }),
+    );
+    const created = (tokens.create as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as PickupToken;
+    expect(JSON.stringify(created)).not.toContain(MANUAL_CODE);
+  });
+
+  it('rotates the manual code in lockstep with the QR token, never deriving it from the nonce', async () => {
+    const existing = PickupToken.issue({
+      id: toPickupTokenId(ids.generate()),
+      subOrderId,
+      vendorId,
+      tokenHash: 'old-hash',
+      nonce: 'old-nonce',
+      issuedAt: NOW,
+      expiresAt: new Date(NOW.getTime() + 90_000),
+      manualCodeHash: 'old-manual-code-hash',
+    });
+    const tokens = pickupTokenRepo({ findBySubOrderId: vi.fn().mockResolvedValue(existing) });
+    const generator = codeGenerator();
+    const useCase = buildUseCase({ pickupTokenRepository: tokens, pickupCodeGenerator: generator });
+
+    const result = await useCase.execute(input);
+
+    expect(generator.generate).toHaveBeenCalledTimes(1);
+    expect(result.manualCode).toBe(MANUAL_CODE);
+    expect(tokens.rotate).toHaveBeenCalledWith(
+      expect.objectContaining({ manualCodeHash: MANUAL_CODE_HASH }),
+    );
+  });
+
   it('rotates the existing row on a later call instead of creating a second one', async () => {
     const existing = PickupToken.issue({
       id: toPickupTokenId(ids.generate()),
@@ -166,6 +225,7 @@ describe('GetOrIssuePickupTokenUseCase', () => {
       nonce: 'old-nonce',
       issuedAt: NOW,
       expiresAt: new Date(NOW.getTime() + 90_000),
+      manualCodeHash: 'old-manual-code-hash',
     });
     const tokens = pickupTokenRepo({ findBySubOrderId: vi.fn().mockResolvedValue(existing) });
     const useCase = buildUseCase({ pickupTokenRepository: tokens });
@@ -185,6 +245,7 @@ describe('GetOrIssuePickupTokenUseCase', () => {
       nonce: 'old-nonce',
       issuedAt: NOW,
       expiresAt: new Date(NOW.getTime() + 90_000),
+      manualCodeHash: 'old-manual-code-hash',
     });
     const tokens = pickupTokenRepo({ findBySubOrderId: vi.fn().mockResolvedValue(existing) });
     const useCase = buildUseCase({ pickupTokenRepository: tokens });

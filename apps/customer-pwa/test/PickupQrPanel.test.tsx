@@ -18,6 +18,7 @@ const REFRESH_MARGIN_MS = 10_000;
 
 interface QueryState {
   readonly token?: string;
+  readonly manualCode?: string;
   readonly expiresInMs?: number;
   readonly isLoading?: boolean;
   readonly isError?: boolean;
@@ -38,6 +39,7 @@ const stubQuery = (state: QueryState): void => {
         : {
             token: state.token,
             expiresAt: new Date(Date.now() + (state.expiresInMs ?? TTL_MS)).toISOString(),
+            manualCode: state.manualCode ?? '4821',
           },
     isLoading: state.isLoading ?? false,
     isError: state.isError ?? false,
@@ -86,6 +88,20 @@ describe('PickupQrPanel', () => {
     renderPanel();
 
     expect(code()).toHaveTextContent('pickup-token-1');
+  });
+
+  it('shows the manual/scanner-broken fallback code alongside the QR code (S4-QR-FALLBACK)', () => {
+    stubQuery({ token: 'pickup-token-1', manualCode: '7392' });
+    renderPanel();
+
+    expect(screen.getByLabelText('Manual pickup code')).toHaveTextContent('7392');
+  });
+
+  it('does not show a manual code while the QR code is unavailable', () => {
+    stubQuery({ isError: true, error: { status: 422, data: { error: { code: 'X' } } } });
+    renderPanel();
+
+    expect(screen.queryByLabelText('Manual pickup code')).not.toBeInTheDocument();
   });
 
   it('tells the customer the code is single-use and self-refreshing', () => {

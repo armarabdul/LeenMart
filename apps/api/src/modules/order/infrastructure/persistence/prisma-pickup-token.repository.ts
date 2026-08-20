@@ -24,6 +24,8 @@ interface PickupTokenRow {
   readonly redeemedAt: Date | null;
   readonly redeemedByUserId: string | null;
   readonly version: number;
+  readonly manualCodeHash: string | null;
+  readonly manualCodeAttempts: number;
   readonly createdAt: Date;
 }
 
@@ -40,6 +42,8 @@ const toDomain = (row: PickupTokenRow): PickupToken =>
     redeemedAt: row.redeemedAt,
     redeemedByUserId: row.redeemedByUserId ? toUserId(row.redeemedByUserId) : null,
     version: row.version,
+    manualCodeHash: row.manualCodeHash,
+    manualCodeAttempts: row.manualCodeAttempts,
     createdAt: row.createdAt,
   });
 
@@ -72,12 +76,14 @@ export class PrismaPickupTokenRepository implements PickupTokenRepository {
         nonce: token.nonce,
         issuedAt: token.issuedAt,
         expiresAt: token.expiresAt,
+        manualCodeHash: token.manualCodeHash,
+        manualCodeAttempts: token.manualCodeAttempts,
         createdAt: token.createdAt,
       },
     });
   }
 
-  /** Overwrites the hash/nonce/validity window in place — never touches `status`, matching the port's own guarantee. */
+  /** Overwrites the hash/nonce/validity window (and the manual fallback code alongside it, S4-QR-FALLBACK) in place — never touches `status`, matching the port's own guarantee. */
   async rotate(token: PickupToken): Promise<void> {
     await this.prisma.pickupToken.update({
       where: { id: token.id },
@@ -86,7 +92,17 @@ export class PrismaPickupTokenRepository implements PickupTokenRepository {
         nonce: token.nonce,
         issuedAt: token.issuedAt,
         expiresAt: token.expiresAt,
+        manualCodeHash: token.manualCodeHash,
+        manualCodeAttempts: token.manualCodeAttempts,
       },
+    });
+  }
+
+  /** Plain update, not a compare-and-set — a wrong manual-code guess never touches `status` (S4-QR-FALLBACK, port's own doc comment). */
+  async recordManualCodeAttempt(id: PickupTokenId, attempts: number): Promise<void> {
+    await this.prisma.pickupToken.update({
+      where: { id },
+      data: { manualCodeAttempts: attempts },
     });
   }
 

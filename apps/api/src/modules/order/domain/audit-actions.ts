@@ -30,6 +30,24 @@ export const ORDER_AUDIT_ACTIONS = {
   READY_FOR_PICKUP: 'sub_order.ready_for_pickup',
   /** S4-QR: a vendor's successful QR/token redemption moved a PICKUP sub-order READY_FOR_PICKUP -> COMPLETED (SDD 13.2). */
   PICKUP_COMPLETED: 'sub_order.pickup_completed',
+  /**
+   * S4-QR-FALLBACK: a vendor completed a PICKUP sub-order via the manual
+   * 4-digit code instead of scanning the QR (SDD 13.3's "scanner broken"
+   * row). A distinct action from `PICKUP_COMPLETED` on purpose — the domain
+   * fact (READY_FOR_PICKUP -> COMPLETED) is identical and reuses the same
+   * outbox `eventType`, but *how* completion happened is exactly what an
+   * audit trail exists to distinguish, and SDD 16.3's "Pickup anomaly" rule
+   * needs this distinction to eventually count against.
+   */
+  PICKUP_COMPLETED_MANUAL: 'sub_order.pickup_completed_manual',
+  /**
+   * S4-QR-FALLBACK: an offline-verified redemption was submitted on
+   * reconnect but the token had already been redeemed (online, or by
+   * another offline device) in the meantime. Audit-log-only — there is no
+   * fraud engine to act on this in this milestone, only a record that the
+   * conflict happened, for a future one to consume.
+   */
+  PICKUP_OFFLINE_REDEMPTION_CONFLICT: 'sub_order.pickup_offline_redemption_conflict',
 } as const;
 
 export type OrderAuditAction = (typeof ORDER_AUDIT_ACTIONS)[keyof typeof ORDER_AUDIT_ACTIONS];

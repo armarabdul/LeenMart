@@ -33,4 +33,13 @@ export interface PickupTokenRepository {
    * redeemed, by this same request racing itself or an earlier scan.
    */
   redeemIfIssued(id: PickupTokenId, redeemedAt: Date, redeemedByUserId: UserId): Promise<boolean>;
+
+  /**
+   * Persists a wrong manual-code guess's incremented attempt count
+   * (S4-QR-FALLBACK). Deliberately not part of the CAS above — a wrong
+   * guess never touches `status`, so there is nothing for a compare-and-set
+   * to guard here, the same reasoning `Otp.recordFailedAttempt()`'s own
+   * plain update already rests on.
+   */
+  recordManualCodeAttempt(id: PickupTokenId, attempts: number): Promise<void>;
 }

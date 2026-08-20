@@ -37,11 +37,16 @@ import { InitiatePaymentUseCase } from './application/use-cases/initiate-payment
 import { ConfirmPaymentUseCase } from './application/use-cases/confirm-payment.use-case.js';
 import { MarkReadyForPickupUseCase } from './application/use-cases/mark-ready-for-pickup.use-case.js';
 import { RedeemPickupTokenUseCase } from './application/use-cases/redeem-pickup-token.use-case.js';
+import { CompletePickupManuallyUseCase } from './application/use-cases/complete-pickup-manually.use-case.js';
 import type { PostOrderPaymentJournalsUseCase } from '../ledger/index.js';
 import { ShipSubOrderUseCase } from './application/use-cases/ship-sub-order.use-case.js';
 import { StartProcessingUseCase } from './application/use-cases/start-processing.use-case.js';
 import type { PickupTokenSigner } from './application/ports/pickup-token-signer.port.js';
+import type { PickupCodeGenerator } from './application/ports/pickup-code-generator.port.js';
+import type { PickupCodeHasher } from './application/ports/pickup-code-hasher.port.js';
 import { Ed25519PickupTokenSigner } from './infrastructure/crypto/ed25519-pickup-token-signer.js';
+import { CryptoPickupCodeGenerator } from './infrastructure/crypto/crypto-pickup-code-generator.js';
+import { Argon2PickupCodeHasher } from './infrastructure/security/argon2-pickup-code-hasher.js';
 import { PrismaOrderRepository } from './infrastructure/persistence/prisma-order.repository.js';
 import { PrismaPaymentAttemptRepository } from './infrastructure/persistence/prisma-payment-attempt.repository.js';
 import { PrismaPickupTokenRepository } from './infrastructure/persistence/prisma-pickup-token.repository.js';
@@ -174,6 +179,10 @@ interface BuildOrderUseCasesDeps {
   readonly postOrderPaymentJournalsUseCase: PostOrderPaymentJournalsUseCase;
   /** S4-QR: shared by both the customer issue/rotate path and the vendor redeem path — one instance, two callers. */
   readonly pickupTokenSigner: PickupTokenSigner;
+  /** S4-QR-FALLBACK: mints the manual code on the same issue/rotate call as `pickupTokenSigner` above. */
+  readonly pickupCodeGenerator: PickupCodeGenerator;
+  /** S4-QR-FALLBACK: shared by the customer issue/rotate path (hashes) and the vendor manual-completion path (verifies) — one instance, two callers, the same split `pickupTokenSigner` already establishes. */
+  readonly pickupCodeHasher: PickupCodeHasher;
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
   readonly logger: Logger;
@@ -210,6 +219,8 @@ const buildPickupTokenUseCase = (
     orderRepository: deps.repositories.orderRepository,
     pickupTokenRepository: deps.repositories.pickupTokenRepository,
     pickupTokenSigner: deps.pickupTokenSigner,
+    pickupCodeGenerator: deps.pickupCodeGenerator,
+    pickupCodeHasher: deps.pickupCodeHasher,
     idGenerator: deps.idGenerator,
     logger: deps.logger,
   }),
@@ -318,6 +329,7 @@ interface VendorOrderUseCases {
   readonly deliverSubOrderUseCase: DeliverSubOrderUseCase;
   readonly markReadyForPickupUseCase: MarkReadyForPickupUseCase;
   readonly redeemPickupTokenUseCase: RedeemPickupTokenUseCase;
+  readonly completePickupManuallyUseCase: CompletePickupManuallyUseCase;
 }
 
 /**
@@ -329,13 +341,17 @@ interface VendorOrderUseCases {
  * `buildPaymentUseCases` above. The four mutating use cases share the exact
  * same dependency shape (S3-6/S4-QR reuse S3-5's, not a new one) except
  * `redeemPickupTokenUseCase`, which additionally needs the tenant-scoped
- * `pickupTokenRepository` and the shared `pickupTokenSigner`.
+ * `pickupTokenRepository` and the shared `pickupTokenSigner`, and
+ * `completePickupManuallyUseCase` (S4-QR-FALLBACK), which needs
+ * `pickupTokenRepository` and the shared `pickupCodeHasher` instead of the
+ * signer.
  */
 const buildVendorOrderUseCases = (deps: {
   vendorRepository: PrismaVendorRepository;
   vendorOrderRepository: PrismaVendorOrderRepository;
   pickupTokenRepository: PrismaPickupTokenRepository;
   pickupTokenSigner: PickupTokenSigner;
+  pickupCodeHasher: PickupCodeHasher;
   outboxWriter: PrismaOutboxWriter;
   auditWriter: AuditWriter;
   transactionRunner: PrismaTransactionRunner;
@@ -347,6 +363,7 @@ const buildVendorOrderUseCases = (deps: {
     vendorOrderRepository,
     pickupTokenRepository,
     pickupTokenSigner,
+    pickupCodeHasher,
     outboxWriter,
     auditWriter,
     transactionRunner,
@@ -378,6 +395,11 @@ const buildVendorOrderUseCases = (deps: {
       pickupTokenRepository,
       pickupTokenSigner,
     }),
+    completePickupManuallyUseCase: new CompletePickupManuallyUseCase({
+      ...mutatingDeps,
+      pickupTokenRepository,
+      pickupCodeHasher,
+    }),
   };
 };
 
@@ -394,6 +416,8 @@ const buildVendorOrderRouter = (params: {
   resolveVendorTenant: VendorTenantResolver;
   /** S4-QR: the same signer instance the customer-facing issue/rotate path uses. */
   pickupTokenSigner: PickupTokenSigner;
+  /** S4-QR-FALLBACK: the same hasher instance the customer-facing issue/rotate path uses to hash — this side only verifies. */
+  pickupCodeHasher: PickupCodeHasher;
   idGenerator: IdGenerator;
   clock: Clock;
   logger: Logger;
@@ -404,6 +428,7 @@ const buildVendorOrderRouter = (params: {
     sessionDenylist,
     resolveVendorTenant,
     pickupTokenSigner,
+    pickupCodeHasher,
     idGenerator,
     clock,
     logger,
@@ -434,6 +459,7 @@ const buildVendorOrderRouter = (params: {
       vendorOrderRepository,
       pickupTokenRepository,
       pickupTokenSigner,
+      pickupCodeHasher,
       outboxWriter,
       auditWriter,
       transactionRunner,
@@ -484,6 +510,11 @@ export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
     },
     clock,
   );
+  // S4-QR-FALLBACK: one generator, one hasher — shared the same way
+  // `pickupTokenSigner` is, between the customer issue/rotate path (mints
+  // and hashes) and the vendor manual-completion path (verifies only).
+  const pickupCodeGenerator: PickupCodeGenerator = new CryptoPickupCodeGenerator();
+  const pickupCodeHasher: PickupCodeHasher = new Argon2PickupCodeHasher();
 
   const useCases = buildOrderUseCases({
     repositories,
@@ -492,6 +523,8 @@ export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
     resolveTaxUseCase,
     postOrderPaymentJournalsUseCase,
     pickupTokenSigner,
+    pickupCodeGenerator,
+    pickupCodeHasher,
     idGenerator,
     clock,
     logger: moduleLogger,
@@ -512,6 +545,7 @@ export const createOrderModule = (deps: OrderModuleDeps): OrderModule => {
     sessionDenylist,
     resolveVendorTenant,
     pickupTokenSigner,
+    pickupCodeHasher,
     idGenerator,
     clock,
     logger: moduleLogger,

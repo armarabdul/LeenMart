@@ -23,6 +23,7 @@ const issue = (): PickupToken =>
     nonce: 'b'.repeat(32),
     issuedAt,
     expiresAt,
+    manualCodeHash: 'hash-1'.repeat(16),
   });
 
 describe('PickupToken', () => {
@@ -40,6 +41,14 @@ describe('PickupToken', () => {
 
     it('stamps createdAt to issuedAt', () => {
       expect(issue().createdAt).toEqual(issuedAt);
+    });
+
+    it('starts with zero manual-code attempts recorded', () => {
+      expect(issue().manualCodeAttempts).toBe(0);
+    });
+
+    it('carries the manual-code hash it was issued with', () => {
+      expect(issue().manualCodeHash).toBe('hash-1'.repeat(16));
     });
   });
 
@@ -64,12 +73,29 @@ describe('PickupToken', () => {
         nonce: 'd'.repeat(32),
         issuedAt: later,
         expiresAt: new Date(later.getTime() + 90_000),
+        manualCodeHash: 'hash-2'.repeat(16),
       });
 
       expect(rotated.tokenHash).toBe('c'.repeat(64));
       expect(rotated.nonce).toBe('d'.repeat(32));
       expect(rotated.issuedAt).toEqual(later);
       expect(rotated.status).toBe('ISSUED');
+    });
+
+    it('replaces the manual-code hash alongside the QR credential (S4-QR-FALLBACK) and resets its attempt count', () => {
+      const withAttempts = issue().recordFailedManualCodeAttempt().recordFailedManualCodeAttempt();
+      expect(withAttempts.manualCodeAttempts).toBe(2);
+
+      const rotated = withAttempts.rotate({
+        tokenHash: 'c'.repeat(64),
+        nonce: 'd'.repeat(32),
+        issuedAt: later,
+        expiresAt: new Date(later.getTime() + 90_000),
+        manualCodeHash: 'hash-2'.repeat(16),
+      });
+
+      expect(rotated.manualCodeHash).toBe('hash-2'.repeat(16));
+      expect(rotated.manualCodeAttempts).toBe(0);
     });
 
     it('never mutates the receiver', () => {
@@ -79,6 +105,7 @@ describe('PickupToken', () => {
         nonce: 'd'.repeat(32),
         issuedAt: later,
         expiresAt: new Date(later.getTime() + 90_000),
+        manualCodeHash: 'hash-2'.repeat(16),
       });
       expect(rotated).not.toBe(original);
       expect(original.tokenHash).toBe('a'.repeat(64));
@@ -92,8 +119,47 @@ describe('PickupToken', () => {
           nonce: 'd'.repeat(32),
           issuedAt: later,
           expiresAt: new Date(later.getTime() + 90_000),
+          manualCodeHash: 'hash-2'.repeat(16),
         }),
       ).toThrow(PickupTokenAlreadyRedeemedError);
+    });
+  });
+
+  describe('recordFailedManualCodeAttempt()', () => {
+    it('increments the attempt count', () => {
+      expect(issue().recordFailedManualCodeAttempt().manualCodeAttempts).toBe(1);
+    });
+
+    it('never mutates the receiver', () => {
+      const original = issue();
+      const incremented = original.recordFailedManualCodeAttempt();
+      expect(incremented).not.toBe(original);
+      expect(original.manualCodeAttempts).toBe(0);
+    });
+
+    it('refuses to record an attempt against an already-REDEEMED token', () => {
+      const redeemed = issue().redeem({ redeemedAt: later, redeemedByUserId });
+      expect(() => redeemed.recordFailedManualCodeAttempt()).toThrow(
+        PickupTokenAlreadyRedeemedError,
+      );
+    });
+  });
+
+  describe('hasExceededManualCodeAttempts()', () => {
+    it('is false below MAX_MANUAL_CODE_ATTEMPTS', () => {
+      let token = issue();
+      for (let i = 0; i < PickupToken.MAX_MANUAL_CODE_ATTEMPTS - 1; i += 1) {
+        token = token.recordFailedManualCodeAttempt();
+      }
+      expect(token.hasExceededManualCodeAttempts()).toBe(false);
+    });
+
+    it('is true at exactly MAX_MANUAL_CODE_ATTEMPTS', () => {
+      let token = issue();
+      for (let i = 0; i < PickupToken.MAX_MANUAL_CODE_ATTEMPTS; i += 1) {
+        token = token.recordFailedManualCodeAttempt();
+      }
+      expect(token.hasExceededManualCodeAttempts()).toBe(true);
     });
   });
 
@@ -149,6 +215,8 @@ describe('PickupToken', () => {
         redeemedAt: later,
         redeemedByUserId,
         version: 2,
+        manualCodeHash: 'hash-1'.repeat(16),
+        manualCodeAttempts: 3,
         createdAt: issuedAt,
       });
 

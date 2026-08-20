@@ -14,6 +14,8 @@ import { toPickupTokenId } from '../../domain/value-objects/pickup-token-id.valu
 import type { OrderId } from '../../domain/value-objects/order-id.value-object.js';
 import type { SubOrderId } from '../../domain/value-objects/sub-order-id.value-object.js';
 import type { PickupTokenSigner } from '../ports/pickup-token-signer.port.js';
+import type { PickupCodeHasher } from '../ports/pickup-code-hasher.port.js';
+import type { PickupCodeGenerator } from '../ports/pickup-code-generator.port.js';
 
 export interface GetOrIssuePickupTokenInput {
   readonly principal: Principal;
@@ -24,6 +26,8 @@ export interface GetOrIssuePickupTokenInput {
 export interface IssuedPickupToken {
   readonly token: string;
   readonly expiresAt: Date;
+  /** The plaintext 4-digit fallback code (S4-QR-FALLBACK) — returned only here, at the moment it is minted; only its Argon2id hash is ever persisted. */
+  readonly manualCode: string;
 }
 
 export interface GetOrIssuePickupTokenDeps {
@@ -31,6 +35,8 @@ export interface GetOrIssuePickupTokenDeps {
   /** Bound to `leenmart_checkout` — the customer's own issue/rotate path, per the port's own doc comment. */
   readonly pickupTokenRepository: PickupTokenRepository;
   readonly pickupTokenSigner: PickupTokenSigner;
+  readonly pickupCodeGenerator: PickupCodeGenerator;
+  readonly pickupCodeHasher: PickupCodeHasher;
   readonly idGenerator: IdGenerator;
   readonly logger: Logger;
 }
@@ -53,8 +59,15 @@ export class GetOrIssuePickupTokenUseCase {
   constructor(private readonly deps: GetOrIssuePickupTokenDeps) {}
 
   async execute(input: GetOrIssuePickupTokenInput): Promise<IssuedPickupToken> {
-    const { orderRepository, pickupTokenRepository, pickupTokenSigner, idGenerator, logger } =
-      this.deps;
+    const {
+      orderRepository,
+      pickupTokenRepository,
+      pickupTokenSigner,
+      pickupCodeGenerator,
+      pickupCodeHasher,
+      idGenerator,
+      logger,
+    } = this.deps;
     const { principal, orderId, subOrderId } = input;
 
     const order = await orderRepository.findByIdAndCustomerId(orderId, principal.userId);
@@ -75,6 +88,14 @@ export class GetOrIssuePickupTokenUseCase {
     const signed = pickupTokenSigner.sign(subOrderId);
     const tokenHash = createHash('sha256').update(signed.token).digest('hex');
 
+    // The manual fallback code (S4-QR-FALLBACK) is minted fresh here too, in
+    // lockstep with the QR — never derived from `signed.nonce` (locked
+    // decision: the two credentials must not be correlated). Only its hash
+    // is ever persisted; `manualCode` is returned to the caller once, the
+    // same way `signed.token` already is.
+    const manualCode = pickupCodeGenerator.generate();
+    const manualCodeHash = await pickupCodeHasher.hash(manualCode);
+
     const existing = await pickupTokenRepository.findBySubOrderId(subOrderId);
     if (existing) {
       const rotated = existing.rotate({
@@ -82,6 +103,7 @@ export class GetOrIssuePickupTokenUseCase {
         nonce: signed.nonce,
         issuedAt: signed.issuedAt,
         expiresAt: signed.expiresAt,
+        manualCodeHash,
       });
       await pickupTokenRepository.rotate(rotated);
     } else {
@@ -93,11 +115,12 @@ export class GetOrIssuePickupTokenUseCase {
         nonce: signed.nonce,
         issuedAt: signed.issuedAt,
         expiresAt: signed.expiresAt,
+        manualCodeHash,
       });
       await pickupTokenRepository.create(issued);
     }
 
     logger.info({ subOrderId, orderId }, 'Customer issued/rotated their pickup token');
-    return { token: signed.token, expiresAt: signed.expiresAt };
+    return { token: signed.token, expiresAt: signed.expiresAt, manualCode };
   }
 }

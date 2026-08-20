@@ -25,6 +25,14 @@ import type { PickupTokenSigner } from '../ports/pickup-token-signer.port.js';
 export interface RedeemPickupTokenInput {
   readonly principal: Principal;
   readonly token: string;
+  /**
+   * Set by the vendor portal only when this attempt is being resubmitted
+   * from its offline queue (S4-QR-FALLBACK) — i.e. it was verified locally,
+   * without a network round-trip, while the device had no connectivity, and
+   * is only now reaching the server. Absent/false for the ordinary online
+   * scan path, which is unchanged.
+   */
+  readonly queuedOffline?: boolean;
 }
 
 export interface RedeemPickupTokenDeps {
@@ -114,7 +122,7 @@ export class RedeemPickupTokenUseCase {
       clock,
       logger,
     } = this.deps;
-    const { principal, token } = input;
+    const { principal, token, queuedOffline } = input;
 
     const vendor = await requireActiveVendor(vendorRepository, principal.userId);
 
@@ -166,6 +174,26 @@ export class RedeemPickupTokenUseCase {
       // token `ISSUED` for a legitimate retry.
       const redeemed = await pickupTokens.redeemIfIssued(pickupToken.id, now, principal.userId);
       if (!redeemed) {
+        if (queuedOffline) {
+          // The offline-verified attempt lost the race to an online scan (or
+          // another offline device) that reached the server first
+          // (S4-QR-FALLBACK). Audit-log-only — no fraud engine exists to act
+          // on this — and written *outside* this transaction (no
+          // `.withTransaction(scope)`) so it survives the rollback the
+          // uniform failure below is about to trigger. The client still
+          // receives the same `PICKUP_TOKEN_INVALID` every other failure
+          // reason does (SEC-15); this is an internal record, not a
+          // different response.
+          await this.deps.auditWriter.record({
+            actorId: principal.userId,
+            actorRole: principal.role,
+            action: ORDER_AUDIT_ACTIONS.PICKUP_OFFLINE_REDEMPTION_CONFLICT,
+            entityType: ORDER_AUDIT_ENTITY_TYPES.SUB_ORDER,
+            entityId: toUuid(payload.subOrderId),
+            reason:
+              'An offline-verified redemption reached the server after the token was already redeemed.',
+          });
+        }
         throw new PickupTokenInvalidError();
       }
 

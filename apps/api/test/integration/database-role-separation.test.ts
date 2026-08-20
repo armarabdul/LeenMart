@@ -218,6 +218,79 @@ describe('database role separation', () => {
     });
   });
 
+  describe('pickup token credentials are out of the vendor role’s reach (S4-QR-FALLBACK, D1)', () => {
+    // 20260820160000 added a second permissive UPDATE policy so a wrong
+    // manual-code guess could persist its attempt counter (ISSUED -> ISSUED).
+    // Two things then stopped being true, and 20260820170000 restored both:
+    //
+    //   * `ALTER DEFAULT PRIVILEGES` had given `leenmart_app` table-wide
+    //     UPDATE, so that new policy let it carry any column — including the
+    //     QR credential itself.
+    //   * Permissive policies OR their WITH CHECK, so the new ISSUED check
+    //     accepted an un-redeem that the redeem policy's own check refused.
+    //
+    // These assert the privilege surface directly; `pickup.test.ts` covers the
+    // behaviour through the real API.
+
+    it.each(['token_hash', 'nonce', 'manual_code_hash'])(
+      'the app role cannot UPDATE pickup_tokens.%s',
+      async (column) => {
+        await expect(
+          app.$executeRawUnsafe(`UPDATE pickup_tokens SET "${column}" = 'tampered'`),
+        ).rejects.toThrow(/permission denied for table pickup_tokens/);
+      },
+    );
+
+    it('the app role cannot UPDATE the token’s validity window either', async () => {
+      await expect(
+        app.$executeRawUnsafe(`UPDATE pickup_tokens SET "expires_at" = now() + interval '1 year'`),
+      ).rejects.toThrow(/permission denied for table pickup_tokens/);
+    });
+
+    it('holds UPDATE on exactly the five columns its two legitimate writes need', async () => {
+      // redeemIfIssued(): status, redeemed_at, redeemed_by_user_id, version
+      // recordManualCodeAttempt(): manual_code_attempts
+      const rows = await owner.$queryRawUnsafe<{ column_name: string }[]>(
+        `SELECT column_name FROM information_schema.column_privileges
+          WHERE table_name = 'pickup_tokens'
+            AND grantee = 'leenmart_app'
+            AND privilege_type = 'UPDATE'
+          ORDER BY column_name`,
+      );
+
+      expect(rows.map((row) => row.column_name)).toEqual([
+        'manual_code_attempts',
+        'redeemed_at',
+        'redeemed_by_user_id',
+        'status',
+        'version',
+      ]);
+    });
+
+    it('holds no table-wide UPDATE that would make those column grants a floor rather than a ceiling', async () => {
+      const rows = await owner.$queryRawUnsafe<{ privilege_type: string }[]>(
+        `SELECT privilege_type FROM information_schema.role_table_grants
+          WHERE table_name = 'pickup_tokens' AND grantee = 'leenmart_app'`,
+      );
+
+      expect(rows.map((row) => row.privilege_type)).not.toContain('UPDATE');
+    });
+
+    it('keeps a RESTRICTIVE policy pinning the pre-image to ISSUED, so a redeemed token cannot be un-redeemed', async () => {
+      // Restrictive rather than permissive on purpose: a permissive policy
+      // would be OR-ed with the redeem policy and could not constrain it.
+      const rows = await owner.$queryRawUnsafe<{ permissive: string; qual: string }[]>(
+        `SELECT permissive, qual FROM pg_policies
+          WHERE tablename = 'pickup_tokens'
+            AND policyname = 'pickup_tokens_vendor_update_issued_only'`,
+      );
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.permissive).toBe('RESTRICTIVE');
+      expect(rows[0]?.qual).toContain('ISSUED');
+    });
+  });
+
   describe('ordinary application access still works', () => {
     it('the app role can read every table the application uses', async () => {
       // Authentication must not break because tenancy work started. These are

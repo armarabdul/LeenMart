@@ -10,16 +10,16 @@ import { VendorProfile } from '../../../../../src/modules/vendor/domain/entities
 import { VendorStatus } from '../../../../../src/modules/vendor/domain/value-objects/vendor-status.value-object.js';
 import type { VendorRepository } from '../../../../../src/modules/vendor/domain/repositories/vendor.repository.js';
 import type { OutboxWriter } from '../../../../../src/shared/application/ports/outbox-writer.port.js';
-import { RedeemPickupTokenUseCase } from '../../../../../src/modules/order/application/use-cases/redeem-pickup-token.use-case.js';
-import type { PickupTokenSigner } from '../../../../../src/modules/order/application/ports/pickup-token-signer.port.js';
+import { CompletePickupManuallyUseCase } from '../../../../../src/modules/order/application/use-cases/complete-pickup-manually.use-case.js';
+import type { PickupCodeHasher } from '../../../../../src/modules/order/application/ports/pickup-code-hasher.port.js';
 import { PickupToken } from '../../../../../src/modules/order/domain/entities/pickup-token.entity.js';
 import { SubOrder } from '../../../../../src/modules/order/domain/entities/sub-order.entity.js';
 import { FulfilmentMode } from '../../../../../src/modules/order/domain/value-objects/fulfilment-mode.value-object.js';
 import {
-  FulfilmentModeMismatchError,
-  InvalidOrderStatusTransitionError,
+  PickupTokenAlreadyRedeemedError,
   PickupTokenInvalidError,
   SubOrderConcurrentlyModifiedError,
+  SubOrderNotFoundError,
   VendorNotActiveForOrdersError,
 } from '../../../../../src/modules/order/domain/errors/order-errors.js';
 import { OrderStatus } from '../../../../../src/modules/order/domain/value-objects/order-status.value-object.js';
@@ -46,8 +46,8 @@ const principal: Principal = {
   sessionId: toSessionId(ids.generate()),
   role: 'VENDOR_OWNER',
 };
-const TOKEN = 'header.payload.signature';
-const NONCE = 'a'.repeat(32);
+const CODE = '4821';
+const CODE_HASH = '$argon2id$mock$fixture$';
 
 const activeVendor = VendorProfile.reconstitute({
   id: vendorId,
@@ -120,18 +120,24 @@ const vendorOrderRepo = (overrides: Partial<VendorOrderRepository> = {}): Vendor
 };
 
 const buildPickupToken = (
-  overrides: Partial<{ vendorId: typeof vendorId; nonce: string }> = {},
-): PickupToken =>
-  PickupToken.issue({
+  overrides: Partial<{ vendorId: typeof vendorId; manualCodeAttempts: number }> = {},
+): PickupToken => {
+  let token = PickupToken.issue({
     id: toPickupTokenId(ids.generate()),
     subOrderId,
     vendorId: overrides.vendorId ?? vendorId,
     tokenHash: 'x'.repeat(64),
-    nonce: overrides.nonce ?? NONCE,
+    nonce: 'a'.repeat(32),
     issuedAt: NOW,
     expiresAt: new Date(NOW.getTime() + 90_000),
-    manualCodeHash: 'manual-code-hash',
+    manualCodeHash: CODE_HASH,
   });
+  const attempts = overrides.manualCodeAttempts ?? 0;
+  for (let i = 0; i < attempts; i += 1) {
+    token = token.recordFailedManualCodeAttempt();
+  }
+  return token;
+};
 
 const pickupTokenRepo = (overrides: Partial<PickupTokenRepository> = {}): PickupTokenRepository => {
   const repository: PickupTokenRepository = {
@@ -168,9 +174,13 @@ const runner = (): TransactionRunner => ({
   run: async (work) => work({} as TransactionScope),
 });
 
-const signer = (overrides: Partial<PickupTokenSigner> = {}): PickupTokenSigner => ({
-  verify: vi.fn().mockReturnValue({ subOrderId, nonce: NONCE }),
-  sign: vi.fn(),
+const codeHasher = (overrides: Partial<PickupCodeHasher> = {}): PickupCodeHasher => ({
+  hash: vi.fn(),
+  verify: vi
+    .fn()
+    .mockImplementation((hash: string, raw: string) =>
+      Promise.resolve(hash === CODE_HASH && raw === CODE),
+    ),
   ...overrides,
 });
 
@@ -178,17 +188,17 @@ interface BuildOverrides {
   vendorRepository?: VendorRepository;
   vendorOrderRepository?: VendorOrderRepository;
   pickupTokenRepository?: PickupTokenRepository;
-  pickupTokenSigner?: PickupTokenSigner;
+  pickupCodeHasher?: PickupCodeHasher;
   outboxWriter?: OutboxWriter;
   auditWriter?: AuditWriter;
 }
 
-const buildUseCase = (overrides: BuildOverrides = {}): RedeemPickupTokenUseCase =>
-  new RedeemPickupTokenUseCase({
+const buildUseCase = (overrides: BuildOverrides = {}): CompletePickupManuallyUseCase =>
+  new CompletePickupManuallyUseCase({
     vendorRepository: overrides.vendorRepository ?? vendorRepo(),
     vendorOrderRepository: overrides.vendorOrderRepository ?? vendorOrderRepo(),
     pickupTokenRepository: overrides.pickupTokenRepository ?? pickupTokenRepo(),
-    pickupTokenSigner: overrides.pickupTokenSigner ?? signer(),
+    pickupCodeHasher: overrides.pickupCodeHasher ?? codeHasher(),
     outboxWriter: overrides.outboxWriter ?? outboxWriter(),
     auditWriter: overrides.auditWriter ?? auditWriter(),
     transactionRunner: runner(),
@@ -196,10 +206,10 @@ const buildUseCase = (overrides: BuildOverrides = {}): RedeemPickupTokenUseCase 
     logger: new NullLogger(),
   });
 
-const input = { principal, token: TOKEN };
+const input = { principal, subOrderId, code: CODE };
 
-describe('RedeemPickupTokenUseCase', () => {
-  it('valid token succeeds: moves READY_FOR_PICKUP -> COMPLETED', async () => {
+describe('CompletePickupManuallyUseCase (S4-QR-FALLBACK)', () => {
+  it('valid code succeeds: moves READY_FOR_PICKUP -> COMPLETED', async () => {
     const useCase = buildUseCase();
 
     const result = await useCase.execute(input);
@@ -207,7 +217,7 @@ describe('RedeemPickupTokenUseCase', () => {
     expect(result.subOrder.status).toBe(OrderStatus.COMPLETED);
   });
 
-  it('atomically redeems the token before writing the SubOrder', async () => {
+  it('atomically redeems the token via the same CAS the QR path uses, before writing the SubOrder', async () => {
     const tokens = pickupTokenRepo();
     const vendorOrder = vendorOrderRepo();
     const useCase = buildUseCase({
@@ -221,44 +231,40 @@ describe('RedeemPickupTokenUseCase', () => {
     expect(vendorOrder.updateStatusIfVersionMatches).toHaveBeenCalledTimes(1);
   });
 
-  it('expired/forged/wrong-audience token fails uniformly — any verify() failure becomes PickupTokenInvalidError', async () => {
-    const useCase = buildUseCase({
-      pickupTokenSigner: signer({
-        verify: vi.fn().mockImplementation(() => {
-          throw new PickupTokenInvalidError();
-        }),
-      }),
-    });
+  it('invalid code is refused, increments the attempt count, and never reaches the CAS', async () => {
+    const tokens = pickupTokenRepo();
+    const useCase = buildUseCase({ pickupTokenRepository: tokens });
 
-    await expect(useCase.execute(input)).rejects.toThrow(PickupTokenInvalidError);
+    await expect(useCase.execute({ ...input, code: '0000' })).rejects.toThrow(
+      PickupTokenInvalidError,
+    );
+
+    expect(tokens.recordManualCodeAttempt).toHaveBeenCalledWith(expect.anything(), 1);
+    expect(tokens.redeemIfIssued).not.toHaveBeenCalled();
   });
 
-  it('wrong sub-order fails: no matching pickup_tokens row (RLS-invisible or never issued)', async () => {
-    const useCase = buildUseCase({
-      pickupTokenRepository: pickupTokenRepo({ findBySubOrderId: vi.fn().mockResolvedValue(null) }),
-    });
-
-    await expect(useCase.execute(input)).rejects.toThrow(PickupTokenInvalidError);
-  });
-
-  it('a stale (rotated-out) nonce fails the same uniform way', async () => {
+  it('locks out further attempts once MAX_MANUAL_CODE_ATTEMPTS is reached — the client sees the same uniform error', async () => {
     const useCase = buildUseCase({
       pickupTokenRepository: pickupTokenRepo({
-        findBySubOrderId: vi.fn().mockResolvedValue(buildPickupToken({ nonce: 'stale-nonce' })),
+        findBySubOrderId: vi
+          .fn()
+          .mockResolvedValue(
+            buildPickupToken({ manualCodeAttempts: PickupToken.MAX_MANUAL_CODE_ATTEMPTS }),
+          ),
       }),
     });
 
     await expect(useCase.execute(input)).rejects.toThrow(PickupTokenInvalidError);
   });
 
-  it('wrong vendor fails: token belongs to a different vendor_id than the caller', async () => {
+  it('a code entered against another vendor’s sub-order is refused as SubOrderNotFoundError — never distinguished from "no such sub-order"', async () => {
     const useCase = buildUseCase({
       pickupTokenRepository: pickupTokenRepo({
         findBySubOrderId: vi.fn().mockResolvedValue(buildPickupToken({ vendorId: otherVendorId })),
       }),
     });
 
-    await expect(useCase.execute(input)).rejects.toThrow(PickupTokenInvalidError);
+    await expect(useCase.execute(input)).rejects.toThrow(SubOrderNotFoundError);
   });
 
   it('does not touch the token or the sub-order when the wrong-vendor check fails', async () => {
@@ -271,29 +277,53 @@ describe('RedeemPickupTokenUseCase', () => {
       vendorOrderRepository: vendorOrder,
     });
 
-    await expect(useCase.execute(input)).rejects.toThrow(PickupTokenInvalidError);
+    await expect(useCase.execute(input)).rejects.toThrow(SubOrderNotFoundError);
     expect(tokens.redeemIfIssued).not.toHaveBeenCalled();
     expect(vendorOrder.updateStatusIfVersionMatches).not.toHaveBeenCalled();
   });
 
-  it('already-redeemed token fails generically: the atomic CAS returned false', async () => {
+  it('no sub-order matching the id at all is refused as SubOrderNotFoundError', async () => {
+    const useCase = buildUseCase({
+      vendorOrderRepository: vendorOrderRepo({ findDetailById: vi.fn().mockResolvedValue(null) }),
+    });
+
+    await expect(useCase.execute(input)).rejects.toThrow(SubOrderNotFoundError);
+  });
+
+  it('an already-redeemed token is refused as PickupTokenAlreadyRedeemedError before the code is even checked', async () => {
+    const hasher = codeHasher();
+    const redeemed = buildPickupToken().rotate({
+      tokenHash: 'y'.repeat(64),
+      nonce: 'b'.repeat(32),
+      issuedAt: NOW,
+      expiresAt: new Date(NOW.getTime() + 90_000),
+      manualCodeHash: CODE_HASH,
+    });
+    const alreadyRedeemed = redeemed.redeem({ redeemedAt: LATER, redeemedByUserId: userId });
+    const useCase = buildUseCase({
+      pickupTokenRepository: pickupTokenRepo({
+        findBySubOrderId: vi.fn().mockResolvedValue(alreadyRedeemed),
+      }),
+      pickupCodeHasher: hasher,
+    });
+
+    await expect(useCase.execute(input)).rejects.toThrow(PickupTokenAlreadyRedeemedError);
+    expect(hasher.verify).not.toHaveBeenCalled();
+  });
+
+  it('a genuine race lost at the CAS (won by a concurrent scan/manual attempt) reports a 409, not the uniform 422', async () => {
     const vendorOrder = vendorOrderRepo();
     const useCase = buildUseCase({
       vendorOrderRepository: vendorOrder,
       pickupTokenRepository: pickupTokenRepo({ redeemIfIssued: vi.fn().mockResolvedValue(false) }),
     });
 
-    // Uniform with a forged token (SEC-15): replay must not disclose that the
-    // token was ever valid, nor that the sub-order has already COMPLETED.
-    await expect(useCase.execute(input)).rejects.toThrow(PickupTokenInvalidError);
-    // The CAS is the first write, so a losing caller never reads or touches
-    // the SubOrder at all.
+    await expect(useCase.execute(input)).rejects.toThrow(PickupTokenAlreadyRedeemedError);
     expect(vendorOrder.updateStatusIfVersionMatches).not.toHaveBeenCalled();
   });
 
-  it('vendor without an ACTIVE profile is refused before any token verification', async () => {
-    const vendorOrder = vendorOrderRepo();
-    const pickupTokenSignerVerify = vi.fn();
+  it('vendor without an ACTIVE profile is refused before any code verification', async () => {
+    const hasher = codeHasher();
     const suspended = VendorProfile.reconstitute({
       id: vendorId,
       userId,
@@ -307,48 +337,11 @@ describe('RedeemPickupTokenUseCase', () => {
     });
     const useCase = buildUseCase({
       vendorRepository: vendorRepo({ findByUserId: vi.fn().mockResolvedValue(suspended) }),
-      vendorOrderRepository: vendorOrder,
-      pickupTokenSigner: signer({ verify: pickupTokenSignerVerify }),
+      pickupCodeHasher: hasher,
     });
 
     await expect(useCase.execute(input)).rejects.toThrow(VendorNotActiveForOrdersError);
-    expect(pickupTokenSignerVerify).not.toHaveBeenCalled();
-  });
-
-  it('PICKUP SubOrder that is not READY_FOR_PICKUP refuses completion (invalid state transition)', async () => {
-    const useCase = buildUseCase({
-      vendorOrderRepository: vendorOrderRepo({
-        findDetailById: vi
-          .fn()
-          .mockResolvedValue(buildDetail(OrderStatus.PROCESSING, FulfilmentMode.PICKUP)),
-      }),
-    });
-
-    await expect(useCase.execute(input)).rejects.toThrow(InvalidOrderStatusTransitionError);
-  });
-
-  it('refuses to complete an already-COMPLETED sub-order (repeated redemption)', async () => {
-    const useCase = buildUseCase({
-      vendorOrderRepository: vendorOrderRepo({
-        findDetailById: vi
-          .fn()
-          .mockResolvedValue(buildDetail(OrderStatus.COMPLETED, FulfilmentMode.PICKUP)),
-      }),
-    });
-
-    await expect(useCase.execute(input)).rejects.toThrow(InvalidOrderStatusTransitionError);
-  });
-
-  it('refuses a DELIVERY sub-order — this is the pickup-only completion path', async () => {
-    const useCase = buildUseCase({
-      vendorOrderRepository: vendorOrderRepo({
-        findDetailById: vi
-          .fn()
-          .mockResolvedValue(buildDetail(OrderStatus.READY_FOR_PICKUP, FulfilmentMode.DELIVERY)),
-      }),
-    });
-
-    await expect(useCase.execute(input)).rejects.toThrow(FulfilmentModeMismatchError);
+    expect(hasher.verify).not.toHaveBeenCalled();
   });
 
   it('rejects with SubOrderConcurrentlyModifiedError when the version was already moved', async () => {
@@ -361,7 +354,7 @@ describe('RedeemPickupTokenUseCase', () => {
     await expect(useCase.execute(input)).rejects.toThrow(SubOrderConcurrentlyModifiedError);
   });
 
-  it('writes a sub_order.pickup_completed outbox event on success', async () => {
+  it('writes the same sub_order.pickup_completed outbox event the QR path writes', async () => {
     const outbox = outboxWriter();
     const useCase = buildUseCase({ outboxWriter: outbox });
 
@@ -375,7 +368,7 @@ describe('RedeemPickupTokenUseCase', () => {
     );
   });
 
-  it('writes an audit record naming the redeeming vendor as the actor', async () => {
+  it('writes a distinct sub_order.pickup_completed_manual audit action — never the QR path’s own action', async () => {
     const audit = auditWriter();
     const useCase = buildUseCase({ auditWriter: audit });
 
@@ -384,106 +377,38 @@ describe('RedeemPickupTokenUseCase', () => {
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({
         actorId: userId,
-        action: 'sub_order.pickup_completed',
+        action: 'sub_order.pickup_completed_manual',
         entityType: 'SubOrder',
         before: { status: 'READY_FOR_PICKUP' },
         after: { status: 'COMPLETED' },
       }),
     );
+    expect(audit.record).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'sub_order.pickup_completed' }),
+    );
   });
 
-  it('does not write outbox or audit when redemption is refused', async () => {
+  it('never logs or audits the plaintext code', async () => {
+    const audit = auditWriter();
+    const useCase = buildUseCase({ auditWriter: audit });
+
+    await useCase.execute(input);
+
+    const calls = (audit.record as ReturnType<typeof vi.fn>).mock.calls as unknown[][];
+    for (const call of calls) {
+      expect(JSON.stringify(call)).not.toContain(CODE);
+    }
+  });
+
+  it('does not write outbox or the completion audit when the code is wrong', async () => {
     const outbox = outboxWriter();
     const audit = auditWriter();
-    const useCase = buildUseCase({
-      outboxWriter: outbox,
-      auditWriter: audit,
-      pickupTokenRepository: pickupTokenRepo({ redeemIfIssued: vi.fn().mockResolvedValue(false) }),
-    });
+    const useCase = buildUseCase({ outboxWriter: outbox, auditWriter: audit });
 
-    await expect(useCase.execute(input)).rejects.toThrow(PickupTokenInvalidError);
+    await expect(useCase.execute({ ...input, code: '0000' })).rejects.toThrow(
+      PickupTokenInvalidError,
+    );
     expect(outbox.write).not.toHaveBeenCalled();
     expect(audit.record).not.toHaveBeenCalled();
-  });
-
-  describe('queuedOffline (S4-QR-FALLBACK)', () => {
-    it('an offline-queued attempt that loses the race records a distinct conflict audit entry, not the completion one', async () => {
-      const audit = auditWriter();
-      const useCase = buildUseCase({
-        auditWriter: audit,
-        pickupTokenRepository: pickupTokenRepo({
-          redeemIfIssued: vi.fn().mockResolvedValue(false),
-        }),
-      });
-
-      await expect(useCase.execute({ ...input, queuedOffline: true })).rejects.toThrow(
-        PickupTokenInvalidError,
-      );
-
-      expect(audit.record).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: 'sub_order.pickup_offline_redemption_conflict',
-          entityType: 'SubOrder',
-        }),
-      );
-      expect(audit.record).not.toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'sub_order.pickup_completed' }),
-      );
-    });
-
-    it('the client still receives the same uniform PickupTokenInvalidError as any other failure (SEC-15) — the conflict record is an internal detail only', async () => {
-      const useCase = buildUseCase({
-        pickupTokenRepository: pickupTokenRepo({
-          redeemIfIssued: vi.fn().mockResolvedValue(false),
-        }),
-      });
-
-      await expect(useCase.execute({ ...input, queuedOffline: true })).rejects.toThrow(
-        PickupTokenInvalidError,
-      );
-    });
-
-    it('never creates a second successful redemption — the CAS result is unchanged by the flag', async () => {
-      const vendorOrder = vendorOrderRepo();
-      const useCase = buildUseCase({
-        vendorOrderRepository: vendorOrder,
-        pickupTokenRepository: pickupTokenRepo({
-          redeemIfIssued: vi.fn().mockResolvedValue(false),
-        }),
-      });
-
-      await expect(useCase.execute({ ...input, queuedOffline: true })).rejects.toThrow(
-        PickupTokenInvalidError,
-      );
-      expect(vendorOrder.updateStatusIfVersionMatches).not.toHaveBeenCalled();
-    });
-
-    it('does not record a conflict when the offline-queued attempt actually wins the race (ordinary success)', async () => {
-      const audit = auditWriter();
-      const useCase = buildUseCase({ auditWriter: audit });
-
-      await useCase.execute({ ...input, queuedOffline: true });
-
-      expect(audit.record).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'sub_order.pickup_completed' }),
-      );
-      expect(audit.record).not.toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'sub_order.pickup_offline_redemption_conflict' }),
-      );
-    });
-
-    it('an ordinary (non-offline) losing attempt never records the offline-conflict action', async () => {
-      const audit = auditWriter();
-      const useCase = buildUseCase({
-        auditWriter: audit,
-        pickupTokenRepository: pickupTokenRepo({
-          redeemIfIssued: vi.fn().mockResolvedValue(false),
-        }),
-      });
-
-      await expect(useCase.execute(input)).rejects.toThrow(PickupTokenInvalidError);
-
-      expect(audit.record).not.toHaveBeenCalled();
-    });
   });
 });

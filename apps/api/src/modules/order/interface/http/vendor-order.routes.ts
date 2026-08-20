@@ -1,6 +1,9 @@
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
 import { z } from 'zod';
-import { redeemPickupTokenRequestSchema } from '@leen-mart/contracts';
+import {
+  completePickupManuallyRequestSchema,
+  redeemPickupTokenRequestSchema,
+} from '@leen-mart/contracts';
 import { asyncHandler } from '../../../../shared/interface/http/middleware/async-handler.js';
 import { authenticate } from '../../../../shared/interface/http/middleware/authenticate.js';
 import { requirePermission } from '../../../../shared/interface/http/middleware/authorize.js';
@@ -19,6 +22,45 @@ export interface VendorOrderRouterDeps {
   readonly sessionDenylist: SessionDenylist;
   readonly resolveVendorTenant: VendorTenantResolver;
 }
+
+/**
+ * The two pickup-completion routes (S4-QR's `/pickup/redeem` and
+ * S4-QR-FALLBACK's `/:id/pickup/manual-complete`) — split out of
+ * `createVendorOrderRouter` purely to keep it under this file's
+ * function-length budget, the same reasoning every other builder split in
+ * this codebase already follows.
+ */
+const mountPickupRoutes = (
+  router: Router,
+  controller: VendorOrderController,
+  authenticated: readonly RequestHandler[],
+): void => {
+  // S4-QR: no `:id` — the presented token, once verified, names the
+  // sub-order (locked decision #10). `SCAN_PICKUP_QR`, preserved exactly as
+  // defined ahead of this milestone (VENDOR_OWNER/MANAGER/STAFF = OWN,
+  // SUPER_ADMIN = NONE).
+  router.post(
+    '/pickup/redeem',
+    ...authenticated,
+    requirePermission('SCAN_PICKUP_QR'),
+    validate({ body: redeemPickupTokenRequestSchema }),
+    asyncHandler(controller.redeemPickupToken),
+  );
+
+  // S4-QR-FALLBACK: `:id`-addressed like `/ready-for-pickup`, not
+  // token-addressed like `/pickup/redeem` above — the vendor selects the
+  // sub-order from their own dashboard rather than presenting a scanned
+  // credential, so ownership is proven the same way every other `:id`
+  // route in this router already proves it. `SCAN_PICKUP_QR` again: this is
+  // an alternate path to the same action, not a new capability.
+  router.post(
+    '/:id/pickup/manual-complete',
+    ...authenticated,
+    requirePermission('SCAN_PICKUP_QR'),
+    validate({ params: subOrderParamsSchema, body: completePickupManuallyRequestSchema }),
+    asyncHandler(controller.completePickupManually),
+  );
+};
 
 /**
  * Mounted at `/api/v1/vendor/orders` (S3-5). Addressed by `SubOrderId`
@@ -102,17 +144,7 @@ export const createVendorOrderRouter = (
     asyncHandler(controller.markReadyForPickup),
   );
 
-  // S4-QR: no `:id` — the presented token, once verified, names the
-  // sub-order (locked decision #10). `SCAN_PICKUP_QR`, preserved exactly as
-  // defined ahead of this milestone (VENDOR_OWNER/MANAGER/STAFF = OWN,
-  // SUPER_ADMIN = NONE).
-  router.post(
-    '/pickup/redeem',
-    ...authenticated,
-    requirePermission('SCAN_PICKUP_QR'),
-    validate({ body: redeemPickupTokenRequestSchema }),
-    asyncHandler(controller.redeemPickupToken),
-  );
+  mountPickupRoutes(router, controller, authenticated);
 
   return router;
 };

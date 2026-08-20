@@ -299,11 +299,15 @@ export const vendorSubOrderResponseSchema = z.object({
  * GET .../pickup-token (S4-QR, customer-facing): the current QR credential
  * for one `PICKUP` sub-order. `token` is the opaque compact-JWS string the
  * QR code encodes; `expiresAt` lets the customer PWA schedule its own
- * re-poll ahead of expiry rather than guessing the server's TTL.
+ * re-poll ahead of expiry rather than guessing the server's TTL. `manualCode`
+ * (S4-QR-FALLBACK) is the 4-digit scanner-broken fallback, rotated in
+ * lockstep with `token` — shown to the customer to read aloud if the
+ * vendor's scanner is down.
  */
 export const pickupTokenResponseSchema = z.object({
   token: z.string(),
   expiresAt: isoDateTimeSchema,
+  manualCode: z.string().length(4),
 });
 
 /**
@@ -311,10 +315,28 @@ export const pickupTokenResponseSchema = z.object({
  * QR code and submits its raw payload here. No sub-order id in the request —
  * the token itself, once verified, is what names the sub-order (locked
  * decision #10: no direct public endpoint may mark a pickup complete).
+ *
+ * `queuedOffline` (S4-QR-FALLBACK, optional, defaults to unset/false): set by
+ * the vendor portal only when resubmitting an attempt that was verified
+ * locally while the device had no connectivity — see
+ * `RedeemPickupTokenUseCase`'s own doc comment for what this changes
+ * (an audit record on conflict, never the response itself).
  */
 export const redeemPickupTokenRequestSchema = z
   .object({
     token: z.string().min(1),
+    queuedOffline: z.boolean().optional(),
+  })
+  .strict();
+
+/**
+ * POST /vendor/orders/:id/pickup/manual-complete (S4-QR-FALLBACK): the
+ * scanner-broken fallback — the vendor reads a 4-digit code off the
+ * customer's screen instead of scanning the QR.
+ */
+export const completePickupManuallyRequestSchema = z
+  .object({
+    code: z.string().length(4),
   })
   .strict();
 
@@ -338,3 +360,4 @@ export type PaymentInitiationResponse = z.infer<typeof paymentInitiationResponse
 export type ConfirmPaymentRequest = z.infer<typeof confirmPaymentRequestSchema>;
 export type PickupTokenResponse = z.infer<typeof pickupTokenResponseSchema>;
 export type RedeemPickupTokenRequest = z.infer<typeof redeemPickupTokenRequestSchema>;
+export type CompletePickupManuallyRequest = z.infer<typeof completePickupManuallyRequestSchema>;

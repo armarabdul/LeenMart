@@ -21,6 +21,10 @@ export interface PickupTokenProps {
   readonly redeemedByUserId: UserId | null;
   /** Optimistic-concurrency guard for the *rotate* path only — the same `Inventory.version`/`SubOrder.version` idiom. Redemption's own single-use guarantee comes from the `status` compare-and-set (`PrismaPickupTokenRepository.redeemIfIssued`), not from this. */
   readonly version: number;
+  /** Argon2id hash of the current 4-digit manual/scanner-broken fallback code (S4-QR-FALLBACK, SDD 13.3) — rotated in lockstep with `tokenHash`/`nonce`. Null until the first issue/rotate under this feature. */
+  readonly manualCodeHash: string | null;
+  /** Mirrors `Otp.attempts` — capped by `MAX_MANUAL_CODE_ATTEMPTS`, reset to 0 on every rotation alongside `manualCodeHash`. */
+  readonly manualCodeAttempts: number;
   readonly createdAt: Date;
 }
 
@@ -37,6 +41,9 @@ export interface PickupTokenProps {
  * redemption state machine.
  */
 export class PickupToken {
+  /** Mirrors `Otp.MAX_ATTEMPTS` — a 4-digit code is only 10,000 possibilities, so the attempt budget (not the hash strength alone) is what makes brute force impractical. */
+  static readonly MAX_MANUAL_CODE_ATTEMPTS = 5;
+
   private constructor(private readonly props: PickupTokenProps) {}
 
   static issue(props: {
@@ -47,6 +54,7 @@ export class PickupToken {
     nonce: string;
     issuedAt: Date;
     expiresAt: Date;
+    manualCodeHash: string;
   }): PickupToken {
     return new PickupToken({
       id: props.id,
@@ -60,6 +68,8 @@ export class PickupToken {
       redeemedAt: null,
       redeemedByUserId: null,
       version: 1,
+      manualCodeHash: props.manualCodeHash,
+      manualCodeAttempts: 0,
       createdAt: props.issuedAt,
     });
   }
@@ -112,6 +122,14 @@ export class PickupToken {
     return this.props.version;
   }
 
+  get manualCodeHash(): string | null {
+    return this.props.manualCodeHash;
+  }
+
+  get manualCodeAttempts(): number {
+    return this.props.manualCodeAttempts;
+  }
+
   get createdAt(): Date {
     return this.props.createdAt;
   }
@@ -120,16 +138,27 @@ export class PickupToken {
     return now.getTime() >= this.props.expiresAt.getTime();
   }
 
+  hasExceededManualCodeAttempts(): boolean {
+    return this.props.manualCodeAttempts >= PickupToken.MAX_MANUAL_CODE_ATTEMPTS;
+  }
+
   /**
    * Replaces the hash/nonce/validity window with a freshly signed token
    * (SDD 13.1's 60-second rotation) — only while still `ISSUED`. A `REDEEMED`
    * token is terminal; rotating it would resurrect a spent credential.
+   *
+   * The manual/scanner-broken fallback code (S4-QR-FALLBACK) rotates in the
+   * same call, for the same reason the QR itself does: a code that outlived
+   * the QR's own validity window would be a longer-lived bearer secret than
+   * the credential it exists to back up. `manualCodeAttempts` resets to 0 —
+   * a fresh code earns a fresh attempt budget.
    */
   rotate(props: {
     tokenHash: string;
     nonce: string;
     issuedAt: Date;
     expiresAt: Date;
+    manualCodeHash: string;
   }): PickupToken {
     if (this.props.status !== 'ISSUED') {
       throw new PickupTokenAlreadyRedeemedError();
@@ -140,6 +169,23 @@ export class PickupToken {
       nonce: props.nonce,
       issuedAt: props.issuedAt,
       expiresAt: props.expiresAt,
+      manualCodeHash: props.manualCodeHash,
+      manualCodeAttempts: 0,
+    });
+  }
+
+  /**
+   * Records a wrong manual-code guess (S4-QR-FALLBACK). Mirrors
+   * `Otp.recordFailedAttempt()` — throws rather than silently incrementing
+   * past redemption, the same invariant `rotate()` above already enforces.
+   */
+  recordFailedManualCodeAttempt(): PickupToken {
+    if (this.props.status !== 'ISSUED') {
+      throw new PickupTokenAlreadyRedeemedError();
+    }
+    return new PickupToken({
+      ...this.props,
+      manualCodeAttempts: this.props.manualCodeAttempts + 1,
     });
   }
 

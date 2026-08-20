@@ -1380,6 +1380,24 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     classification: 'SELF_SCOPED',
     why: 'Takes no resource id in the URL at all — the presented token, once verified, names the sub-order (locked decision #10); a token minted for another vendor is refused because pickup_tokens RLS confines the row this vendor can even see, hand-tested in the dedicated pickup redemption security suite, not the generic matrix.',
   },
+  // S4-QR-FALLBACK: same seed/actor/snapshot as `/:id/ready-for-pickup`
+  // above — a client-supplied sub-order id, unlike `/pickup/redeem`, so the
+  // generic matrix's attacker-vs-owner probe applies directly here.
+  {
+    method: 'POST',
+    prefix: '/api/v1/vendor/orders',
+    path: '/:id/pickup/manual-complete',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied sub-order id and a 4-digit fallback code; a code entered against another vendor’s sub-order is refused the same way an unknown id is (SubOrderNotFoundError), never distinguishing the two.',
+    actor: activeVendorActor,
+    seed: seedVendorSubOrder,
+    attempt: (ctx, actor, resourceId) =>
+      authed(
+        request(ctx.app).post(`/api/v1/vendor/orders/${resourceId}/pickup/manual-complete`),
+        actor,
+      ).send({ code: '0000' }),
+    snapshot: snapshotVendorSubOrder,
+  },
   // --- vendor earnings: /api/v1/vendor/earnings (S3-8) ---
   //
   // A single self-scoped `GET` — there is no `:id` in this router at all

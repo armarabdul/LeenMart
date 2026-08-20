@@ -1,4 +1,5 @@
 import type {
+  CompletePickupManuallyRequest,
   RedeemPickupTokenRequest,
   VendorSubOrderResponse,
   VendorSubOrderSummaryResponse,
@@ -74,6 +75,22 @@ export const vendorOrderApi = baseApi.injectEndpoints({
       transformResponse: (response: SuccessEnvelope<VendorSubOrderResponse>) => response.data,
       invalidatesTags: ['VendorOrder'],
     }),
+    // S4-QR-FALLBACK: `:id`-addressed like `markReadyForPickup` above, not
+    // token-addressed like `redeemPickupToken` — the vendor selects the
+    // sub-order from their own dashboard rather than presenting a scanned
+    // credential.
+    completePickupManually: builder.mutation<
+      VendorSubOrderResponse,
+      { subOrderId: string; body: CompletePickupManuallyRequest }
+    >({
+      query: ({ subOrderId, body }) => ({
+        url: `/vendor/orders/${encodeURIComponent(subOrderId)}/pickup/manual-complete`,
+        method: 'POST',
+        body,
+      }),
+      transformResponse: (response: SuccessEnvelope<VendorSubOrderResponse>) => response.data,
+      invalidatesTags: ['VendorOrder'],
+    }),
   }),
 });
 
@@ -85,4 +102,5 @@ export const {
   useDeliverSubOrderMutation,
   useMarkReadyForPickupMutation,
   useRedeemPickupTokenMutation,
+  useCompletePickupManuallyMutation,
 } = vendorOrderApi;

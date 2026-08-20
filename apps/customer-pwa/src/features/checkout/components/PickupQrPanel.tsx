@@ -74,12 +74,23 @@ export const PickupQrPanel = ({ orderId, subOrderId }: PickupQrPanelProps): JSX.
           showing it under "not available" would invite a customer to present
           a QR that cannot work. */}
       {data && !isError && (
-        <output
-          aria-label="Pickup code"
-          className="block break-all rounded border border-brand-300 bg-white p-2 font-mono text-xs text-slate-800"
-        >
-          {data.token}
-        </output>
+        <>
+          <output
+            aria-label="Pickup code"
+            className="block break-all rounded border border-brand-300 bg-white p-2 font-mono text-xs text-slate-800"
+          >
+            {data.token}
+          </output>
+          {/* S4-QR-FALLBACK: the scanner-broken fallback, rotated alongside
+              the QR code above — read this number aloud if the vendor's
+              scanner isn't working. */}
+          <p className="text-xs text-brand-800">
+            Scanner not working? Give the vendor this code instead:{' '}
+            <output aria-label="Manual pickup code" className="font-mono text-sm font-semibold">
+              {data.manualCode}
+            </output>
+          </p>
+        </>
       )}
     </div>
   );

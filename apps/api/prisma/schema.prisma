@@ -1463,6 +1463,14 @@ model PickupToken {
   subOrder SubOrder @relation(fields: [subOrderId], references: [id], onDelete: Restrict)
 
   @@index([vendorId, status], map: "idx_pickup_tokens_vendor_status")
+  /// Argon2id hash of the 4-digit manual/scanner-broken fallback code
+  /// (S4-QR-FALLBACK, SDD 13.3) — rotated in lockstep with `tokenHash`/`nonce`,
+  /// never plaintext at rest. Null for a row that predates this column or has
+  /// not yet been rotated since.
+  manualCodeHash     String?           @map("manual_code_hash")
+  /// Mirrors `otps.attempts` — capped by `PickupToken.MAX_MANUAL_CODE_ATTEMPTS`,
+  /// reset to 0 on every rotation alongside `manualCodeHash`.
+  manualCodeAttempts Int               @default(0) @map("manual_code_attempts")
   @@map("pickup_tokens")
 }
 

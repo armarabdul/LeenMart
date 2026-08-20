@@ -48,7 +48,7 @@ interface ErrorBody {
   readonly error: { code: string };
 }
 interface PickupTokenBody {
-  readonly data: { token: string; expiresAt: string };
+  readonly data: { token: string; expiresAt: string; manualCode: string };
 }
 interface VendorSubOrderBody {
   readonly data: { id: string; status: string; fulfilmentMode: string };
@@ -209,11 +209,29 @@ describe('QR pickup (S4-QR)', () => {
     return (response.body as PickupTokenBody).data.token;
   };
 
-  const redeem = (vendor: VendorActor, token: string): request.Test =>
+  const redeem = (vendor: VendorActor, token: string, queuedOffline = false): request.Test =>
     request(app)
       .post('/api/v1/vendor/orders/pickup/redeem')
       .set('Authorization', auth(vendor))
-      .send({ token });
+      .send(queuedOffline ? { token, queuedOffline: true } : { token });
+
+  const manualCodeFor = async (
+    customer: Actor,
+    orderId: string,
+    subOrderId: string,
+  ): Promise<string> => {
+    const response = await request(app)
+      .get(`/api/v1/orders/${orderId}/sub-orders/${subOrderId}/pickup-token`)
+      .set('Authorization', auth(customer))
+      .expect(200);
+    return (response.body as PickupTokenBody).data.manualCode;
+  };
+
+  const manualComplete = (vendor: VendorActor, subOrderId: string, code: string): request.Test =>
+    request(app)
+      .post(`/api/v1/vendor/orders/${subOrderId}/pickup/manual-complete`)
+      .set('Authorization', auth(vendor))
+      .send({ code });
 
   /** `undefined` for a success body, so the racing pair can be mapped uniformly. */
   const codeOf = (response: request.Response): string | undefined =>
@@ -244,6 +262,9 @@ describe('QR pickup (S4-QR)', () => {
       where: { aggregateId: subOrderId, eventType: 'sub_order.pickup_completed' },
     }),
   });
+
+  const auditCountFor = async (subOrderId: string, action: string): Promise<number> =>
+    db.auditLog.count({ where: { entityId: subOrderId, action } });
 
   beforeAll(async () => {
     harness = createIntegrationHarness();
@@ -656,6 +677,181 @@ describe('QR pickup (S4-QR)', () => {
       const serialised = JSON.stringify(row);
       expect(serialised).not.toContain(token);
       expect(row.tokenHash).toMatch(/^[0-9a-f]{64}$/i);
+    });
+  });
+
+  describe('manual/scanner-broken fallback (S4-QR-FALLBACK)', () => {
+    it('an authenticated vendor completes pickup with the correct manual code', async () => {
+      const { orderId, subOrderId, customer, vendor } = await readyForPickup('seller');
+      const code = await manualCodeFor(customer, orderId, subOrderId);
+
+      const response = await manualComplete(vendor, subOrderId, code).expect(200);
+      expect((response.body as VendorSubOrderBody).data.status).toBe('COMPLETED');
+
+      const row = await db.subOrder.findUniqueOrThrow({ where: { id: subOrderId } });
+      expect(row.status).toBe('COMPLETED');
+    });
+
+    it('refuses an unauthenticated manual completion', async () => {
+      const { subOrderId } = await readyForPickup('seller');
+
+      await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/pickup/manual-complete`)
+        .send({ code: '0000' })
+        .expect(401);
+    });
+
+    it('a customer (wrong role) cannot use the manual fallback', async () => {
+      const { orderId, subOrderId, customer } = await readyForPickup('seller');
+      const code = await manualCodeFor(customer, orderId, subOrderId);
+
+      await request(app)
+        .post(`/api/v1/vendor/orders/${subOrderId}/pickup/manual-complete`)
+        .set('Authorization', auth(customer))
+        .send({ code })
+        .expect(403);
+    });
+
+    it('a wrong code is refused and the sub-order stays READY_FOR_PICKUP', async () => {
+      const { orderId, subOrderId, customer, vendor } = await readyForPickup('seller');
+      const correctCode = await manualCodeFor(customer, orderId, subOrderId);
+      const wrongCode = correctCode === '0000' ? '1111' : '0000';
+
+      const response = await manualComplete(vendor, subOrderId, wrongCode).expect(422);
+      expect(codeOf(response)).toBe(GENERIC);
+
+      const row = await db.subOrder.findUniqueOrThrow({ where: { id: subOrderId } });
+      expect(row.status).toBe('READY_FOR_PICKUP');
+    });
+
+    it('Vendor A cannot complete Vendor B’s pickup, even with the right code — the id alone is refused as not-found', async () => {
+      const { orderId, subOrderId, customer } = await readyForPickup('seller');
+      const code = await manualCodeFor(customer, orderId, subOrderId);
+      const attacker = await vendorFor('attacker');
+      await db.vendorProfile.update({
+        where: { id: attacker.vendorId },
+        data: { status: 'ACTIVE' },
+      });
+
+      await manualComplete(attacker, subOrderId, code).expect(404);
+      const row = await db.subOrder.findUniqueOrThrow({ where: { id: subOrderId } });
+      expect(row.status).toBe('READY_FOR_PICKUP');
+    });
+
+    it('consumes the token exactly once — a repeated manual completion fails', async () => {
+      const { orderId, subOrderId, customer, vendor } = await readyForPickup('seller');
+      const code = await manualCodeFor(customer, orderId, subOrderId);
+
+      await manualComplete(vendor, subOrderId, code).expect(200);
+      const replay = await manualComplete(vendor, subOrderId, code).expect(409);
+      expect((replay.body as ErrorBody).error.code).toBe('PICKUP_TOKEN_ALREADY_REDEEMED');
+    });
+
+    it('the QR path refuses a token already spent by the manual fallback, and vice versa — one shared single-use guarantee', async () => {
+      const { orderId, subOrderId, customer, vendor } = await readyForPickup('seller');
+      const token = await tokenFor(customer, orderId, subOrderId);
+      const code = await manualCodeFor(customer, orderId, subOrderId);
+
+      await manualComplete(vendor, subOrderId, code).expect(200);
+      const qrAttempt = await redeem(vendor, token).expect(422);
+      expect(codeOf(qrAttempt)).toBe(GENERIC);
+    });
+
+    it('records a distinct sub_order.pickup_completed_manual audit action, never the QR path’s own action', async () => {
+      const { orderId, subOrderId, customer, vendor } = await readyForPickup('seller');
+      const code = await manualCodeFor(customer, orderId, subOrderId);
+
+      await manualComplete(vendor, subOrderId, code).expect(200);
+
+      expect(await auditCountFor(subOrderId, 'sub_order.pickup_completed_manual')).toBe(1);
+      expect(await auditCountFor(subOrderId, 'sub_order.pickup_completed')).toBe(0);
+      // The domain fact still reaches the outbox under the QR path's own event type.
+      expect(
+        await db.outboxEvent.count({
+          where: { aggregateId: subOrderId, eventType: 'sub_order.pickup_completed' },
+        }),
+      ).toBe(1);
+    });
+
+    it('never stores the manual code in plaintext', async () => {
+      const { orderId, subOrderId, customer } = await readyForPickup('seller');
+      const code = await manualCodeFor(customer, orderId, subOrderId);
+
+      const row = await db.pickupToken.findFirstOrThrow({ where: { subOrderId } });
+      expect(JSON.stringify(row)).not.toContain(code);
+      expect(row.manualCodeHash).not.toBeNull();
+    });
+
+    it('locks out further manual attempts after MAX_MANUAL_CODE_ATTEMPTS wrong guesses', async () => {
+      const { orderId, subOrderId, customer, vendor } = await readyForPickup('seller');
+      const correctCode = await manualCodeFor(customer, orderId, subOrderId);
+      const wrongCode = correctCode === '0000' ? '1111' : '0000';
+
+      for (let i = 0; i < 5; i += 1) {
+        await manualComplete(vendor, subOrderId, wrongCode).expect(422);
+      }
+      // Even the *correct* code is refused now — the attempt budget, not the
+      // code, is what is exhausted.
+      await manualComplete(vendor, subOrderId, correctCode).expect(422);
+      const row = await db.subOrder.findUniqueOrThrow({ where: { id: subOrderId } });
+      expect(row.status).toBe('READY_FOR_PICKUP');
+    });
+
+    it('allows exactly one success when a QR scan and a manual completion race for the same token', async () => {
+      const { orderId, subOrderId, customer, vendor } = await readyForPickup('seller');
+      const token = await tokenFor(customer, orderId, subOrderId);
+      const code = await manualCodeFor(customer, orderId, subOrderId);
+
+      const results = await Promise.all([
+        redeem(vendor, token).then((r) => r.status),
+        manualComplete(vendor, subOrderId, code).then((r) => r.status),
+      ]);
+
+      expect(results.filter((status) => status === 200)).toHaveLength(1);
+      const row = await db.subOrder.findUniqueOrThrow({ where: { id: subOrderId } });
+      expect(row.status).toBe('COMPLETED');
+    });
+  });
+
+  describe('offline redemption conflict (S4-QR-FALLBACK)', () => {
+    it('an offline-verified redemption submitted on reconnect succeeds when the token is still unused', async () => {
+      const { orderId, subOrderId, customer, vendor } = await readyForPickup('seller');
+      const token = await tokenFor(customer, orderId, subOrderId);
+
+      const response = await redeem(vendor, token, true).expect(200);
+      expect((response.body as VendorSubOrderBody).data.status).toBe('COMPLETED');
+    });
+
+    it('an offline-verified redemption that loses the race records a conflict, not a second success', async () => {
+      const { orderId, subOrderId, customer, vendor } = await readyForPickup('seller');
+      const token = await tokenFor(customer, orderId, subOrderId);
+
+      // The "online" scan reaches the server first.
+      await redeem(vendor, token).expect(200);
+      // The device that verified the same token locally while offline only
+      // now reaches the server.
+      const late = await redeem(vendor, token, true).expect(422);
+      expect(codeOf(late)).toBe(GENERIC);
+
+      expect(await auditCountFor(subOrderId, 'sub_order.pickup_offline_redemption_conflict')).toBe(
+        1,
+      );
+      // Exactly one completion — the conflicted attempt never created a second one.
+      expect(await pickupSideEffectCounts(subOrderId)).toEqual({ audit: 1, outbox: 1 });
+      const row = await db.subOrder.findUniqueOrThrow({ where: { id: subOrderId } });
+      expect(row.status).toBe('COMPLETED');
+    });
+
+    it('an ordinary (non-offline) replay never records the offline-conflict action', async () => {
+      const { orderId, subOrderId, customer, vendor } = await readyForPickup('seller');
+      const token = await tokenFor(customer, orderId, subOrderId);
+
+      await redeem(vendor, token).expect(200);
+      await redeem(vendor, token).expect(422);
+
+      expect(await auditCountFor(subOrderId, 'sub_order.pickup_offline_redemption_conflict')).toBe(
+        0,
+      );
     });
   });
 

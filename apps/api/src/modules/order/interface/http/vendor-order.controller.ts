@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import type {
+  CompletePickupManuallyRequest,
   OrderItemResponse,
   RedeemPickupTokenRequest,
   VendorSubOrderResponse,
@@ -18,6 +19,7 @@ import type { GetVendorOrderUseCase } from '../../application/use-cases/get-vend
 import type { ListVendorOrdersUseCase } from '../../application/use-cases/list-vendor-orders.use-case.js';
 import type { MarkReadyForPickupUseCase } from '../../application/use-cases/mark-ready-for-pickup.use-case.js';
 import type { RedeemPickupTokenUseCase } from '../../application/use-cases/redeem-pickup-token.use-case.js';
+import type { CompletePickupManuallyUseCase } from '../../application/use-cases/complete-pickup-manually.use-case.js';
 import type { ShipSubOrderUseCase } from '../../application/use-cases/ship-sub-order.use-case.js';
 import type { StartProcessingUseCase } from '../../application/use-cases/start-processing.use-case.js';
 
@@ -29,6 +31,7 @@ export interface VendorOrderController {
   readonly deliverSubOrder: (req: Request, res: Response) => Promise<void>;
   readonly markReadyForPickup: (req: Request, res: Response) => Promise<void>;
   readonly redeemPickupToken: (req: Request, res: Response) => Promise<void>;
+  readonly completePickupManually: (req: Request, res: Response) => Promise<void>;
 }
 
 export interface VendorOrderControllerDeps {
@@ -39,6 +42,7 @@ export interface VendorOrderControllerDeps {
   readonly deliverSubOrderUseCase: DeliverSubOrderUseCase;
   readonly markReadyForPickupUseCase: MarkReadyForPickupUseCase;
   readonly redeemPickupTokenUseCase: RedeemPickupTokenUseCase;
+  readonly completePickupManuallyUseCase: CompletePickupManuallyUseCase;
 }
 
 const toVendorSubOrderSummaryResponse = (
@@ -242,6 +246,36 @@ const redeemPickupTokenHandler =
     const detail = await deps.redeemPickupTokenUseCase.execute({
       principal: req.principal,
       token: body.token,
+      ...(body.queuedOffline !== undefined ? { queuedOffline: body.queuedOffline } : {}),
+    });
+
+    res.status(200).json({
+      data: toVendorSubOrderResponse(detail),
+      meta: { requestId: getRequestId() },
+    });
+  };
+
+/**
+ * S4-QR-FALLBACK: `:id`-addressed, matching `markReadyForPickupHandler`'s
+ * own shape (not `redeemPickupTokenHandler`'s, which deliberately carries no
+ * id — see that handler's own doc comment for why the two routes differ).
+ */
+const completePickupManuallyHandler =
+  (deps: VendorOrderControllerDeps) =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!req.principal) {
+      throw new Error(
+        'POST /vendor/orders/:id/pickup/manual-complete reached without authenticate() middleware — req.principal is unset.',
+      );
+    }
+    const { params, body } = validatedData<CompletePickupManuallyRequest, unknown, { id: string }>(
+      req,
+    );
+
+    const detail = await deps.completePickupManuallyUseCase.execute({
+      principal: req.principal,
+      subOrderId: toSubOrderId(params.id),
+      code: body.code,
     });
 
     res.status(200).json({
@@ -260,4 +294,5 @@ export const createVendorOrderController = (
   deliverSubOrder: deliverSubOrderHandler(deps),
   markReadyForPickup: markReadyForPickupHandler(deps),
   redeemPickupToken: redeemPickupTokenHandler(deps),
+  completePickupManually: completePickupManuallyHandler(deps),
 });

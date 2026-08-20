@@ -308,6 +308,7 @@ const getPickupTokenHandler =
     const data: PickupTokenResponse = {
       token: issued.token,
       expiresAt: issued.expiresAt.toISOString(),
+      manualCode: issued.manualCode,
     };
     res.status(200).json({ data, meta: { requestId: getRequestId() } });
   };
