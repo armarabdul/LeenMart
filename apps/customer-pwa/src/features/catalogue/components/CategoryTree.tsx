@@ -19,12 +19,14 @@ export const CategoryTree = ({ nodes, maxDepth }: CategoryTreeProps): JSX.Elemen
       <li key={node.id}>
         <Link
           to={`/catalogue/${node.slug}`}
-          className="block rounded-md px-2 py-1.5 text-sm text-slate-700 hover:bg-brand-50 hover:text-brand-700"
+          // Phase D: design tokens, and a 36px row so a rail entry is a
+          // comfortable target rather than a 26px line of text.
+          className="flex min-h-9 items-center rounded-md px-2 text-sm text-text-muted transition-colors hover:bg-primary-soft hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
           {node.name}
         </Link>
         {node.children.length > 0 && maxDepth !== 0 && (
-          <div className="ml-3 border-l border-slate-100 pl-2">
+          <div className="ml-3 border-l border-border pl-2">
             <CategoryTree
               nodes={node.children}
               maxDepth={maxDepth === undefined ? undefined : maxDepth - 1}

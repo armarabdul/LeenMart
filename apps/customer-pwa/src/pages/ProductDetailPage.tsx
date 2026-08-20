@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import type { PublicProductDetail, PublicProductVariant } from '@leen-mart/contracts';
+import { Alert, Badge, Breadcrumb, Card, Skeleton } from '@leen-mart/ui';
 import { useGetProductDetailQuery } from '@/features/product/product.api';
 import { VariantSelector } from '@/features/product/components/VariantSelector';
 import { AvailabilityBadge } from '@/features/product/components/AvailabilityBadge';
@@ -8,33 +9,68 @@ import { AddToCartButton } from '@/features/product/components/AddToCartButton';
 import { QuantityControl } from '@/shared/components/QuantityControl';
 import { useAddCartItemMutation } from '@/features/cart/cart.api';
 import { ProductReviews } from '@/features/review/components/ProductReviews';
+import { PageContainer } from '@/components/PageContainer';
 import { formatMoney } from '@/shared/lib/format-money';
 import { apiErrorMessage } from '@/shared/api/base-api';
 
 const SUCCESS_DISPLAY_MS = 2000;
 
-const MediaPlaceholder = ({ mediaCount }: { readonly mediaCount: number }): JSX.Element => (
-  <div className="flex aspect-square w-full shrink-0 items-center justify-center rounded-lg bg-slate-50 p-6 text-center text-sm text-slate-400 md:max-w-sm">
-    {mediaCount > 0
-      ? `${mediaCount} photo${mediaCount === 1 ? '' : 's'} — not yet available for preview`
-      : 'No photos available'}
+/**
+ * The media well.
+ *
+ * There is still no image to render — the public detail contract carries
+ * `mediaCount` and no URL, because media delivery (S2-6c) is deferred. This
+ * holds the space at a fixed square so the two-column layout does not jump
+ * once images land, and states what exists rather than showing a decorative
+ * stand-in that would read as the product's own photo.
+ */
+const MediaWell = ({ mediaCount }: { readonly mediaCount: number }): JSX.Element => (
+  <div className="flex aspect-square w-full items-center justify-center rounded-card border border-border bg-surface-alt">
+    <div className="flex flex-col items-center gap-2 px-6 text-center text-text-faint">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="h-10 w-10">
+        <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.5" />
+        <circle cx="8.5" cy="10" r="1.5" fill="currentColor" />
+        <path
+          d="m4 17 4.5-4.5 3 3L15 12l5 5"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <span className="text-sm">
+        {mediaCount > 0
+          ? `${mediaCount} photo${mediaCount === 1 ? '' : 's'} — not yet available for preview`
+          : 'No photos available'}
+      </span>
+    </div>
   </div>
 );
 
-const AttributeList = ({
-  attributeValues,
+/** Product facts, as a description list so a screen reader reads label/value pairs. */
+const SpecificationList = ({
+  product,
 }: {
-  readonly attributeValues: Readonly<Record<string, unknown>>;
+  readonly product: PublicProductDetail;
 }): JSX.Element | null => {
-  const entries = Object.entries(attributeValues);
-  if (entries.length === 0) return null;
+  const rows: { label: string; value: string }[] = [
+    ...(product.netQuantity ? [{ label: 'Net quantity', value: product.netQuantity }] : []),
+    ...(product.countryOfOrigin
+      ? [{ label: 'Country of origin', value: product.countryOfOrigin }]
+      : []),
+    ...Object.entries(product.attributeValues).map(([label, value]) => ({
+      label,
+      value: String(value),
+    })),
+  ];
+  if (rows.length === 0) return null;
 
   return (
-    <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-      {entries.map(([key, value]) => (
-        <div key={key} className="contents">
-          <dt className="text-slate-500">{key}</dt>
-          <dd className="text-slate-900">{String(value)}</dd>
+    <dl className="divide-y divide-border rounded-card border border-border bg-surface">
+      {rows.map((row) => (
+        <div key={row.label} className="grid grid-cols-2 gap-4 px-4 py-3 text-sm">
+          <dt className="text-text-muted">{row.label}</dt>
+          <dd className="text-text">{row.value}</dd>
         </div>
       ))}
     </dl>
@@ -51,6 +87,10 @@ interface ProductPurchasePanelProps {
  * `features/product/components/AddToCartButton` — `features/product` may
  * not import `features/cart/cart.api` directly (SDD 25.3), so composition
  * happens at the page level instead, per that lint rule's own guidance.
+ *
+ * Phase D changed only the presentation. Every behaviour below — the
+ * available-variant preference, the quantity reset on variant change, the
+ * cleared "Added" confirmation, the error surface — is unchanged.
  */
 const ProductPurchasePanel = ({ product }: ProductPurchasePanelProps): JSX.Element => {
   // Prefer an available variant; fall back to the first if none are in
@@ -103,23 +143,22 @@ const ProductPurchasePanel = ({ product }: ProductPurchasePanelProps): JSX.Eleme
   };
 
   if (!selectedVariant) {
-    return (
-      <p className="text-sm text-slate-600">
-        This product is not currently available to add to cart.
-      </p>
-    );
+    return <Alert tone="info">This product is not currently available to add to cart.</Alert>;
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4">
-      <p className="text-xl font-semibold text-slate-900">
-        {formatMoney(selectedVariant.price)}
-        <span className="ml-1 text-sm font-normal text-slate-500">
-          / {selectedVariant.unitOfMeasure}
-        </span>
-      </p>
-
-      <AvailabilityBadge available={selectedVariant.available} />
+    <Card padding="md" className="flex flex-col gap-4">
+      <div>
+        <p className="text-2xl font-semibold text-text">
+          {formatMoney(selectedVariant.price)}
+          <span className="ml-1 text-sm font-normal text-text-muted">
+            / {selectedVariant.unitOfMeasure}
+          </span>
+        </p>
+        <div className="mt-2">
+          <AvailabilityBadge available={selectedVariant.available} />
+        </div>
+      </div>
 
       <VariantSelector
         variants={product.variants}
@@ -143,16 +182,36 @@ const ProductPurchasePanel = ({ product }: ProductPurchasePanelProps): JSX.Eleme
           />
         </>
       ) : (
-        <p className="text-sm text-slate-600">This option is currently out of stock.</p>
+        <Alert tone="warning">This option is currently out of stock.</Alert>
       )}
-    </div>
+    </Card>
   );
 };
 
+const DetailSkeleton = (): JSX.Element => (
+  <div className="grid gap-8 lg:grid-cols-2">
+    <Skeleton shape="rect" className="aspect-square w-full" />
+    <div className="flex flex-col gap-3">
+      <Skeleton shape="text" className="h-6 w-2/3" />
+      <Skeleton shape="text" className="w-1/3" />
+      <Skeleton shape="rect" className="h-40 w-full" />
+    </div>
+  </div>
+);
+
 /**
- * Public product detail (S3-3 discovery milestone's approved backend
- * surface). Browsing never requires a session — only
- * `ProductPurchasePanel`'s add-to-cart mutation does.
+ * Public product detail (Phase D presentation over the S3-3 backend surface).
+ * Browsing never requires a session — only `ProductPurchasePanel`'s
+ * add-to-cart mutation does.
+ *
+ * **On the missing shop identity.** A marketplace PDP should name the seller,
+ * and Leen Mart's whole premise is buying from a specific local shop. The
+ * public detail contract does not expose one: `publicProductDetailSchema`
+ * omits `vendorId` deliberately, and there is no public vendor endpoint to
+ * resolve a name from. Rather than invent a shop, this page shows the brand
+ * where the product has one and leaves the seller block out entirely — see the
+ * Phase D report, where this is raised as the main gap between the design
+ * target and the available API.
  */
 export const ProductDetailPage = (): JSX.Element => {
   const { id } = useParams<{ id: string }>();
@@ -165,69 +224,80 @@ export const ProductDetailPage = (): JSX.Element => {
 
   if (isLoading) {
     return (
-      <main className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-8">
-        <div className="flex flex-col gap-6 md:flex-row">
-          <div className="aspect-square w-full animate-pulse rounded-lg bg-slate-100 md:max-w-sm" />
-          <div className="flex flex-1 flex-col gap-3">
-            <div className="h-6 w-2/3 animate-pulse rounded bg-slate-100" />
-            <div className="h-4 w-1/3 animate-pulse rounded bg-slate-100" />
-            <div className="h-24 w-full animate-pulse rounded bg-slate-100" />
+      <main>
+        <PageContainer>
+          <div className="py-6 sm:py-8">
+            <DetailSkeleton />
           </div>
-        </div>
+        </PageContainer>
       </main>
     );
   }
 
   if (isError || !product) {
     return (
-      <main className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 py-8">
-        <p
-          role="alert"
-          className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700"
-        >
-          {isError
-            ? apiErrorMessage(error, 'This product could not be found.')
-            : 'This product could not be found.'}
-        </p>
+      <main>
+        <PageContainer>
+          <div className="py-8">
+            <Alert tone="danger" title="Product unavailable">
+              {isError
+                ? apiErrorMessage(error, 'This product could not be found.')
+                : 'This product could not be found.'}
+            </Alert>
+          </div>
+        </PageContainer>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-8">
-      <div className="flex flex-col gap-6 md:flex-row">
-        <MediaPlaceholder mediaCount={product.mediaCount} />
+    <main>
+      <PageContainer>
+        <div className="flex flex-col gap-10 py-6 sm:py-8">
+          <Breadcrumb
+            items={[
+              { label: 'Home', href: '/' },
+              { label: 'Catalogue', href: '/catalogue' },
+              { label: product.name },
+            ]}
+            renderLink={({ href, children }) => <Link to={href}>{children}</Link>}
+          />
 
-        <div className="flex flex-1 flex-col gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">{product.name}</h1>
-            {product.brand && <p className="mt-1 text-sm text-slate-500">{product.brand}</p>}
+          <div className="grid gap-8 lg:grid-cols-2 lg:items-start">
+            <MediaWell mediaCount={product.mediaCount} />
+
+            {/* Sticky from `lg` up, where the media column is tall enough that
+                the price and the add-to-cart button would otherwise scroll away
+                while the shopper reads. Not sticky on mobile: the panel already
+                sits directly under the title, so it is reachable without a bar
+                overlaying the page — and a second add-to-cart control would mean
+                two copies of the variant/quantity state to keep in step. */}
+            <div className="flex flex-col gap-5 lg:sticky lg:top-24">
+              <div className="flex flex-col gap-2">
+                {product.brand && <Badge tone="neutral">{product.brand}</Badge>}
+                <h1 className="font-display text-2xl font-bold tracking-tight text-text sm:text-3xl">
+                  {product.name}
+                </h1>
+              </div>
+
+              {product.description && (
+                <p className="text-sm leading-relaxed text-text-muted">{product.description}</p>
+              )}
+
+              <ProductPurchasePanel product={product} />
+            </div>
           </div>
 
-          {product.description && <p className="text-sm text-slate-700">{product.description}</p>}
+          <section aria-labelledby="product-details" className="flex flex-col gap-3">
+            <h2 id="product-details" className="text-base font-semibold text-text">
+              Product details
+            </h2>
+            <SpecificationList product={product} />
+          </section>
 
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-slate-600">
-            {product.netQuantity && (
-              <>
-                <dt className="text-slate-500">Net quantity</dt>
-                <dd>{product.netQuantity}</dd>
-              </>
-            )}
-            {product.countryOfOrigin && (
-              <>
-                <dt className="text-slate-500">Country of origin</dt>
-                <dd>{product.countryOfOrigin}</dd>
-              </>
-            )}
-          </dl>
-
-          <AttributeList attributeValues={product.attributeValues} />
-
-          <ProductPurchasePanel product={product} />
+          <ProductReviews productId={product.id} />
         </div>
-      </div>
-
-      <ProductReviews productId={product.id} />
+      </PageContainer>
     </main>
   );
 };
