@@ -5,6 +5,15 @@
 @layer base {
   :root {
     color-scheme: light;
+
+    /*
+     * `@leen-mart/ui`'s shared `primary` token (Phase B design system),
+     * bound to this app's own amber identity — see `customer-pwa`'s own
+     * `styles.css` comment for why RGB channels, not a hex string. Values
+     * match the existing `brand.700`/`brand.600` above exactly.
+     */
+    --ui-primary: 180 83 9; /* brand-700 #b45309 */
+    --ui-primary-hover: 217 119 6; /* brand-600 #d97706 */
   }
 
   html {

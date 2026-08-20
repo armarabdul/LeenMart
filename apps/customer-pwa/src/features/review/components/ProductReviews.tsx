@@ -1,13 +1,7 @@
 import type { PublicReviewItem, ProductReviewSummary } from '@leen-mart/contracts';
+import { Rating } from '@leen-mart/ui';
 import { useGetProductReviewsQuery } from '../review.api';
 import { apiErrorMessage } from '@/shared/api/base-api';
-
-const Stars = ({ rating }: { readonly rating: number }): JSX.Element => (
-  <span aria-label={`${rating} out of 5 stars`} className="text-amber-500">
-    {'★'.repeat(rating)}
-    <span className="text-slate-300">{'★'.repeat(5 - rating)}</span>
-  </span>
-);
 
 const SummaryLine = ({ summary }: { readonly summary: ProductReviewSummary }): JSX.Element => {
   if (summary.approvedReviewCount === 0 || summary.averageRating === null) {
@@ -15,7 +9,7 @@ const SummaryLine = ({ summary }: { readonly summary: ProductReviewSummary }): J
   }
   return (
     <p className="flex items-center gap-2 text-sm text-slate-700">
-      <Stars rating={Math.round(summary.averageRating)} />
+      <Rating value={Math.round(summary.averageRating)} size="sm" />
       <span className="font-medium text-slate-900">{summary.averageRating.toFixed(1)}</span>
       <span className="text-slate-500">
         ({summary.approvedReviewCount} review{summary.approvedReviewCount === 1 ? '' : 's'})
@@ -27,7 +21,7 @@ const SummaryLine = ({ summary }: { readonly summary: ProductReviewSummary }): J
 const ReviewItem = ({ review }: { readonly review: PublicReviewItem }): JSX.Element => (
   <li className="flex flex-col gap-1 rounded-lg border border-slate-200 bg-white p-4">
     <div className="flex items-center justify-between gap-3">
-      <Stars rating={review.rating} />
+      <Rating value={review.rating} size="sm" />
       <time dateTime={review.createdAt} className="text-xs text-slate-500">
         {new Date(review.createdAt).toLocaleDateString('en-IN', {
           day: 'numeric',

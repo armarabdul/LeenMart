@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import { Badge } from '@leen-mart/ui';
 import { useAppSelector } from '@/app/hooks';
 import { selectIsAuthenticated } from '@/shared/api/session.slice';
 import { useUnreadNotificationCountQuery } from '../notification.api';
@@ -57,12 +58,13 @@ export const NotificationBell = (): JSX.Element | null => {
     >
       Notifications
       {unread > 0 && (
-        <span
+        <Badge
+          tone="primary"
           aria-hidden="true"
-          className="absolute right-0 top-0 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-brand-700 px-1 text-[10px] font-semibold leading-none text-white"
+          className="absolute right-0 top-0 min-w-[1rem] justify-center bg-primary px-1 text-[10px] leading-none text-on-primary"
         >
           {unread > BADGE_CEILING ? `${BADGE_CEILING}+` : unread}
-        </span>
+        </Badge>
       )}
     </NavLink>
   );
