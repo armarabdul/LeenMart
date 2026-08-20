@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { Button, SearchInput } from '@leen-mart/ui';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 interface SearchBarProps {
@@ -24,25 +25,22 @@ export const SearchBar = ({ autoFocus = false }: SearchBarProps): JSX.Element =>
   };
 
   return (
-    <form onSubmit={handleSubmit} role="search" className="flex w-full gap-2">
-      <label className="sr-only" htmlFor="marketplace-search">
-        Search products
-      </label>
-      <input
+    <form onSubmit={handleSubmit} role="search" className="flex w-full items-center gap-2">
+      {/* Phase C: the shared `SearchInput` supplies the icon, the clear
+          affordance and the token styling; this component keeps sole ownership
+          of where a submitted query navigates. */}
+      <SearchInput
         id="marketplace-search"
-        type="search"
+        label="Search products"
         autoFocus={autoFocus}
         placeholder="Search products…"
         value={value}
         onChange={(event) => setValue(event.target.value)}
-        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500"
+        onClear={() => setValue('')}
       />
-      <button
-        type="submit"
-        className="shrink-0 rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2"
-      >
+      <Button type="submit" size="md" className="shrink-0">
         Search
-      </button>
+      </Button>
     </form>
   );
 };

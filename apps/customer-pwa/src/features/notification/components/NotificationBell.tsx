@@ -13,6 +13,18 @@ import { useUnreadNotificationCountQuery } from '../notification.api';
  */
 const UNREAD_POLL_MS = 60_000;
 
+const BellIcon = (): JSX.Element => (
+  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="h-5 w-5">
+    <path
+      d="M18 8a6 6 0 1 0-12 0c0 4-1.5 5.5-2 6h16c-.5-.5-2-2-2-6Z"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinejoin="round"
+    />
+    <path d="M10 18a2 2 0 0 0 4 0" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+  </svg>
+);
+
 /** Past this the badge stops being a number and becomes "a lot", which is all it needs to say. */
 const BADGE_CEILING = 9;
 
@@ -48,13 +60,16 @@ export const NotificationBell = (): JSX.Element | null => {
       // affordance: a screen reader hearing only "Notifications" would lose
       // the one piece of information the badge exists to convey.
       aria-label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications, none unread'}
-      className="relative rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:text-brand-700"
+      // Phase C: an icon control matching the header's other actions. The
+      // link target, the accessible name and the badge all stay exactly as
+      // they were — only the visual treatment changed.
+      className="relative flex h-10 w-10 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-alt hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
     >
-      Notifications
+      <BellIcon />
       {unread > 0 && (
         <span
           aria-hidden="true"
-          className="absolute -right-1 -top-1 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-brand-700 px-1 text-[10px] font-semibold leading-none text-white"
+          className="absolute right-1 top-1 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-on-primary"
         >
           {unread > BADGE_CEILING ? `${BADGE_CEILING}+` : unread}
         </span>
