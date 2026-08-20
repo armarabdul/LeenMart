@@ -29,11 +29,25 @@ import { toUserId } from '../../src/modules/identity/domain/value-objects/user-i
 import { toSessionId } from '../../src/modules/identity/domain/value-objects/session-id.value-object.js';
 import type { RoleName } from '../../src/modules/identity/domain/value-objects/role.value-object.js';
 import { NullLogger } from '@leen-mart/domain-kit';
-import { AdminTransactionRunner } from '../../src/shared/infrastructure/persistence/tenant-prisma.js';
-import { FailingAuditWriter } from '../unit/modules/identity/application/fakes.js';
+import {
+  AdminTransactionRunner,
+  PrismaTransactionRunner,
+} from '../../src/shared/infrastructure/persistence/tenant-prisma.js';
+import { runWithTenant } from '../../src/shared/infrastructure/persistence/tenant-context.js';
+import {
+  FailingAuditWriter,
+  FailingOutboxWriter,
+} from '../unit/modules/identity/application/fakes.js';
 import { DecideReviewModerationUseCase } from '../../src/modules/review/application/use-cases/decide-review-moderation.use-case.js';
 import { PrismaReviewModerationRepository } from '../../src/modules/review/infrastructure/persistence/prisma-review-moderation.repository.js';
 import { toReviewId } from '../../src/modules/review/domain/value-objects/review-id.value-object.js';
+import { CreateReviewUseCase } from '../../src/modules/review/application/use-cases/create-review.use-case.js';
+import { PrismaReviewRepository } from '../../src/modules/review/infrastructure/persistence/prisma-review.repository.js';
+import { PrismaVerifiedPurchaseQuery } from '../../src/modules/review/infrastructure/persistence/prisma-verified-purchase-query.js';
+import { toOrderItemId } from '../../src/modules/order/index.js';
+import { DeliverNotificationUseCase } from '../../src/modules/notification/application/use-cases/deliver-notification.use-case.js';
+import { PrismaNotificationWriteRepository } from '../../src/modules/notification/infrastructure/persistence/prisma-notification.repository.js';
+import { PrismaNotificationRecipientResolver } from '../../src/modules/notification/infrastructure/persistence/prisma-notification-recipient-resolver.js';
 
 const EMAIL_PREFIX = 'reviews-';
 const ADMIN_PASSWORD = 'admin-password-that-is-long-enough';
@@ -386,6 +400,13 @@ describe('Verified-purchase product reviews (S8-REVIEWS)', () => {
     const users = await db.user.findMany({
       where: { email: { contains: EMAIL_PREFIX } },
       select: { id: true },
+    });
+    // `notifications.recipient_user_id` is RESTRICT against `users` too
+    // (S9-NOTIFY-REVIEW's own tests deliver real vendor notifications) — same
+    // reason `notification-lifecycle.test.ts`'s own `afterAll` clears this
+    // table before the harness removes the accounts.
+    await db.notification.deleteMany({
+      where: { recipientUserId: { in: users.map((u) => u.id) } },
     });
     await db.review.deleteMany({ where: { customerId: { in: users.map((u) => u.id) } } });
     await db.user.deleteMany({ where: { id: { in: seededAdminUserIds } } });
@@ -781,6 +802,283 @@ describe('Verified-purchase product reviews (S8-REVIEWS)', () => {
       expect([409, 422]).toContain(statuses[1]);
       const row = await db.review.findUniqueOrThrow({ where: { id: reviewId } });
       expect(row.status).toBe('APPROVED');
+    });
+  });
+
+  /**
+   * Vendor notification on review submission (S9-NOTIFY-REVIEW).
+   *
+   * The orchestrator here is the **real** `DeliverNotificationUseCase` on the
+   * **real** `checkoutPrisma` credential, driven from the **real** outbox row
+   * a genuine `POST /me/reviews` call produced — the same "drives the real
+   * orchestrator exactly as the worker does" pattern
+   * `notification-lifecycle.test.ts` already establishes, just fed from an
+   * actual database row instead of a fabricated payload, so the properties
+   * under test include the payload `CreateReviewUseCase` actually writes, not
+   * one this file invents.
+   */
+  describe('vendor notification on review submission (S9-NOTIFY-REVIEW)', () => {
+    let orchestrator: DeliverNotificationUseCase;
+
+    beforeAll(() => {
+      orchestrator = new DeliverNotificationUseCase({
+        repository: new PrismaNotificationWriteRepository(
+          harness.container.checkoutPrisma,
+          ids,
+          new FixedClock(now),
+        ),
+        recipients: new PrismaNotificationRecipientResolver(harness.container.checkoutPrisma),
+        logger: new NullLogger(),
+      });
+    });
+
+    interface OutboxRow {
+      readonly id: string;
+      readonly eventType: string;
+      readonly payload: Record<string, unknown>;
+    }
+
+    const outboxRowFor = async (reviewId: string): Promise<OutboxRow> => {
+      const row = await db.outboxEvent.findFirst({
+        where: { aggregateType: 'Review', aggregateId: reviewId, eventType: 'review.received' },
+      });
+      if (!row) throw new Error(`no review.received outbox row for review ${reviewId}`);
+      return {
+        id: row.id,
+        eventType: row.eventType,
+        payload: row.payload as Record<string, unknown>,
+      };
+    };
+
+    const deliver = (row: OutboxRow): ReturnType<DeliverNotificationUseCase['execute']> =>
+      orchestrator.execute({
+        outboxEventId: row.id,
+        eventType: row.eventType,
+        payload: row.payload,
+      });
+
+    const inboxOf = async (
+      userId: string,
+    ): Promise<
+      {
+        eventType: string;
+        recipientKind: string;
+        title: string;
+        body: string;
+        outboxEventId: string;
+      }[]
+    > =>
+      (await db.notification.findMany({
+        where: { recipientUserId: userId },
+        select: {
+          eventType: true,
+          recipientKind: true,
+          title: true,
+          body: true,
+          outboxEventId: true,
+        },
+      })) as {
+        eventType: string;
+        recipientKind: string;
+        title: string;
+        body: string;
+        outboxEventId: string;
+      }[];
+
+    it('submits a valid verified review, persists it as SUBMITTED, and writes exactly one review.received outbox event naming the product and the vendor', async () => {
+      const purchase = await deliveredPurchase('notify-basic');
+
+      const created = await createReview(
+        purchase.customer,
+        purchase.orderItemId,
+        5,
+        'Loved it',
+      ).expect(201);
+      const body = created.body as ReviewBody;
+      expect(body.data.status).toBe('SUBMITTED');
+
+      const rows = await db.outboxEvent.findMany({
+        where: { aggregateType: 'Review', aggregateId: body.data.id },
+      });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.eventType).toBe('review.received');
+      expect(rows[0]?.payload).toMatchObject({
+        productId: purchase.productId,
+        vendorId: purchase.vendor.vendorId,
+      });
+      // Never the customer, never the review's own text.
+      expect(rows[0]?.payload).not.toHaveProperty('customerId');
+      expect(rows[0]?.payload).not.toHaveProperty('body');
+    });
+
+    it('the worker delivers exactly one VENDOR notification to the reviewed product’s vendor', async () => {
+      const purchase = await deliveredPurchase('notify-deliver');
+      const created = await createReview(purchase.customer, purchase.orderItemId).expect(201);
+      const row = await outboxRowFor((created.body as ReviewBody).data.id);
+
+      const result = await deliver(row);
+
+      expect(result).toMatchObject({ created: 1, recipients: 1 });
+      const delivered = (await inboxOf(purchase.vendor.userId)).filter(
+        (entry) => entry.outboxEventId === row.id,
+      );
+      expect(delivered).toHaveLength(1);
+      expect(delivered[0]).toMatchObject({ eventType: 'review.received', recipientKind: 'VENDOR' });
+    });
+
+    it('redelivering the same review.received event stays idempotent — one notification row, not two', async () => {
+      const purchase = await deliveredPurchase('notify-redeliver');
+      const created = await createReview(purchase.customer, purchase.orderItemId).expect(201);
+      const row = await outboxRowFor((created.body as ReviewBody).data.id);
+
+      const first = await deliver(row);
+      const second = await deliver(row);
+
+      expect(first).toMatchObject({ created: 1 });
+      expect(second).toMatchObject({ created: 0, alreadyPresent: 1 });
+      expect(await db.notification.count({ where: { outboxEventId: row.id } })).toBe(1);
+    });
+
+    it('Vendor A receives Vendor A’s review notification', async () => {
+      const seededA = await seedVendor('notify-vendor-a');
+      const purchase = await deliveredPurchase('notify-vendor-a', seededA);
+      const created = await createReview(purchase.customer, purchase.orderItemId).expect(201);
+      const row = await outboxRowFor((created.body as ReviewBody).data.id);
+
+      await deliver(row);
+
+      const delivered = (await inboxOf(seededA.vendor.userId)).some(
+        (entry) => entry.outboxEventId === row.id,
+      );
+      expect(delivered).toBe(true);
+    });
+
+    it('Vendor B never receives Vendor A’s review notification', async () => {
+      const seededA = await seedVendor('notify-isolation-a');
+      const seededB = await seedVendor('notify-isolation-b');
+      const purchase = await deliveredPurchase('notify-isolation-a', seededA);
+      const before = await inboxOf(seededB.vendor.userId);
+
+      const created = await createReview(purchase.customer, purchase.orderItemId).expect(201);
+      const row = await outboxRowFor((created.body as ReviewBody).data.id);
+      await deliver(row);
+
+      expect(await inboxOf(seededB.vendor.userId)).toHaveLength(before.length);
+    });
+
+    it('the reviewing customer’s own CUSTOMER inbox is unaffected by their own review', async () => {
+      const purchase = await deliveredPurchase('notify-customer-unaffected');
+      const before = await inboxOf(purchase.customer.userId);
+
+      const created = await createReview(purchase.customer, purchase.orderItemId).expect(201);
+      const row = await outboxRowFor((created.body as ReviewBody).data.id);
+      await deliver(row);
+
+      expect(await inboxOf(purchase.customer.userId)).toHaveLength(before.length);
+    });
+
+    it('the delivered notification names only the product — no review body, no rating figure, no customer identity', async () => {
+      const purchase = await deliveredPurchase('notify-content');
+      const created = await createReview(
+        purchase.customer,
+        purchase.orderItemId,
+        5,
+        'The secret sauce recipe is honestly not that great',
+      ).expect(201);
+      const row = await outboxRowFor((created.body as ReviewBody).data.id);
+
+      await deliver(row);
+
+      const delivered = (await inboxOf(purchase.vendor.userId)).find(
+        (entry) => entry.outboxEventId === row.id,
+      );
+      expect(delivered).toBeDefined();
+      const text = `${delivered?.title} ${delivered?.body}`;
+      expect(text.toLowerCase()).not.toContain('secret sauce');
+      expect(text).not.toContain(purchase.customer.userId);
+      expect(text.replace(purchase.productId.slice(-8).toUpperCase(), '')).not.toMatch(/\d/);
+    });
+
+    it('a duplicate review submission retains S8’s existing 409 error and produces no second outbox event', async () => {
+      const purchase = await deliveredPurchase('notify-duplicate');
+      const first = await createReview(purchase.customer, purchase.orderItemId).expect(201);
+      const reviewId = (first.body as ReviewBody).data.id;
+
+      const second = await createReview(purchase.customer, purchase.orderItemId).expect(409);
+      expect((second.body as ErrorBody).error.code).toBe('REVIEW_ALREADY_EXISTS');
+
+      const rows = await db.outboxEvent.findMany({
+        where: { aggregateType: 'Review', aggregateId: reviewId },
+      });
+      expect(rows).toHaveLength(1);
+    });
+
+    it('a failed transaction leaves neither the review nor its outbox event behind', async () => {
+      // Forces the outbox write — the step *after* the review insert, inside
+      // the same transaction — to fail, so a genuine Postgres rollback has to
+      // undo an already-executed INSERT, not merely skip a step that was
+      // never reached. Mirrors `FailingAuditWriter`'s own moderation-rollback
+      // test above.
+      // A dedicated product, not `sharedSeeded` — the assertion below counts
+      // outbox rows by product id, which must not be polluted by every other
+      // test in this file that already reviewed the shared product.
+      const purchase = await deliveredPurchase(
+        'notify-rollback',
+        await seedVendor('notify-rollback'),
+      );
+      const useCase = new CreateReviewUseCase({
+        verifiedPurchaseQuery: new PrismaVerifiedPurchaseQuery(harness.container.checkoutPrisma),
+        reviewRepository: new PrismaReviewRepository(harness.container.prisma),
+        transactionRunner: new PrismaTransactionRunner(harness.container.prisma),
+        outboxWriter: new FailingOutboxWriter(),
+        idGenerator: ids,
+        clock: new FixedClock(now),
+        logger: new NullLogger(),
+      });
+
+      await expect(
+        runWithTenant({ userId: toUserId(purchase.customer.userId), vendorId: null }, () =>
+          useCase.execute({
+            principal: {
+              userId: toUserId(purchase.customer.userId),
+              sessionId: toSessionId(randomUUID()),
+              role: 'CUSTOMER',
+            },
+            orderItemId: toOrderItemId(purchase.orderItemId),
+            rating: 5,
+            body: 'Should not survive the rollback',
+          }),
+        ),
+      ).rejects.toThrow();
+
+      expect(await db.review.count({ where: { orderItemId: purchase.orderItemId } })).toBe(0);
+      expect(
+        await db.outboxEvent.count({
+          where: {
+            aggregateType: 'Review',
+            eventType: 'review.received',
+            payload: { path: ['productId'], equals: purchase.productId },
+          },
+        }),
+      ).toBe(0);
+    });
+
+    it('existing review moderation still works, and moderation itself writes no outbox event of its own', async () => {
+      const purchase = await deliveredPurchase('notify-moderation-unaffected');
+      const created = await createReview(purchase.customer, purchase.orderItemId).expect(201);
+      const reviewId = (created.body as ReviewBody).data.id;
+      const { token } = await adminFor('CATALOGUE_MODERATOR');
+
+      const approved = await decideReview(token, reviewId, 'APPROVE').expect(200);
+      expect((approved.body as ReviewBody).data.status).toBe('APPROVED');
+
+      // Still just the one row from submission — moderation is a separate,
+      // deliberately un-notified surface (S9's own locked scope).
+      const rows = await db.outboxEvent.findMany({
+        where: { aggregateType: 'Review', aggregateId: reviewId },
+      });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.eventType).toBe('review.received');
     });
   });
 });

@@ -1,7 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
 import { toOrderItemId, toSubOrderId } from '../../../order/index.js';
 import { toProductId, toProductVariantId } from '../../../catalogue/index.js';
-import type { UserId } from '../../../identity/index.js';
+import { toVendorId, type UserId } from '../../../identity/index.js';
 import type { OrderItemId } from '../../../order/index.js';
 import type {
   VerifiedPurchase,
@@ -21,6 +21,11 @@ import type {
  * `PrismaOrderRepository.findByIdAndCustomerId` already relies on for the
  * identical reason — this query joins the same tables the same way, scoped
  * by an explicit `WHERE`, never by RLS.
+ *
+ * **`vendorId` (S9-NOTIFY-REVIEW)** is read from `sub_orders.vendor_id`,
+ * already reachable on this credential — `PrismaNotificationRecipientResolver`
+ * selects the same column on the same `leenmart_checkout` client. No grant
+ * is widened to add it here.
  */
 export class PrismaVerifiedPurchaseQuery implements VerifiedPurchaseQuery {
   constructor(private readonly checkoutPrisma: PrismaClient) {}
@@ -37,7 +42,13 @@ export class PrismaVerifiedPurchaseQuery implements VerifiedPurchaseQuery {
           order: { customerId },
         },
       },
-      select: { id: true, subOrderId: true, productId: true, variantId: true },
+      select: {
+        id: true,
+        subOrderId: true,
+        productId: true,
+        variantId: true,
+        subOrder: { select: { vendorId: true } },
+      },
     });
     if (!row) {
       return null;
@@ -48,6 +59,7 @@ export class PrismaVerifiedPurchaseQuery implements VerifiedPurchaseQuery {
       subOrderId: toSubOrderId(row.subOrderId),
       productId: toProductId(row.productId),
       variantId: toProductVariantId(row.variantId),
+      vendorId: toVendorId(row.subOrder.vendorId),
     };
   }
 }

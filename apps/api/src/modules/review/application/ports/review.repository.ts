@@ -1,3 +1,4 @@
+import type { TransactionScope } from '@leen-mart/domain-kit';
 import type { UserId } from '../../../identity/index.js';
 import type { Review } from '../../domain/entities/review.entity.js';
 
@@ -10,6 +11,9 @@ import type { Review } from '../../domain/entities/review.entity.js';
  * here by mistake.
  */
 export interface ReviewRepository {
+  /** Re-binds this repository to an open transaction (S9-NOTIFY-REVIEW: the review insert and its `review.received` outbox event commit together). Same shape every other repository in this codebase publishes. */
+  withTransaction(scope: TransactionScope): ReviewRepository;
+
   /** Inserts a new review. Rejects with `ReviewAlreadyExistsError` if `uq_reviews_order_item` already has a row for this purchase. */
   create(review: Review): Promise<void>;
 

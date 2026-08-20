@@ -269,6 +269,72 @@ describe('DeliverNotificationUseCase (S6-NOTIFY-INAPP)', () => {
     });
   });
 
+  describe('review mapping (S9-NOTIFY-REVIEW)', () => {
+    const VENDOR_ID = '01a08888-8888-7888-8888-888888888888';
+    const OWNER_USER = '01a09999-9999-7999-8999-999999999999';
+    const CUSTOMER_USER = '01a0aaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa';
+
+    it('resolves review.received to the owner of the vendor named in the payload', async () => {
+      const repository = repo();
+      const recipients = resolver([], OWNER_USER);
+
+      const result = await useCase(repository, recipients).execute({
+        outboxEventId: OUTBOX_EVENT_ID,
+        eventType: 'review.received',
+        payload: { productId: ORDER_ID, vendorId: VENDOR_ID },
+      });
+
+      expect(recipients.vendorOwnerUserId).toHaveBeenCalledWith(VENDOR_ID);
+      expect(result).toMatchObject({ created: 1, recipients: 1 });
+      expect(repository.createIfAbsent).toHaveBeenCalledWith(
+        expect.objectContaining({ recipientUserId: OWNER_USER, recipientKind: 'VENDOR' }),
+      );
+    });
+
+    it('never resolves review.received to the order resolver — a review has no order of its own to look vendors up on', async () => {
+      const recipients = resolver([], OWNER_USER);
+
+      await useCase(repo(), recipients).execute({
+        outboxEventId: OUTBOX_EVENT_ID,
+        eventType: 'review.received',
+        payload: { productId: ORDER_ID, vendorId: VENDOR_ID },
+      });
+
+      expect(recipients.vendorUserIdsForOrder).not.toHaveBeenCalled();
+    });
+
+    it('creates nothing when review.received’s vendor owner cannot be resolved — never substitutes anyone', async () => {
+      const repository = repo();
+
+      const result = await useCase(repository, resolver([], null)).execute({
+        outboxEventId: OUTBOX_EVENT_ID,
+        eventType: 'review.received',
+        payload: { productId: ORDER_ID, vendorId: VENDOR_ID },
+      });
+
+      expect(result).toMatchObject({ created: 0, recipients: 0 });
+      expect(repository.createIfAbsent).not.toHaveBeenCalled();
+    });
+
+    it('never files a review notification in the reviewing customer’s own inbox, even if a customerId happened to be in the payload', async () => {
+      const repository = repo();
+
+      await useCase(repository, resolver([], OWNER_USER)).execute({
+        outboxEventId: OUTBOX_EVENT_ID,
+        eventType: 'review.received',
+        // A customerId should never actually be written to this payload —
+        // this proves resolution does not fall back to it even if it were.
+        payload: { productId: ORDER_ID, vendorId: VENDOR_ID, customerId: CUSTOMER_USER },
+      });
+
+      const targets = repository.createIfAbsent.mock.calls.map(
+        (call) => (call[0] as { recipientUserId: string }).recipientUserId,
+      );
+      expect(targets).not.toContain(CUSTOMER_USER);
+      expect(targets).toEqual([OWNER_USER]);
+    });
+  });
+
   describe('the six event types S6 does not notify on', () => {
     it.each([
       'order.payment_initiated',

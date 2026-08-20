@@ -1,13 +1,24 @@
 import type { OrderItemId, SubOrderId } from '../../../order/index.js';
 import type { ProductId, ProductVariantId } from '../../../catalogue/index.js';
-import type { UserId } from '../../../identity/index.js';
+import type { UserId, VendorId } from '../../../identity/index.js';
 
-/** One verified, review-eligible purchase — everything `CreateReviewUseCase` needs, and nothing the client supplied. */
+/**
+ * One verified, review-eligible purchase — everything `CreateReviewUseCase`
+ * needs, and nothing the client supplied.
+ *
+ * `vendorId` (S9-NOTIFY-REVIEW) comes from the same `sub_orders` row this
+ * query already joins to check `status` — not a second read, and not a
+ * reason to add a `vendor_id` column to `reviews`: the review-submission
+ * notification derives its recipient from persisted order data at write
+ * time, the same way `PrismaNotificationRecipientResolver.vendorUserIdsForOrder`
+ * already reads `sub_orders.vendor_id` on this identical credential.
+ */
 export interface VerifiedPurchase {
   readonly orderItemId: OrderItemId;
   readonly subOrderId: SubOrderId;
   readonly productId: ProductId;
   readonly variantId: ProductVariantId;
+  readonly vendorId: VendorId;
 }
 
 /**

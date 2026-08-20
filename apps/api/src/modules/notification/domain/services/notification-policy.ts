@@ -46,6 +46,17 @@ export const IN_APP: NotificationChannelName = 'IN_APP';
  *
  * Reaches the customer only — the row names no vendor-facing wording, and a
  * vendor already knows their own sub-order is `READY_FOR_PICKUP`.
+ *
+ * S9-NOTIFY-REVIEW's one, from SDD 5 module #14's own review responsibility
+ * (no dedicated 11.2 row exists for it, the same way S7-SCHED's own event
+ * traced to a matrix row rather than this table inventing one; this one
+ * traces to the module's notification requirement instead):
+ *
+ *   review.received → "New review (vendor)"
+ *
+ * Reaches the vendor whose product was reviewed — never the reviewing
+ * customer, and never a different vendor than the one the purchase was
+ * actually from.
  */
 export const NOTIFIED_EVENT_TYPES = {
   'order.confirmed': 'CUSTOMER',
@@ -57,6 +68,7 @@ export const NOTIFIED_EVENT_TYPES = {
   'kyc.approved': 'VENDOR',
   'kyc.rejected': 'VENDOR',
   'sub_order.pickup_reminder': 'CUSTOMER',
+  'review.received': 'VENDOR',
 } as const satisfies Record<string, NotificationRecipientKind>;
 
 export type NotifiedEventType = keyof typeof NOTIFIED_EVENT_TYPES;
@@ -92,6 +104,13 @@ const EVENT_SUBJECTS = {
   // recognisable, not more precise. Every other order-lifecycle notification
   // already references the parent order the same way.
   'sub_order.pickup_reminder': 'ORDER',
+  // `PRODUCT`, not a new subject: a review is about the product it was
+  // written for, and reusing this subject is what lets
+  // `DeliverNotificationUseCase`'s existing `resolveVendorOwner` branch
+  // (already written for `product.approved`/`.rejected`) resolve this
+  // event's recipient too, with no change to that method at all — the
+  // payload just has to carry `vendorId` the same way those two already do.
+  'review.received': 'PRODUCT',
 } as const satisfies Record<NotifiedEventType, NotificationSubject>;
 
 export const subjectOf = (eventType: NotifiedEventType): NotificationSubject =>
@@ -194,6 +213,16 @@ const CONTENT_BY_EVENT_TYPE: Record<NotifiedEventType, (ref: string) => Notifica
   'sub_order.pickup_reminder': (ref) => ({
     title: 'Pickup reminder',
     body: `Your order ${ref} is ready for pickup soon.`,
+  }),
+  // S9-NOTIFY-REVIEW locked wording. Names the product a review arrived for
+  // and nothing else — no rating, no review body, no customer name or id,
+  // no reviewer identity of any kind. `contentFor` is given only
+  // `subjectId` (`productId`), so there is no reviewer field in scope here
+  // even by mistake: the function has no parameter through which one could
+  // leak.
+  'review.received': (ref) => ({
+    title: 'New review',
+    body: `Your product ${ref} received a new review.`,
   }),
 };
 

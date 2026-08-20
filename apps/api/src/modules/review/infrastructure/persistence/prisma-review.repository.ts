@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient } from '@prisma/client';
+import type { TransactionScope } from '@leen-mart/domain-kit';
 import { toOrderItemId, toSubOrderId } from '../../../order/index.js';
 import { toProductId, toProductVariantId } from '../../../catalogue/index.js';
 import { toUserId, type UserId } from '../../../identity/index.js';
@@ -62,9 +63,18 @@ const translateUniqueViolation = (error: unknown): never => {
  * "RLS is the actual enforcement" reasoning `PrismaNotificationWriteRepository`
  * and `GetPublicProductDetailUseCase` both already establish for their own
  * tables.
+ *
+ * `withTransaction` (S9-NOTIFY-REVIEW) lets `CreateReviewUseCase` write this
+ * insert and its `review.received` outbox event on the one connection, so
+ * they commit or roll back together — the same conditional-scope pattern
+ * `PrismaReviewModerationRepository` already uses for its own writes.
  */
 export class PrismaReviewRepository implements ReviewRepository {
   constructor(private readonly prisma: PrismaClient) {}
+
+  withTransaction(scope: TransactionScope): ReviewRepository {
+    return new PrismaReviewRepository(scope as unknown as PrismaClient);
+  }
 
   async create(review: Review): Promise<void> {
     try {

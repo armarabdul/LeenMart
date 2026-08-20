@@ -414,3 +414,14 @@ export class FailingAuditWriter implements AuditWriter {
     return Promise.reject(new Error('audit log unavailable'));
   }
 }
+
+/** An outbox writer whose persistence always fails (S9-NOTIFY-REVIEW), for the same fail-closed assertion `FailingAuditWriter` gives moderation — proving a genuine write earlier in the same transaction rolls back with it, not just that a later step was never reached. */
+export class FailingOutboxWriter implements OutboxWriter {
+  withTransaction(): OutboxWriter {
+    return this;
+  }
+
+  write(): Promise<void> {
+    return Promise.reject(new Error('outbox unavailable'));
+  }
+}

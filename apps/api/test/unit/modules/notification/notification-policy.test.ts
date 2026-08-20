@@ -34,10 +34,9 @@ const NOT_NOTIFIED = [
 const ORDER_ID = '01a01234-5678-7abc-9def-0123456789ab';
 
 describe('notification event mapping (S6-NOTIFY-INAPP)', () => {
-  it('notifies on exactly nine event types — S6-NOTIFY-INAPP’s four, S6-NOTIFY-LIFECYCLE’s four, and S7-SCHED’s one', () => {
-    // The map is closed on purpose: an event type without a row in SDD 11.2
-    // has no requirement behind it, and notifying anyway would be inventing
-    // one.
+  it('notifies on exactly ten event types — S6-NOTIFY-INAPP’s four, S6-NOTIFY-LIFECYCLE’s four, S7-SCHED’s one, and S9-NOTIFY-REVIEW’s one', () => {
+    // The map is closed on purpose: an event type without a requirement
+    // behind it should not silently start notifying.
     expect(Object.keys(NOTIFIED_EVENT_TYPES).sort()).toEqual([
       'kyc.approved',
       'kyc.rejected',
@@ -47,8 +46,23 @@ describe('notification event mapping (S6-NOTIFY-INAPP)', () => {
       'order.placed',
       'product.approved',
       'product.rejected',
+      'review.received',
       'sub_order.pickup_reminder',
     ]);
+  });
+
+  it('accepts review.received and files it in the VENDOR inbox (S9-NOTIFY-REVIEW)', () => {
+    expect(isNotifiedEventType('review.received')).toBe(true);
+    expect(recipientKindFor('review.received')).toBe('VENDOR');
+  });
+
+  it('still rejects review.approved and review.hidden — audit action names, not the published event name', () => {
+    // Same distinction `REVIEW_AUDIT_ACTIONS` draws from
+    // `REVIEW_OUTBOX_EVENTS`: a moderator's decision is recorded under one
+    // vocabulary, and only `review.received` — the customer's own submission
+    // — is ever published to the outbox.
+    expect(isNotifiedEventType('review.approved')).toBe(false);
+    expect(isNotifiedEventType('review.hidden')).toBe(false);
   });
 
   it.each(['product.approved', 'product.rejected', 'kyc.approved', 'kyc.rejected'] as const)(

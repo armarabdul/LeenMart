@@ -4,7 +4,11 @@ import type { Clock, IdGenerator, Logger } from '@leen-mart/domain-kit';
 import { AmbientAuditWriter } from '../audit/index.js';
 import { PrismaAuditLogRepository } from '../audit/infrastructure/persistence/prisma-audit-log.repository.js';
 import type { AccessTokenService, SessionDenylist } from '../identity/index.js';
-import { AdminTransactionRunner } from '../../shared/infrastructure/persistence/tenant-prisma.js';
+import {
+  AdminTransactionRunner,
+  PrismaTransactionRunner,
+} from '../../shared/infrastructure/persistence/tenant-prisma.js';
+import { PrismaOutboxWriter } from '../../shared/infrastructure/persistence/prisma-outbox-writer.js';
 import type { VendorTenantResolver } from '../../shared/interface/http/middleware/tenant-context.js';
 import { CreateReviewUseCase } from './application/use-cases/create-review.use-case.js';
 import { DecideReviewModerationUseCase } from './application/use-cases/decide-review-moderation.use-case.js';
@@ -73,6 +77,7 @@ const buildPersistence = (params: {
  * reason every other module here splits its own builders.
  */
 const buildCustomerAndPublicUseCases = (params: {
+  prisma: ReviewModuleDeps['prisma'];
   verifiedPurchaseQuery: PrismaVerifiedPurchaseQuery;
   reviewRepository: PrismaReviewRepository;
   publicReviewQuery: PrismaPublicReviewQuery;
@@ -87,6 +92,14 @@ const buildCustomerAndPublicUseCases = (params: {
   createReviewUseCase: new CreateReviewUseCase({
     verifiedPurchaseQuery: params.verifiedPurchaseQuery,
     reviewRepository: params.reviewRepository,
+    // Bound to `prisma` (`leenmart_app`, tenant-wrapped) — the same
+    // credential `reviewRepository` itself writes on, so the review insert
+    // and its `review.received` outbox event share one connection and one
+    // transaction (S9-NOTIFY-REVIEW). `Review` is in `TENANT_SCOPED_MODELS`,
+    // so this must be `PrismaTransactionRunner`, never `AdminTransactionRunner`
+    // — the same reason `catalogue.module.ts`'s vendor-authored writes use it.
+    transactionRunner: new PrismaTransactionRunner(params.prisma),
+    outboxWriter: new PrismaOutboxWriter(params.prisma, params.idGenerator, params.clock),
     idGenerator: params.idGenerator,
     clock: params.clock,
     logger: params.logger,
@@ -131,6 +144,7 @@ export const createReviewModule = (deps: ReviewModuleDeps): ReviewModule => {
 
   const { createReviewUseCase, listMyReviewsUseCase, listProductReviewsUseCase } =
     buildCustomerAndPublicUseCases({
+      prisma,
       verifiedPurchaseQuery,
       reviewRepository,
       publicReviewQuery,

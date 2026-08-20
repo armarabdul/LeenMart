@@ -13,3 +13,6 @@ export * from './errors/review-errors.js';
 
 // audit vocabulary
 export * from './audit-actions.js';
+
+// outbox vocabulary
+export * from './outbox-events.js';
