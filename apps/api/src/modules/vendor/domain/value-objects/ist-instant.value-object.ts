@@ -48,3 +48,27 @@ export const toIst = (instant: Date): IstInstant => {
 
 /** `YYYY-MM-DD` for a `@db.Date` column, which Prisma hands back as a UTC-midnight `Date`. */
 export const toIsoDate = (value: Date): string => value.toISOString().slice(0, 10);
+
+/**
+ * The reverse of `toIst`: the UTC instant for a given IST wall-clock date and
+ * minute-of-day (S7-SCHED). Used where a stored IST slot (`sub_orders.slot_date`
+ * + `slot_start_minute`, S4-SLOTS) must be compared against `Clock.now()` as an
+ * absolute instant — the pickup-reminder due-window check is the first caller.
+ *
+ * Same trick as `toIst`, run backward: build the instant from the date's UTC
+ * fields plus the minute offset, then subtract the fixed IST offset. Never
+ * reads `Date.UTC`'s implicit local-time overloads or `Intl`, for the same
+ * determinism reason `toIst`'s own comment gives.
+ */
+export const fromIst = (isoDate: string, minuteOfDay: number): Date => {
+  const [year, month, day] = isoDate.split('-').map(Number) as [number, number, number];
+  const utcMidnight = Date.UTC(year, month - 1, day);
+  return new Date(utcMidnight + minuteOfDay * 60_000 - IST_OFFSET_MINUTES * 60_000);
+};
+
+/** Adds `days` to an IST calendar date, staying in `YYYY-MM-DD` and never touching the host timezone — the same arithmetic `delivery-slot-policy.ts`'s own private `addDays` uses, promoted here so a second caller does not have to duplicate it. */
+export const addIstDays = (isoDate: string, days: number): string => {
+  const shifted = new Date(`${isoDate}T00:00:00Z`);
+  shifted.setUTCDate(shifted.getUTCDate() + days);
+  return shifted.toISOString().slice(0, 10);
+};

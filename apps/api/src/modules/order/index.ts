@@ -9,4 +9,10 @@ export type {
   OrderStreamWorkerModuleDeps,
 } from './order-stream.module.js';
 
+export { createOrderSchedulerWorkerModule } from './order-scheduler.module.js';
+export type {
+  OrderSchedulerWorkerModule,
+  OrderSchedulerWorkerModuleDeps,
+} from './order-scheduler.module.js';
+
 export * from './domain/index.js';

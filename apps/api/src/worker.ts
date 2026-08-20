@@ -4,7 +4,10 @@ import {
   createNotificationWorker,
   createNotificationWorkerModule,
 } from './modules/notification/index.js';
-import { createOrderStreamWorkerModule } from './modules/order/index.js';
+import {
+  createOrderSchedulerWorkerModule,
+  createOrderStreamWorkerModule,
+} from './modules/order/index.js';
 import { createOutboxHandlerRegistry } from './shared/application/ports/outbox-handler.port.js';
 import { OutboxRelay } from './shared/application/services/outbox-relay.js';
 import { PrismaOutboxRelayStore } from './shared/infrastructure/persistence/prisma-outbox-relay-store.js';
@@ -14,6 +17,13 @@ import {
   startOutboxRelay,
   type OutboxRelayRunner,
 } from './shared/infrastructure/jobs/outbox-relay-runner.js';
+import { PostgresAdvisoryLock } from './shared/infrastructure/persistence/postgres-advisory-lock.js';
+import { createScheduledJobRegistry } from './shared/application/ports/scheduled-job.port.js';
+import {
+  createSchedulerQueue,
+  registerScheduledJobs,
+} from './shared/infrastructure/jobs/scheduler-queue.js';
+import { createSchedulerWorker } from './shared/infrastructure/jobs/scheduler-worker.js';
 
 /**
  * The background worker process (S2-6b, SDD 12.2 step 5).
@@ -38,6 +48,49 @@ import {
  * resume it.
  */
 let shuttingDown = false;
+
+/**
+ * S7-SCHED. The scheduler platform component (SDD 21.2): a BullMQ repeatable
+ * job per registered `ScheduledJob`, each tick serialised cluster-wide by
+ * `PostgresAdvisoryLock` so that running this worker on more than one
+ * replica never lets two of them execute the same job's body at once —
+ * BullMQ's own job locking already prevents the *same* scheduled tick from
+ * being delivered twice, but a stalled-job recovery (a slow tick whose
+ * lock-renewal is late) can hand the identical tick to a second worker while
+ * the first is still running it, which is exactly what the advisory lock
+ * exists to rule out. `prisma` (`leenmart_app`) is what the lock runs on —
+ * advisory locks need no table grant at all, so this widens nothing.
+ *
+ * Extracted out of `startWorker` itself only to keep that function under the
+ * lint budget — this is still called from, and only from, there.
+ */
+const startScheduler = async (
+  container: Container,
+): Promise<{
+  schedulerWorker: ReturnType<typeof createSchedulerWorker>;
+  schedulerQueue: ReturnType<typeof createSchedulerQueue>;
+}> => {
+  const { prisma, checkoutPrisma, bullRedis, idGenerator, clock, logger } = container;
+  const advisoryLock = new PostgresAdvisoryLock(prisma);
+  const orderScheduler = createOrderSchedulerWorkerModule({
+    checkoutPrisma,
+    prisma,
+    idGenerator,
+    clock,
+    logger,
+  });
+  const schedulerRegistry = createScheduledJobRegistry([orderScheduler.pickupReminderJob]);
+  const schedulerQueue = createSchedulerQueue(bullRedis);
+  await registerScheduledJobs(schedulerQueue, schedulerRegistry, logger);
+  const schedulerWorker = createSchedulerWorker({
+    connection: bullRedis,
+    registry: schedulerRegistry,
+    lock: advisoryLock,
+    logger,
+  });
+  await schedulerWorker.waitUntilReady();
+  return { schedulerWorker, schedulerQueue };
+};
 
 const startWorker = async (): Promise<void> => {
   const container = createContainer();
@@ -87,6 +140,8 @@ const startWorker = async (): Promise<void> => {
   // no third Redis connection for publishing.
   const orderStream = createOrderStreamWorkerModule({ checkoutPrisma, bullRedis, logger });
 
+  const { schedulerWorker, schedulerQueue } = await startScheduler(container);
+
   const relay = new OutboxRelay({
     store: new PrismaOutboxRelayStore(prisma, clock),
     // The logging handler stays: it is how an operator sees the relay working
@@ -106,9 +161,16 @@ const startWorker = async (): Promise<void> => {
   );
   rootLogger.info({ intervalMs: OUTBOX_POLL_INTERVAL_MS }, 'Outbox relay started');
   rootLogger.info({ queue: notificationWorker.name }, 'Notification worker started');
+  rootLogger.info({ queue: schedulerWorker.name }, 'Scheduler worker started');
 
   registerShutdownHandlers(
-    { media: worker, notifications: notificationWorker, queue: notifications.queue },
+    {
+      media: worker,
+      notifications: notificationWorker,
+      queue: notifications.queue,
+      scheduler: schedulerWorker,
+      schedulerQueue,
+    },
     relayRunner,
     container,
   );
@@ -117,12 +179,15 @@ const startWorker = async (): Promise<void> => {
 
 type MediaWorker = ReturnType<typeof createCatalogueMediaWorker>;
 type NotificationWorker = ReturnType<typeof createNotificationWorker>;
+type SchedulerWorker = ReturnType<typeof createSchedulerWorker>;
 
-/** Everything this process must drain, in one value rather than three parameters. */
+/** Everything this process must drain, in one value rather than five parameters. */
 interface Workers {
   readonly media: MediaWorker;
   readonly notifications: NotificationWorker;
   readonly queue: { close(): Promise<void> };
+  readonly scheduler: SchedulerWorker;
+  readonly schedulerQueue: { close(): Promise<void> };
 }
 
 const registerShutdownHandlers = (
@@ -156,8 +221,10 @@ const registerShutdownHandlers = (
         // in flight, and only then are the connections released.
         await relayRunner.close();
         await workers.queue.close();
+        await workers.schedulerQueue.close();
         await workers.media.close();
         await workers.notifications.close();
+        await workers.scheduler.close();
         await container.dispose();
         rootLogger.info({}, 'Shutdown complete');
         process.exit(0);

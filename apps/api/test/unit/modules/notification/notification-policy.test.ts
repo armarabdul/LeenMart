@@ -18,6 +18,7 @@ const ALL_EVENT_TYPES = [
   'sub_order.delivered',
   'sub_order.ready_for_pickup',
   'sub_order.pickup_completed',
+  'sub_order.pickup_reminder',
 ] as const;
 
 /** The six that S6 deliberately does not notify on — none has a row in SDD 11.2. */
@@ -33,7 +34,7 @@ const NOT_NOTIFIED = [
 const ORDER_ID = '01a01234-5678-7abc-9def-0123456789ab';
 
 describe('notification event mapping (S6-NOTIFY-INAPP)', () => {
-  it('notifies on exactly eight event types — S6-NOTIFY-INAPP’s four plus S6-NOTIFY-LIFECYCLE’s four', () => {
+  it('notifies on exactly nine event types — S6-NOTIFY-INAPP’s four, S6-NOTIFY-LIFECYCLE’s four, and S7-SCHED’s one', () => {
     // The map is closed on purpose: an event type without a row in SDD 11.2
     // has no requirement behind it, and notifying anyway would be inventing
     // one.
@@ -46,6 +47,7 @@ describe('notification event mapping (S6-NOTIFY-INAPP)', () => {
       'order.placed',
       'product.approved',
       'product.rejected',
+      'sub_order.pickup_reminder',
     ]);
   });
 
@@ -90,6 +92,18 @@ describe('notification event mapping (S6-NOTIFY-INAPP)', () => {
     expect(recipientKindFor('order.cancelled')).toBe('CUSTOMER');
   });
 
+  it('sends sub_order.pickup_reminder to the customer — SDD 11.2 "Pickup reminder (T-2h)" (S7-SCHED)', () => {
+    expect(isNotifiedEventType('sub_order.pickup_reminder')).toBe(true);
+    expect(recipientKindFor('sub_order.pickup_reminder')).toBe('CUSTOMER');
+  });
+
+  it('never sends a pickup reminder to a vendor — a distinct event from sub_order.ready_for_pickup/pickup_completed, which stay unnotified', () => {
+    // Guards against the two existing sub-order events this one could be
+    // confused with getting silently swept into the notified set alongside it.
+    expect(isNotifiedEventType('sub_order.ready_for_pickup')).toBe(false);
+    expect(isNotifiedEventType('sub_order.pickup_completed')).toBe(false);
+  });
+
   it.each(NOT_NOTIFIED)('does not notify on %s', (eventType) => {
     expect(isNotifiedEventType(eventType)).toBe(false);
   });
@@ -97,7 +111,7 @@ describe('notification event mapping (S6-NOTIFY-INAPP)', () => {
   it('recognises every notified type and rejects everything else', () => {
     const notified = ALL_EVENT_TYPES.filter(isNotifiedEventType);
 
-    expect(notified).toHaveLength(4);
+    expect(notified).toHaveLength(5);
     expect(isNotifiedEventType('something.invented')).toBe(false);
     expect(isNotifiedEventType('')).toBe(false);
   });
@@ -114,10 +128,27 @@ describe('notification content (S6-NOTIFY-INAPP)', () => {
 
   it('gives every notified type its own wording', () => {
     const titles = (
-      ['order.confirmed', 'order.placed', 'order.payment_failed', 'order.cancelled'] as const
+      [
+        'order.confirmed',
+        'order.placed',
+        'order.payment_failed',
+        'order.cancelled',
+        'sub_order.pickup_reminder',
+      ] as const
     ).map((eventType) => contentFor(eventType, { subjectId: ORDER_ID }).title);
 
-    expect(new Set(titles).size).toBe(4);
+    expect(new Set(titles).size).toBe(5);
+  });
+
+  it('the pickup reminder says only that the pickup is approaching, naming the order and nothing else (S7-SCHED locked wording)', () => {
+    const content = contentFor('sub_order.pickup_reminder', { subjectId: ORDER_ID });
+
+    expect(content.title).toBe('Pickup reminder');
+    expect(content.body).toBe(
+      `Your order ${ORDER_ID.slice(-8).toUpperCase()} is ready for pickup soon.`,
+    );
+    // No address, no amount, no slot time, no instruction.
+    expect(content.body).not.toMatch(/₹|pincode|address|\d{1,2}:\d{2}|click|please|bring/i);
   });
 
   it('shortens the order reference rather than printing the whole key', () => {

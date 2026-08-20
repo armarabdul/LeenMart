@@ -34,6 +34,18 @@ export const IN_APP: NotificationChannelName = 'IN_APP';
  * All four reach the vendor. Both rows describe an outcome the *seller* is
  * told about; no document gives a customer any interest in either, and a
  * customer has no moderation or verification state to be notified of.
+ *
+ * S7-SCHED's one, from the matrix row this milestone's scheduler platform
+ * exists to produce (SDD 11.2: "Pickup reminder (T-2h) | High | ● | ● | — |
+ * ●" — In-app is marked, Push/SMS are not implemented here for the same
+ * reason no other event's Push/SMS column is: S6-NOTIFY-INAPP's own scope
+ * decision to build only the channel with no external dependency, unchanged
+ * by this milestone):
+ *
+ *   sub_order.pickup_reminder → "Pickup reminder (T-2h)"
+ *
+ * Reaches the customer only — the row names no vendor-facing wording, and a
+ * vendor already knows their own sub-order is `READY_FOR_PICKUP`.
  */
 export const NOTIFIED_EVENT_TYPES = {
   'order.confirmed': 'CUSTOMER',
@@ -44,6 +56,7 @@ export const NOTIFIED_EVENT_TYPES = {
   'product.rejected': 'VENDOR',
   'kyc.approved': 'VENDOR',
   'kyc.rejected': 'VENDOR',
+  'sub_order.pickup_reminder': 'CUSTOMER',
 } as const satisfies Record<string, NotificationRecipientKind>;
 
 export type NotifiedEventType = keyof typeof NOTIFIED_EVENT_TYPES;
@@ -72,6 +85,13 @@ const EVENT_SUBJECTS = {
   'product.rejected': 'PRODUCT',
   'kyc.approved': 'VENDOR_KYC',
   'kyc.rejected': 'VENDOR_KYC',
+  // `ORDER`, not a new sub-order-level subject: the customer-facing surface
+  // (order history, the order-confirmation page) never shows a sub-order id
+  // on its own — only the parent order's — so referencing anything else here
+  // would print an id the customer has never seen, which is less
+  // recognisable, not more precise. Every other order-lifecycle notification
+  // already references the parent order the same way.
+  'sub_order.pickup_reminder': 'ORDER',
 } as const satisfies Record<NotifiedEventType, NotificationSubject>;
 
 export const subjectOf = (eventType: NotifiedEventType): NotificationSubject =>
@@ -128,31 +148,59 @@ const shortRef = (id: string): string => id.slice(-8).toUpperCase();
  * The full payload is stored alongside, so a later templated version can say
  * more without a backfill.
  */
+/**
+ * One wording function per notified event, keyed rather than switched on —
+ * a plain lookup so a tenth event type does not have to fight the
+ * `complexity` lint budget the way a growing `switch` eventually would.
+ */
+const CONTENT_BY_EVENT_TYPE: Record<NotifiedEventType, (ref: string) => NotificationContent> = {
+  'order.confirmed': (ref) => ({
+    title: 'Order confirmed',
+    body: `Your order ${ref} has been confirmed.`,
+  }),
+  'order.placed': (ref) => ({ title: 'New order', body: `You have received a new order ${ref}.` }),
+  'order.payment_failed': (ref) => ({
+    title: 'Payment failed',
+    body: `Payment for your order ${ref} did not go through.`,
+  }),
+  'order.cancelled': (ref) => ({
+    title: 'Order cancelled',
+    body: `Your order ${ref} has been cancelled.`,
+  }),
+  'product.approved': (ref) => ({
+    title: 'Product approved',
+    body: `Your product ${ref} has been approved.`,
+  }),
+  // No reason, no reviewer note — see this file's own rules above.
+  'product.rejected': (ref) => ({
+    title: 'Product rejected',
+    body: `Your product ${ref} was not approved.`,
+  }),
+  'kyc.approved': () => ({
+    title: 'Verification approved',
+    body: 'Your shop verification has been approved.',
+  }),
+  'kyc.rejected': () => ({
+    title: 'Verification rejected',
+    body: 'Your shop verification was not approved.',
+  }),
+  // S7-SCHED locked wording. Says only that the pickup is approaching and
+  // which order it belongs to — no address (`pickupLocationSnapshot` exists
+  // on the sub-order but is never read here), no amount, no slot time itself
+  // (stating a precise time this function does not independently verify
+  // would be a fact this notification cannot stand behind if it is ever
+  // delayed in delivery), and no instruction — "bring your code"/"arrive on
+  // time" are operational guidance no document specifies.
+  'sub_order.pickup_reminder': (ref) => ({
+    title: 'Pickup reminder',
+    body: `Your order ${ref} is ready for pickup soon.`,
+  }),
+};
+
 export const contentFor = (
   eventType: NotifiedEventType,
   reference: { readonly subjectId: string | null },
 ): NotificationContent => {
   const ref = reference.subjectId === null ? '' : shortRef(reference.subjectId);
-  switch (eventType) {
-    case 'order.confirmed':
-      return { title: 'Order confirmed', body: `Your order ${ref} has been confirmed.` };
-    case 'order.placed':
-      return { title: 'New order', body: `You have received a new order ${ref}.` };
-    case 'order.payment_failed':
-      return { title: 'Payment failed', body: `Payment for your order ${ref} did not go through.` };
-    case 'order.cancelled':
-      return { title: 'Order cancelled', body: `Your order ${ref} has been cancelled.` };
-    case 'product.approved':
-      return { title: 'Product approved', body: `Your product ${ref} has been approved.` };
-    case 'product.rejected':
-      // No reason, no reviewer note — see this function's own rules above.
-      return { title: 'Product rejected', body: `Your product ${ref} was not approved.` };
-    case 'kyc.approved':
-      return { title: 'Verification approved', body: 'Your shop verification has been approved.' };
-    case 'kyc.rejected':
-      return {
-        title: 'Verification rejected',
-        body: 'Your shop verification was not approved.',
-      };
-  }
+  return CONTENT_BY_EVENT_TYPE[eventType](ref);
 };
