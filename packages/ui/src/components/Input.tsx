@@ -2,11 +2,11 @@ import { forwardRef, useId, type InputHTMLAttributes, type ReactNode } from 'rea
 import { cn } from '../lib/cn.js';
 
 export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
-  readonly label?: string;
+  readonly label?: string | undefined;
   /** Helper copy shown when there is no error. Replaced by `error` when one is present, never shown alongside it. */
-  readonly hint?: string;
-  readonly error?: string;
-  readonly containerClassName?: string;
+  readonly hint?: string | undefined;
+  readonly error?: string | undefined;
+  readonly containerClassName?: string | undefined;
   /** An icon/button pinned to the input's trailing edge (e.g. a password-visibility toggle). Never affects label/hint layout — only the input row. */
   readonly endAdornment?: ReactNode;
 }

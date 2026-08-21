@@ -114,3 +114,35 @@ export const isApiError = (error: unknown): error is { status: number; data: Err
  */
 export const apiErrorMessage = (error: unknown, fallback = 'Something went wrong.'): string =>
   isApiError(error) ? error.data.error.message : fallback;
+
+/**
+ * A `VALIDATION_FAILED` response's `details` map straight onto form fields
+ * (Phase H) — the API's own `validate()` middleware names each one
+ * `body.<field>` (see `apps/api/.../middleware/validate.ts`'s `collect()`),
+ * so this strips that prefix and returns exactly the shape a form can spread
+ * onto its own `error={..}` props: `{ email: 'Invalid email' }`, not
+ * `{ 'body.email': ... }`.
+ *
+ * Empty (`{}`) for any error with no `details` at all — a conflict like
+ * "email already registered" or the deliberately generic
+ * "invalid email or password" carries no field list by design (see
+ * `apiErrorMessage`'s own callers for the code-specific fallback each of
+ * those needs instead). A caller checks `Object.keys(...).length` to decide
+ * whether anything came back mapped before falling back to a form-level
+ * `Alert`.
+ */
+export const apiFieldErrors = (error: unknown): Readonly<Record<string, string>> => {
+  if (!isApiError(error)) return {};
+  const details = error.data.error.details;
+  if (!details) return {};
+
+  const fields: Record<string, string> = {};
+  for (const detail of details) {
+    if (!detail.field) continue;
+    const field = detail.field.startsWith('body.')
+      ? detail.field.slice('body.'.length)
+      : detail.field;
+    if (!(field in fields)) fields[field] = detail.issue;
+  }
+  return fields;
+};

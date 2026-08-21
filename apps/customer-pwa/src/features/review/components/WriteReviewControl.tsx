@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { Alert, Button, Rating } from '@leen-mart/ui';
+import { useRef, useState } from 'react';
+import { reviewBodySchema } from '@leen-mart/contracts';
+import { Alert, Button, Rating, Textarea } from '@leen-mart/ui';
 import { useCreateReviewMutation, useGetMyReviewsQuery } from '../review.api';
-import { apiErrorMessage } from '@/shared/api/base-api';
+import { apiErrorMessage, apiFieldErrors } from '@/shared/api/base-api';
 
 interface ReviewFormProps {
   readonly orderItemId: string;
@@ -14,10 +15,29 @@ interface ReviewFormProps {
 const ReviewForm = ({ orderItemId, onSubmitted, onCancel }: ReviewFormProps): JSX.Element => {
   const [rating, setRating] = useState(5);
   const [body, setBody] = useState('');
+  const [bodyTouched, setBodyTouched] = useState(false);
   const [createReview, { isLoading, error }] = useCreateReviewMutation();
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+
+  // The exact schema `POST /me/reviews` validates the body with (Phase H) —
+  // "write a few words" is never a guessed rule, and a 2000-character cap
+  // can never quietly drift from what the server actually enforces.
+  const bodyResult = reviewBodySchema.safeParse(body);
+  const bodyLocalError = bodyResult.success ? undefined : bodyResult.error.issues[0]?.message;
+  const serverFieldErrors = apiFieldErrors(error);
+  const hasMappedServerError = Object.keys(serverFieldErrors).length > 0;
+  const bodyError = (bodyTouched ? bodyLocalError : undefined) ?? serverFieldErrors.body;
 
   const handleSubmit = (event: React.FormEvent): void => {
     event.preventDefault();
+    if (isLoading) return;
+
+    setBodyTouched(true);
+    if (!bodyResult.success) {
+      bodyRef.current?.focus();
+      return;
+    }
+
     void (async (): Promise<void> => {
       try {
         // `.unwrap()` throws on a rejected mutation, so `onSubmitted` is
@@ -34,18 +54,22 @@ const ReviewForm = ({ orderItemId, onSubmitted, onCancel }: ReviewFormProps): JS
     <form
       onSubmit={handleSubmit}
       className="mt-2 flex flex-col gap-2 rounded-card border border-border bg-surface-alt p-3"
+      noValidate
     >
       <Rating value={rating} onChange={setRating} size="lg" />
-      <textarea
+      <Textarea
+        ref={bodyRef}
+        label="Your review"
         value={body}
         onChange={(event) => setBody(event.target.value)}
+        onBlur={() => setBodyTouched(true)}
         placeholder="Share your experience with this product"
         rows={3}
         maxLength={2000}
         required
-        className="w-full rounded-md border border-border-strong bg-surface p-2 text-sm text-text placeholder:text-text-faint focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+        error={bodyError}
       />
-      {error && (
+      {error && !hasMappedServerError && (
         <Alert tone="danger" className="text-xs">
           {apiErrorMessage(error, 'Your review could not be submitted. Please try again.')}
         </Alert>
@@ -54,7 +78,7 @@ const ReviewForm = ({ orderItemId, onSubmitted, onCancel }: ReviewFormProps): JS
         <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
           Cancel
         </Button>
-        <Button type="submit" size="sm" loading={isLoading} disabled={body.trim().length === 0}>
+        <Button type="submit" size="sm" loading={isLoading} disabled={!bodyResult.success}>
           {isLoading ? 'Submitting…' : 'Submit review'}
         </Button>
       </div>

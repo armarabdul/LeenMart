@@ -8,13 +8,13 @@ export interface SelectOption {
 }
 
 export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
-  readonly label?: string;
-  readonly hint?: string;
-  readonly error?: string;
+  readonly label?: string | undefined;
+  readonly hint?: string | undefined;
+  readonly error?: string | undefined;
   readonly options: readonly SelectOption[];
   /** Rendered as a disabled first option when the field has no default value yet. */
-  readonly placeholder?: string;
-  readonly containerClassName?: string;
+  readonly placeholder?: string | undefined;
+  readonly containerClassName?: string | undefined;
 }
 
 /** Same label/hint/error shape as `Input`, over a native `<select>` — no custom listbox, so it keeps native keyboard and screen-reader behaviour for free. */

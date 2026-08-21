@@ -24,6 +24,7 @@ interface Options {
   readonly myReviews?: ReviewResponse[];
   readonly rejects?: boolean;
   readonly isLoading?: boolean;
+  readonly error?: unknown;
 }
 
 const renderControl = (options: Options = {}): void => {
@@ -37,7 +38,7 @@ const renderControl = (options: Options = {}): void => {
 
   mockedCreate.mockReturnValue([
     createReview,
-    { isLoading: options.isLoading ?? false, error: undefined },
+    { isLoading: options.isLoading ?? false, error: options.error },
   ] as unknown as ReturnType<typeof useCreateReviewMutation>);
 
   mockedMyReviews.mockReturnValue({
@@ -175,5 +176,64 @@ describe('WriteReviewControl (S8-REVIEWS)', () => {
 
       expect(screen.getByRole('button', { name: 'Submitting…' })).toBeDisabled();
     });
+  });
+});
+
+describe('WriteReviewControl field validation (Phase H)', () => {
+  it('has a real accessible label, not just a placeholder', () => {
+    renderControl();
+    openForm();
+
+    expect(screen.getByLabelText('Your review')).toBeInTheDocument();
+  });
+});
+
+describe('WriteReviewControl field validation errors (Phase H)', () => {
+  it('reports an empty body inline once the field has been touched, not just via a disabled button', () => {
+    renderControl();
+    openForm();
+
+    const body = screen.getByRole('textbox');
+    fireEvent.focus(body);
+    fireEvent.blur(body);
+
+    expect(screen.getByText('String must contain at least 1 character(s)')).toBeInTheDocument();
+    expect(body).toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('clears the inline error once real text is entered', () => {
+    renderControl();
+    openForm();
+
+    const body = screen.getByRole('textbox');
+    fireEvent.blur(body);
+    expect(screen.getByText('String must contain at least 1 character(s)')).toBeInTheDocument();
+
+    fireEvent.change(body, { target: { value: 'Great mangoes' } });
+    expect(
+      screen.queryByText('String must contain at least 1 character(s)'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('maps a field-scoped API validation error onto the review body', () => {
+    renderControl({
+      error: {
+        status: 400,
+        data: {
+          error: {
+            code: 'VALIDATION_FAILED',
+            message: 'The request payload failed validation.',
+            details: [
+              { field: 'body.body', issue: 'String must contain at most 2000 character(s)' },
+            ],
+            requestId: 'req-1',
+            timestamp: '2026-01-01T00:00:00.000Z',
+          },
+        },
+      },
+    });
+    openForm();
+
+    expect(screen.getByText('String must contain at most 2000 character(s)')).toBeInTheDocument();
   });
 });

@@ -7,6 +7,7 @@ export * from './lib/cn.js';
 
 export * from './components/Button.js';
 export * from './components/Input.js';
+export * from './components/Textarea.js';
 export * from './components/Select.js';
 export * from './components/SearchInput.js';
 export * from './components/Card.js';
