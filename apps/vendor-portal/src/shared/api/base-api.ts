@@ -79,6 +79,10 @@ export const baseApi = createApi({
     'BusinessHours',
     'DeliverySlots',
     'Notification',
+    'VendorProduct',
+    'VendorProductVariant',
+    'VendorInventory',
+    'VendorProductMedia',
   ],
   endpoints: () => ({}),
   refetchOnReconnect: true,
@@ -96,3 +100,31 @@ export const isApiError = (error: unknown): error is { status: number; data: Err
 /** The UI switches on `error.code`, never on `error.message` — the message is localisable prose, not a contract. */
 export const apiErrorMessage = (error: unknown, fallback = 'Something went wrong.'): string =>
   isApiError(error) ? error.data.error.message : fallback;
+
+/**
+ * A `VALIDATION_FAILED` response's `details` map straight onto form fields
+ * (Phase J, mirroring customer-pwa's own `apiFieldErrors` exactly — see that
+ * file's doc comment for the full reasoning). The API's `validate()`
+ * middleware names each one `body.<field>`, so this strips that prefix and
+ * returns exactly the shape a form can spread onto its own `error={..}` props.
+ *
+ * Empty (`{}`) for any error with no `details` at all — a conflict like
+ * "vendor already registered" carries no field list by design; a caller
+ * checks `Object.keys(...).length` to decide whether anything came back
+ * mapped before falling back to a form-level `Alert`.
+ */
+export const apiFieldErrors = (error: unknown): Readonly<Record<string, string>> => {
+  if (!isApiError(error)) return {};
+  const details = error.data.error.details;
+  if (!details) return {};
+
+  const fields: Record<string, string> = {};
+  for (const detail of details) {
+    if (!detail.field) continue;
+    const field = detail.field.startsWith('body.')
+      ? detail.field.slice('body.'.length)
+      : detail.field;
+    if (!(field in fields)) fields[field] = detail.issue;
+  }
+  return fields;
+};

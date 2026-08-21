@@ -4,19 +4,33 @@ import type {
   LogoutRequest,
   LogoutResponse,
   RefreshSessionRequest,
+  RegisterCustomerRequest,
 } from '@leen-mart/contracts';
 import type { SuccessEnvelope } from '@/shared/api/base-api';
 import { baseApi } from '@/shared/api/base-api';
 import { sessionCleared, sessionEstablished } from '@/shared/api/session.slice';
 
 /**
- * Vendor email/password auth, mirroring `customer-pwa`'s own `auth.api.ts`
- * — but no `register` endpoint: a vendor account is created through the
- * customer-facing registration + vendor-registration flow, never here (S3-5
- * is a minimal shell — login only, per the locked decision).
+ * Vendor email/password auth, mirroring `customer-pwa`'s own `auth.api.ts`.
+ *
+ * `register` creates the underlying identity account (role `CUSTOMER`) via
+ * the same `/identity/register` endpoint customer-pwa uses — becoming a
+ * *vendor* is a separate act (`POST /vendors`, see `vendor.api.ts`), which
+ * `RegisterVendorUseCase` deliberately keeps as its own step: promoting the
+ * account to `VENDOR_OWNER` revokes every session, so the two calls can never
+ * be collapsed into one that stays logged in afterward (S3-5's own locked
+ * decision this route composes with, not replaces).
  */
 export const authApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
+    register: builder.mutation<AuthSessionResponse, RegisterCustomerRequest>({
+      query: (body) => ({ url: '/identity/register', method: 'POST', body }),
+      transformResponse: (response: SuccessEnvelope<AuthSessionResponse>) => response.data,
+      onQueryStarted: async (_arg, { dispatch, queryFulfilled }) => {
+        const { data } = await queryFulfilled;
+        dispatch(sessionEstablished(data));
+      },
+    }),
     login: builder.mutation<AuthSessionResponse, LoginRequest>({
       query: (body) => ({ url: '/identity/login', method: 'POST', body }),
       transformResponse: (response: SuccessEnvelope<AuthSessionResponse>) => response.data,
@@ -56,4 +70,5 @@ export const authApi = baseApi.injectEndpoints({
   }),
 });
 
-export const { useLoginMutation, useRefreshMutation, useLogoutMutation } = authApi;
+export const { useRegisterMutation, useLoginMutation, useRefreshMutation, useLogoutMutation } =
+  authApi;

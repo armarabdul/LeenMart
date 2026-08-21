@@ -1,10 +1,13 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate, type Location } from 'react-router-dom';
+import { Alert } from '@leen-mart/ui';
 import { useLoginMutation } from '@/features/auth/auth.api';
 import { apiErrorMessage } from '@/shared/api/base-api';
 
 interface LoginLocationState {
   readonly from?: Location;
+  /** Set by `RegisterPage` after a successful `POST /vendors` — that call revokes the session it was made with, so this is the first screen the new vendor actually reaches. */
+  readonly justRegistered?: boolean;
 }
 
 /** Mirrors `customer-pwa`'s own `LoginPage` — same form shape, redirect-back behaviour, and error handling. */
@@ -15,12 +18,19 @@ export const LoginPage = (): JSX.Element => {
   const [password, setPassword] = useState('');
   const [login, { isLoading, error }] = useLoginMutation();
 
+  const state = location.state as LoginLocationState | null;
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
     try {
       await login({ email, password }).unwrap();
-      const from = (location.state as LoginLocationState | null)?.from;
-      void navigate(from ? `${from.pathname}${from.search}` : '/orders', { replace: true });
+      // `/`, not a hardcoded `/orders`: `HomeRedirect` (Phase J) sends an
+      // ACTIVE vendor to `/orders` and everyone else to `/onboarding` —
+      // `/orders` itself requires `requireActiveVendor` server-side, which a
+      // brand-new REGISTERED vendor would simply fail.
+      void navigate(state?.from ? `${state.from.pathname}${state.from.search}` : '/', {
+        replace: true,
+      });
     } catch {
       // Surfaced below via `error` from the mutation hook.
     }
@@ -32,6 +42,10 @@ export const LoginPage = (): JSX.Element => {
         <h1 className="text-2xl font-bold tracking-tight text-slate-900">Vendor sign in</h1>
         <p className="text-sm text-slate-600">Manage your incoming orders.</p>
       </header>
+
+      {state?.justRegistered && (
+        <Alert tone="success">Your vendor account was created. Sign in to continue.</Alert>
+      )}
 
       <form onSubmit={(event) => void handleSubmit(event)} className="flex flex-col gap-4">
         <label className="flex flex-col gap-1 text-sm font-medium text-slate-700">
@@ -74,9 +88,9 @@ export const LoginPage = (): JSX.Element => {
       </form>
 
       <p className="text-center text-xs text-slate-500">
-        Not a vendor yet? Register through the{' '}
-        <Link to="/" className="font-medium text-brand-700 hover:text-brand-600">
-          customer app
+        Not a vendor yet?{' '}
+        <Link to="/register" className="font-medium text-brand-700 hover:text-brand-600">
+          Register as a vendor
         </Link>
         .
       </p>

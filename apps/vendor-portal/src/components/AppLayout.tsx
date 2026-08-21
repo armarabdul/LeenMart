@@ -38,12 +38,15 @@ export const AppLayout = (): JSX.Element => {
     <div className="flex min-h-screen flex-col bg-slate-50">
       {isAuthenticated && <VendorStreamAlert />}
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-4xl items-center gap-4 px-4 py-3">
+        <div className="flex items-center gap-4 overflow-x-auto px-4 py-3">
           <Link to="/" className="shrink-0 text-lg font-bold tracking-tight text-brand-700">
             {env.appName}
           </Link>
           {isAuthenticated && (
-            <nav className="flex items-center gap-1">
+            <nav className="flex shrink-0 items-center gap-1">
+              <NavLink to="/products" className={navLinkClassName}>
+                Products
+              </NavLink>
               <NavLink to="/orders" end className={navLinkClassName}>
                 Orders
               </NavLink>
@@ -56,10 +59,13 @@ export const AppLayout = (): JSX.Element => {
               <NavLink to="/pickup/redeem" end className={navLinkClassName}>
                 Redeem pickup
               </NavLink>
+              <NavLink to="/onboarding" end className={navLinkClassName}>
+                Onboarding
+              </NavLink>
               <NotificationBell />
             </nav>
           )}
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex shrink-0 items-center gap-3">
             {isAuthenticated ? (
               <>
                 <span className="text-sm text-slate-600">{user?.email}</span>
