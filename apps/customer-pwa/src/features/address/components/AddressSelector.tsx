@@ -81,7 +81,7 @@ export const AddressSelector = ({
                     name="address"
                     checked={isSelected}
                     onChange={() => onSelect(address.id)}
-                    className="h-4 w-4 accent-primary"
+                    className="h-4 w-4 rounded-full accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
                   />
                   <span className="font-medium text-text">{address.label}</span>
                   {address.isDefault && <Badge>Default</Badge>}

@@ -290,7 +290,12 @@ export const CheckoutPage = (): JSX.Element => {
   // vendors the customer explicitly chose to pick up from.
   const [pickupVendorIds, setPickupVendorIds] = useState<readonly string[]>([]);
   // S4-SLOTS. Scoped server-side to this cart's vendors; no vendor id is sent.
-  const { data: slotAvailability } = useGetSlotAvailabilityQuery();
+  const {
+    data: slotAvailability,
+    isError: isSlotAvailabilityError,
+    error: slotAvailabilityError,
+    refetch: refetchSlotAvailability,
+  } = useGetSlotAvailabilityQuery();
   const [slotSelections, setSlotSelections] = useState<readonly SlotChoice[]>([]);
   const [placeOrder, { isLoading: isPlacing, error: placeError }] = usePlaceOrderMutation();
   const navigate = useNavigate();
@@ -380,6 +385,9 @@ export const CheckoutPage = (): JSX.Element => {
 
           <SlotSelector
             availability={slotAvailability}
+            isError={isSlotAvailabilityError}
+            error={slotAvailabilityError}
+            onRetry={() => void refetchSlotAvailability()}
             selections={slotSelections}
             onSelect={selectSlot}
           />

@@ -1,4 +1,5 @@
-import { Button } from '@leen-mart/ui';
+import { Alert, Button } from '@leen-mart/ui';
+import { apiErrorMessage } from '@/shared/api/base-api';
 import { PageContainer } from '@/components/PageContainer';
 import { NotificationList } from '@/features/notification/components/NotificationList';
 import {
@@ -15,7 +16,8 @@ import {
  */
 export const NotificationsPage = (): JSX.Element => {
   const { data: count } = useUnreadNotificationCountQuery();
-  const [markAllRead, { isLoading: isMarkingAll }] = useMarkAllNotificationsReadMutation();
+  const [markAllRead, { isLoading: isMarkingAll, error: markAllError }] =
+    useMarkAllNotificationsReadMutation();
   const unread = count?.unread ?? 0;
 
   return (
@@ -38,6 +40,17 @@ export const NotificationsPage = (): JSX.Element => {
               </Button>
             )}
           </div>
+          {/* Phase I: a failed "mark all" must never look identical to
+              success — the button simply stops loading either way, so the
+              only way the reader learns it didn't work is this. */}
+          {markAllError !== undefined && (
+            <Alert tone="danger">
+              {apiErrorMessage(
+                markAllError,
+                'Notifications could not be marked as read. Please try again.',
+              )}
+            </Alert>
+          )}
           <NotificationList />
         </div>
       </PageContainer>

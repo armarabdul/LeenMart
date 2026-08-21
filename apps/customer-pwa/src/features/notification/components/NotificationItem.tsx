@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import type { NotificationResponse } from '@leen-mart/contracts';
-import { Badge, Button, Card, cn } from '@leen-mart/ui';
+import { Alert, Badge, Button, Card, cn } from '@leen-mart/ui';
+import { apiErrorMessage } from '@/shared/api/base-api';
 import { useMarkNotificationReadMutation } from '../notification.api';
 
 const formatReceivedAt = (isoDateTime: string): string =>
@@ -28,7 +29,7 @@ export const NotificationItem = ({
 }: {
   readonly notification: NotificationResponse;
 }): JSX.Element => {
-  const [markRead, { isLoading }] = useMarkNotificationReadMutation();
+  const [markRead, { isLoading, error }] = useMarkNotificationReadMutation();
   const isUnread = notification.readAt === null;
   const orderId = orderIdOf(notification.payload);
 
@@ -80,6 +81,15 @@ export const NotificationItem = ({
               </Button>
             )}
           </div>
+        )}
+
+        {/* Phase I: scoped to this one card, not a page-wide banner — each
+            notification owns its own mutation state, so only the item that
+            actually failed ever shows one. */}
+        {error !== undefined && (
+          <Alert tone="danger">
+            {apiErrorMessage(error, 'This notification could not be marked as read.')}
+          </Alert>
         )}
       </Card>
     </li>

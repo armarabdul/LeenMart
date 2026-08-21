@@ -1,4 +1,6 @@
 import type { AvailableSlotDto, SlotAvailabilityResponse } from '@leen-mart/contracts';
+import { Alert, Button } from '@leen-mart/ui';
+import { apiErrorMessage } from '@/shared/api/base-api';
 
 /** `540` → `09:00`. Minutes since IST midnight is the wire format; the customer reads clock time. */
 const toClock = (minute: number): string =>
@@ -26,6 +28,11 @@ export interface SlotChoice {
 
 interface SlotSelectorProps {
   readonly availability: SlotAvailabilityResponse | undefined;
+  /** Phase I. True when the availability request itself failed — distinct from "no vendor offers windows". */
+  readonly isError?: boolean;
+  readonly error?: unknown;
+  /** Omitted only in contexts with no way to retry; when present, offered alongside the error. */
+  readonly onRetry?: () => void;
   readonly selections: readonly SlotChoice[];
   readonly onSelect: (choice: SlotChoice) => void;
 }
@@ -43,8 +50,8 @@ const VendorSlots = ({
   readonly selected: SlotChoice | undefined;
   readonly onSelect: (choice: SlotChoice) => void;
 }): JSX.Element => (
-  <li className="rounded-lg border border-slate-200 bg-white p-4">
-    <p className="text-sm font-medium text-slate-900">{shopName ?? 'This seller'}</p>
+  <li className="rounded-lg border border-border bg-surface p-4">
+    <p className="text-sm font-medium text-text">{shopName ?? 'This seller'}</p>
     <ul className="mt-2 flex flex-col gap-2">
       {slots.map((slot) => {
         const full = slot.remaining === 0;
@@ -53,7 +60,7 @@ const VendorSlots = ({
         return (
           <li key={`${slot.date}-${slot.startMinute}`}>
             <label
-              className={`flex items-center gap-2 text-sm ${full ? 'text-slate-400' : 'text-slate-700'}`}
+              className={`flex min-h-11 cursor-pointer items-center gap-2 text-sm ${full ? 'cursor-not-allowed text-text-faint' : 'text-text'}`}
             >
               <input
                 type="radio"
@@ -63,11 +70,12 @@ const VendorSlots = ({
                 onChange={() =>
                   onSelect({ vendorId, date: slot.date, startMinute: slot.startMinute })
                 }
+                className="h-4 w-4 rounded-full accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed"
               />
               <span>{slotLabel(slot)}</span>
               {/* A count, not a promise: the window may fill before this order
                   is placed, and the server refuses rather than substituting. */}
-              <span className="text-xs text-slate-500">
+              <span className="text-xs text-text-muted">
                 {full ? 'Full' : `${slot.remaining} left`}
               </span>
             </label>
@@ -99,9 +107,38 @@ const VendorSlots = ({
  */
 export const SlotSelector = ({
   availability,
+  isError = false,
+  error,
+  onRetry,
   selections,
   onSelect,
 }: SlotSelectorProps): JSX.Element | null => {
+  // Phase I: a failed fetch is not the same fact as "no seller offers
+  // windows" (the `vendors.length === 0` branch below) — the customer must
+  // see the two differently, since the first is recoverable and the second
+  // isn't.
+  if (isError) {
+    return (
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-text-muted">Time slot</h2>
+        <Alert tone="danger" title="Time slots couldn’t be loaded">
+          {apiErrorMessage(error, 'We could not load available time slots. Please try again.')}
+        </Alert>
+        {onRetry && (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={onRetry}
+            className="self-start"
+          >
+            Try again
+          </Button>
+        )}
+      </section>
+    );
+  }
+
   const vendors = (availability?.vendors ?? []).filter((vendor) => vendor.slots.length > 0);
   if (vendors.length === 0) {
     return null;
@@ -109,8 +146,8 @@ export const SlotSelector = ({
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Time slot</h2>
-      <p className="text-xs text-slate-500">
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-text-muted">Time slot</h2>
+      <p className="text-xs text-text-muted">
         All times are IST. Choose one slot per seller — it applies whether you are having the order
         delivered or collecting it.
       </p>

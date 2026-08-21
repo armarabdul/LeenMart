@@ -181,7 +181,7 @@ const MobileCheckoutBar = ({ total }: { readonly total: string | null }): JSX.El
 
 export const CartPage = (): JSX.Element => {
   const { data: cart, isLoading, isError, error } = useGetCartQuery();
-  const [clearCart, { isLoading: isClearing }] = useClearCartMutation();
+  const [clearCart, { isLoading: isClearing, error: clearCartError }] = useClearCartMutation();
   const items = cart?.items ?? [];
   const total = useCartTotal(items);
 
@@ -254,6 +254,15 @@ export const CartPage = (): JSX.Element => {
             isClearing={isClearing}
             onClear={() => void clearCart()}
           />
+
+          {/* Phase I: "Clear cart" failing must not look the same as it
+              succeeding — without this the button just stops spinning and
+              the cart silently stays exactly as it was. */}
+          {clearCartError !== undefined && (
+            <Alert tone="danger">
+              {apiErrorMessage(clearCartError, 'Your cart could not be cleared. Please try again.')}
+            </Alert>
+          )}
 
           <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
             <div className="flex min-w-0 flex-col gap-4">

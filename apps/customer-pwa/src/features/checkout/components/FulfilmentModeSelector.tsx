@@ -35,7 +35,7 @@ export const FulfilmentModeSelector = ({
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-text-muted">
         Delivery or pickup
       </h2>
       <ul className="flex flex-col gap-2">
@@ -44,32 +44,34 @@ export const FulfilmentModeSelector = ({
           return (
             <li
               key={vendor.vendorId}
-              className="flex flex-col gap-2 rounded-md border border-slate-200 p-3"
+              className="flex flex-col gap-2 rounded-md border border-border p-3"
             >
-              <span className="text-sm font-medium text-slate-800">{vendor.vendorShopName}</span>
+              <span className="text-sm font-medium text-text">{vendor.vendorShopName}</span>
               {vendor.supportsPickup ? (
                 <div className="flex gap-4">
-                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-text">
                     <input
                       type="radio"
                       name={`fulfilment-${vendor.vendorId}`}
                       checked={!isPickup}
                       onChange={() => onToggle(vendor.vendorId, false)}
+                      className="h-4 w-4 rounded-full accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
                     />
                     Deliver to me
                   </label>
-                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-text">
                     <input
                       type="radio"
                       name={`fulfilment-${vendor.vendorId}`}
                       checked={isPickup}
                       onChange={() => onToggle(vendor.vendorId, true)}
+                      className="h-4 w-4 rounded-full accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
                     />
                     Pick up in store
                   </label>
                 </div>
               ) : (
-                <p className="text-sm text-slate-500">Delivery only</p>
+                <p className="text-sm text-text-muted">Delivery only</p>
               )}
             </li>
           );

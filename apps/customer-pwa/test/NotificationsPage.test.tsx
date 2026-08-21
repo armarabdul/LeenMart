@@ -45,6 +45,10 @@ interface RenderOptions {
   readonly unread?: number;
   readonly isLoading?: boolean;
   readonly isError?: boolean;
+  /** Phase I. The "mark all as read" mutation itself failing. */
+  readonly markAllError?: unknown;
+  /** Phase I. The per-item "mark as read" mutation itself failing. */
+  readonly markReadError?: unknown;
 }
 
 const markRead = vi.fn();
@@ -69,12 +73,14 @@ const renderPage = (options: RenderOptions = {}): void => {
     data: { unread: options.unread ?? 0 },
   } as unknown as ReturnType<typeof useUnreadNotificationCountQuery>);
 
-  mockedMarkRead.mockReturnValue([markRead, { isLoading: false }] as unknown as ReturnType<
-    typeof useMarkNotificationReadMutation
-  >);
-  mockedMarkAllRead.mockReturnValue([markAllRead, { isLoading: false }] as unknown as ReturnType<
-    typeof useMarkAllNotificationsReadMutation
-  >);
+  mockedMarkRead.mockReturnValue([
+    markRead,
+    { isLoading: false, error: options.markReadError },
+  ] as unknown as ReturnType<typeof useMarkNotificationReadMutation>);
+  mockedMarkAllRead.mockReturnValue([
+    markAllRead,
+    { isLoading: false, error: options.markAllError },
+  ] as unknown as ReturnType<typeof useMarkAllNotificationsReadMutation>);
 
   render(
     <Provider store={createStore()}>
@@ -139,6 +145,29 @@ describe('NotificationsPage', () => {
     expect(markRead).toHaveBeenCalledWith('01a01111-1111-7111-8111-111111111111');
   });
 
+  it('shows a visible error scoped to the item when marking it read fails', () => {
+    renderPage({
+      items: [
+        notification({ id: 'notif-a', body: 'First notification' }),
+        notification({ id: 'notif-b', body: 'Second notification' }),
+      ],
+      unread: 2,
+      markReadError: {
+        status: 500,
+        data: { error: { code: 'INTERNAL_ERROR', message: 'Something went wrong.' } },
+      },
+    });
+
+    // Every item shares the same mocked mutation state in this test (each
+    // real `NotificationItem` owns an independent hook instance in
+    // production — see its own component), so the assertion that matters
+    // here is that the failure surfaces as an alert at all, not a silent
+    // no-op, and that it does not replace the notification's own content.
+    expect(screen.getAllByRole('alert').length).toBeGreaterThan(0);
+    expect(screen.getByText('First notification')).toBeInTheDocument();
+    expect(screen.getByText('Second notification')).toBeInTheDocument();
+  });
+
   it('offers no per-item action on a notification that is already read', () => {
     renderPage({ items: [notification({ readAt: '2026-08-19T07:00:00.000Z' })] });
 
@@ -157,6 +186,21 @@ describe('NotificationsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Mark all as read' }));
 
     expect(markAllRead).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a visible error when "mark all as read" fails, without hiding the action', () => {
+    renderPage({
+      items: [notification()],
+      unread: 1,
+      markAllError: {
+        status: 500,
+        data: { error: { code: 'INTERNAL_ERROR', message: 'Something went wrong.' } },
+      },
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Something went wrong.');
+    // The reader must still be able to try again — the button doesn't vanish.
+    expect(screen.getByRole('button', { name: 'Mark all as read' })).toBeInTheDocument();
   });
 
   it('hides "Mark all as read" when nothing is unread', () => {

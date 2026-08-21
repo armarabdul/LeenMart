@@ -39,7 +39,13 @@ const cartItem = (overrides: Partial<CartItemResponse> = {}): CartItemResponse =
 
 const renderCartPage = (
   cart: CartResponse | undefined,
-  options: { isLoading?: boolean; isError?: boolean; knownVariant?: boolean } = {},
+  options: {
+    isLoading?: boolean;
+    isError?: boolean;
+    knownVariant?: boolean;
+    /** Phase I. The clear-cart mutation itself failing. */
+    clearCartError?: unknown;
+  } = {},
 ): {
   updateCartItem: ReturnType<typeof vi.fn>;
   removeCartItem: ReturnType<typeof vi.fn>;
@@ -57,7 +63,7 @@ const renderCartPage = (
   } as unknown as ReturnType<typeof useGetCartQuery>);
   mockedUseClearCartMutation.mockReturnValue([
     clearCart,
-    { isLoading: false },
+    { isLoading: false, error: options.clearCartError },
   ] as unknown as ReturnType<typeof useClearCartMutation>);
   mockedUseUpdateCartItemMutation.mockReturnValue([
     updateCartItem,
@@ -149,6 +155,24 @@ describe('CartPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /clear cart/i }));
     expect(clearCart).toHaveBeenCalled();
+  });
+
+  it('shows a visible error when clearing the cart fails, and keeps the cart on screen', () => {
+    renderCartPage(
+      { id: 'cart-1', items: [cartItem()] },
+      {
+        knownVariant: true,
+        clearCartError: {
+          status: 500,
+          data: { error: { code: 'INTERNAL_ERROR', message: 'Something went wrong.' } },
+        },
+      },
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Something went wrong.');
+    // The failure must not look like success — the item this cart actually
+    // has is still shown, not silently cleared from the screen.
+    expect(screen.getByText('Alphonso Mango')).toBeInTheDocument();
   });
 
   it('shows a total only once every item has resolved', () => {

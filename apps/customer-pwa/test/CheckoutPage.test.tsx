@@ -104,10 +104,13 @@ const renderCheckout = (
         remaining: number;
       }[];
     }[];
+    /** Phase I. The slot-availability request itself failing — distinct from "no vendor offers windows". */
+    slotAvailabilityError?: unknown;
   } = {},
-): { placeOrder: ReturnType<typeof vi.fn> } => {
+): { placeOrder: ReturnType<typeof vi.fn>; refetchSlotAvailability: ReturnType<typeof vi.fn> } => {
   const placeOrder = vi.fn();
   const addAddress = vi.fn();
+  const refetchSlotAvailability = vi.fn();
 
   mockedUseGetCartQuery.mockReturnValue({
     data: cart,
@@ -127,11 +130,13 @@ const renderCheckout = (
   ] as unknown as ReturnType<typeof useAddAddressMutation>);
   // S4-SLOTS. No vendor in these carts offers windows, so the selector renders
   // nothing and every expectation written before this milestone still holds.
+  const isSlotAvailabilityError = options.slotAvailabilityError !== undefined;
   mockedUseGetSlotAvailabilityQuery.mockReturnValue({
-    data: { vendors: options.slotVendors ?? [] },
+    data: isSlotAvailabilityError ? undefined : { vendors: options.slotVendors ?? [] },
     isLoading: false,
-    isError: false,
-    error: undefined,
+    isError: isSlotAvailabilityError,
+    error: options.slotAvailabilityError,
+    refetch: refetchSlotAvailability,
   } as unknown as ReturnType<typeof useGetSlotAvailabilityQuery>);
   mockedUsePlaceOrderMutation.mockReturnValue([
     placeOrder,
@@ -167,7 +172,7 @@ const renderCheckout = (
     </Provider>,
   );
 
-  return { placeOrder };
+  return { placeOrder, refetchSlotAvailability };
 };
 
 describe('CheckoutPage', () => {
@@ -379,5 +384,61 @@ describe('CheckoutPage — time slots (S4-SLOTS)', () => {
     );
 
     expect(screen.getByRole('alert')).toHaveTextContent(/choose an available time slot/i);
+  });
+});
+
+describe('CheckoutPage — slot availability errors (Phase I)', () => {
+  it('shows a visible, distinct error when the availability request itself fails — never mistaken for "no slots"', () => {
+    renderCheckout(
+      { id: 'cart-1', items: [cartItem()] },
+      {
+        knownVariant: true,
+        slotAvailabilityError: {
+          status: 500,
+          data: { error: { code: 'INTERNAL_ERROR', message: 'Something went wrong.' } },
+        },
+      },
+    );
+
+    // The "no seller offers windows" case renders no "Time slot" heading at
+    // all (see the earlier test) — a fetch failure must render one, with a
+    // visible alert underneath it, so the two are never confused.
+    expect(screen.getByRole('heading', { name: 'Time slot' })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Something went wrong.');
+  });
+
+  it('offers a retry that re-fetches slot availability after a failure', () => {
+    const { refetchSlotAvailability } = renderCheckout(
+      { id: 'cart-1', items: [cartItem()] },
+      {
+        knownVariant: true,
+        slotAvailabilityError: {
+          status: 500,
+          data: { error: { code: 'INTERNAL_ERROR', message: 'Something went wrong.' } },
+        },
+      },
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(refetchSlotAvailability).toHaveBeenCalledTimes(1);
+  });
+
+  it('places an order normally once slot availability loads successfully after a retry', () => {
+    // A slot-availability failure must not block the rest of checkout —
+    // address selection and order placement stay fully usable regardless.
+    renderCheckout(
+      { id: 'cart-1', items: [cartItem()] },
+      {
+        knownVariant: true,
+        slotAvailabilityError: {
+          status: 500,
+          data: { error: { code: 'INTERNAL_ERROR', message: 'Something went wrong.' } },
+        },
+      },
+    );
+
+    expect(screen.getByRole('button', { name: /place order/i })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Delivery address|Asha/ })).toBeInTheDocument();
   });
 });
