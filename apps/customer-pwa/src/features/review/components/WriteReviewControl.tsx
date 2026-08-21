@@ -1,32 +1,7 @@
 import { useState } from 'react';
+import { Alert, Button, Rating } from '@leen-mart/ui';
 import { useCreateReviewMutation, useGetMyReviewsQuery } from '../review.api';
 import { apiErrorMessage } from '@/shared/api/base-api';
-
-const RATINGS = [1, 2, 3, 4, 5] as const;
-
-const RatingPicker = ({
-  value,
-  onChange,
-}: {
-  readonly value: number;
-  readonly onChange: (rating: number) => void;
-}): JSX.Element => (
-  <div role="radiogroup" aria-label="Rating" className="flex gap-1">
-    {RATINGS.map((rating) => (
-      <button
-        key={rating}
-        type="button"
-        role="radio"
-        aria-checked={value === rating}
-        aria-label={`${rating} star${rating === 1 ? '' : 's'}`}
-        onClick={() => onChange(rating)}
-        className={`text-2xl leading-none ${rating <= value ? 'text-amber-500' : 'text-slate-300'}`}
-      >
-        ★
-      </button>
-    ))}
-  </div>
-);
 
 interface ReviewFormProps {
   readonly orderItemId: string;
@@ -58,9 +33,9 @@ const ReviewForm = ({ orderItemId, onSubmitted, onCancel }: ReviewFormProps): JS
   return (
     <form
       onSubmit={handleSubmit}
-      className="mt-2 flex flex-col gap-2 rounded-md border border-slate-200 bg-slate-50 p-3"
+      className="mt-2 flex flex-col gap-2 rounded-card border border-border bg-surface-alt p-3"
     >
-      <RatingPicker value={rating} onChange={setRating} />
+      <Rating value={rating} onChange={setRating} size="lg" />
       <textarea
         value={body}
         onChange={(event) => setBody(event.target.value)}
@@ -68,28 +43,20 @@ const ReviewForm = ({ orderItemId, onSubmitted, onCancel }: ReviewFormProps): JS
         rows={3}
         maxLength={2000}
         required
-        className="w-full rounded-md border border-slate-300 p-2 text-sm text-slate-900 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+        className="w-full rounded-md border border-border-strong bg-surface p-2 text-sm text-text placeholder:text-text-faint focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
       />
       {error && (
-        <p role="alert" className="text-xs text-red-700">
+        <Alert tone="danger" className="text-xs">
           {apiErrorMessage(error, 'Your review could not be submitted. Please try again.')}
-        </p>
+        </Alert>
       )}
       <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
-        >
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
           Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={isLoading || body.trim().length === 0}
-          className="rounded-md bg-brand-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-600 disabled:opacity-50"
-        >
+        </Button>
+        <Button type="submit" size="sm" loading={isLoading} disabled={body.trim().length === 0}>
           {isLoading ? 'Submitting…' : 'Submit review'}
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -124,7 +91,7 @@ export const WriteReviewControl = ({
   const existingReview = myReviews?.find((review) => review.orderItemId === orderItemId);
 
   if (existingReview || justSubmitted) {
-    return <p className="mt-1 text-xs font-medium text-slate-500">You reviewed this item</p>;
+    return <p className="mt-1 text-xs font-medium text-text-muted">You reviewed this item</p>;
   }
 
   if (formOpen) {
@@ -141,12 +108,14 @@ export const WriteReviewControl = ({
   }
 
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size="sm"
       onClick={() => setFormOpen(true)}
-      className="mt-1 text-xs font-medium text-brand-700 hover:text-brand-600"
+      className="mt-1 -ml-2"
     >
       Write a review
-    </button>
+    </Button>
   );
 };

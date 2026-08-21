@@ -1,37 +1,55 @@
 import type { PublicReviewItem, ProductReviewSummary } from '@leen-mart/contracts';
-import { Rating } from '@leen-mart/ui';
+import { Alert, Badge, Card, Rating, Skeleton } from '@leen-mart/ui';
 import { useGetProductReviewsQuery } from '../review.api';
 import { apiErrorMessage } from '@/shared/api/base-api';
 
 const SummaryLine = ({ summary }: { readonly summary: ProductReviewSummary }): JSX.Element => {
   if (summary.approvedReviewCount === 0 || summary.averageRating === null) {
-    return <p className="text-sm text-slate-600">No reviews yet.</p>;
+    return <p className="text-sm text-text-muted">No reviews yet.</p>;
   }
   return (
-    <p className="flex items-center gap-2 text-sm text-slate-700">
+    <p className="flex flex-wrap items-center gap-2 text-sm text-text-muted">
       <Rating value={Math.round(summary.averageRating)} size="sm" />
-      <span className="font-medium text-slate-900">{summary.averageRating.toFixed(1)}</span>
-      <span className="text-slate-500">
+      <span className="text-base font-semibold text-text">{summary.averageRating.toFixed(1)}</span>
+      <span>
         ({summary.approvedReviewCount} review{summary.approvedReviewCount === 1 ? '' : 's'})
       </span>
     </p>
   );
 };
 
+const formatReviewDate = (isoDateTime: string): string =>
+  new Date(isoDateTime).toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+
 const ReviewItem = ({ review }: { readonly review: PublicReviewItem }): JSX.Element => (
-  <li className="flex flex-col gap-1 rounded-lg border border-slate-200 bg-white p-4">
-    <div className="flex items-center justify-between gap-3">
-      <Rating value={review.rating} size="sm" />
-      <time dateTime={review.createdAt} className="text-xs text-slate-500">
-        {new Date(review.createdAt).toLocaleDateString('en-IN', {
-          day: 'numeric',
-          month: 'short',
-          year: 'numeric',
-        })}
-      </time>
-    </div>
-    <p className="text-sm text-slate-700">{review.body}</p>
+  <li>
+    <Card className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Rating value={review.rating} size="sm" />
+          {/* Every review in this system is tied to a delivered order item
+              (S8-REVIEWS write path) — this is a structural fact about every
+              row here, not a per-review field fetched from the server. */}
+          <Badge tone="success">Verified purchase</Badge>
+        </div>
+        <time dateTime={review.createdAt} className="text-xs text-text-faint">
+          {formatReviewDate(review.createdAt)}
+        </time>
+      </div>
+      <p className="text-sm leading-relaxed text-text">{review.body}</p>
+    </Card>
   </li>
+);
+
+const ReviewsSkeleton = (): JSX.Element => (
+  <div className="flex flex-col gap-3" aria-busy="true" aria-label="Loading reviews">
+    <Skeleton shape="text" className="h-5 w-40" />
+    <Skeleton shape="rect" className="h-24 w-full" />
+  </div>
 );
 
 /**
@@ -48,25 +66,16 @@ export const ProductReviews = ({
   const { data, isLoading, isError, error } = useGetProductReviewsQuery(productId);
 
   if (isLoading) {
-    return (
-      <div className="flex flex-col gap-3">
-        <div className="h-5 w-32 animate-pulse rounded bg-slate-100" />
-        <div className="h-16 w-full animate-pulse rounded-lg bg-slate-100" />
-      </div>
-    );
+    return <ReviewsSkeleton />;
   }
 
   if (isError || !data) {
-    return (
-      <p role="alert" className="text-sm text-red-700">
-        {apiErrorMessage(error, 'Reviews could not be loaded.')}
-      </p>
-    );
+    return <Alert tone="danger">{apiErrorMessage(error, 'Reviews could not be loaded.')}</Alert>;
   }
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-lg font-semibold text-slate-900">Reviews</h2>
+      <h2 className="font-display text-lg font-semibold text-text">Reviews</h2>
       <SummaryLine summary={data.summary} />
       {data.items.length > 0 && (
         <ul className="flex flex-col gap-3">

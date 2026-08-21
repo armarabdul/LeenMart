@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import type { NotificationResponse } from '@leen-mart/contracts';
+import { Badge, Button, Card, cn } from '@leen-mart/ui';
 import { useMarkNotificationReadMutation } from '../notification.api';
 
 const formatReceivedAt = (isoDateTime: string): string =>
@@ -32,44 +33,55 @@ export const NotificationItem = ({
   const orderId = orderIdOf(notification.payload);
 
   return (
-    <li
-      className={`flex flex-col gap-2 rounded-lg border p-4 ${
-        isUnread ? 'border-brand-200 bg-brand-50' : 'border-slate-200 bg-white'
-      }`}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-col gap-1">
-          <span className="text-sm font-semibold text-slate-900">
-            {notification.title}
-            {isUnread && <span className="sr-only"> (unread)</span>}
-          </span>
-          <span className="text-sm text-slate-700">{notification.body}</span>
+    <li>
+      <Card
+        className={cn(
+          'flex flex-col gap-2 border-l-4',
+          isUnread ? 'border-l-primary bg-primary-soft/40' : 'border-l-transparent',
+        )}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-text">{notification.title}</span>
+              {isUnread && (
+                <Badge tone="primary">
+                  New<span className="sr-only"> (unread)</span>
+                </Badge>
+              )}
+            </span>
+            <span className="text-sm text-text-muted">{notification.body}</span>
+          </div>
+          <time dateTime={notification.createdAt} className="shrink-0 text-xs text-text-faint">
+            {formatReceivedAt(notification.createdAt)}
+          </time>
         </div>
-        <time dateTime={notification.createdAt} className="shrink-0 text-xs text-slate-500">
-          {formatReceivedAt(notification.createdAt)}
-        </time>
-      </div>
 
-      <div className="flex items-center gap-3">
-        {orderId && (
-          <Link
-            to={`/orders/${orderId}`}
-            className="text-sm font-medium text-brand-700 hover:underline"
-          >
-            View order
-          </Link>
+        {(orderId !== null || isUnread) && (
+          <div className="flex items-center gap-4">
+            {orderId && (
+              <Link
+                to={`/orders/${orderId}`}
+                className="-ml-2 inline-flex min-h-11 items-center rounded px-2 text-sm font-medium text-primary hover:text-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              >
+                View order
+              </Link>
+            )}
+            {isUnread && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                loading={isLoading}
+                onClick={() => void markRead(notification.id)}
+                className="-ml-2"
+              >
+                Mark as read
+              </Button>
+            )}
+          </div>
         )}
-        {isUnread && (
-          <button
-            type="button"
-            disabled={isLoading}
-            onClick={() => void markRead(notification.id)}
-            className="text-sm font-medium text-slate-600 hover:text-slate-900 disabled:opacity-50"
-          >
-            Mark as read
-          </button>
-        )}
-      </div>
+      </Card>
     </li>
   );
 };

@@ -59,3 +59,19 @@ describe('LoginPage post-login redirect', () => {
     await waitFor(() => expect(screen.getByText('Product page')).toBeInTheDocument());
   });
 });
+
+describe('LoginPage password visibility', () => {
+  it('keeps the password field masked until the reader asks to reveal it', () => {
+    mockLogin.mockReturnValue({ unwrap: () => Promise.resolve({}) });
+    renderLoginAt(['/login']);
+
+    const password = screen.getByLabelText('Password');
+    expect(password).toHaveAttribute('type', 'password');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show password' }));
+    expect(password).toHaveAttribute('type', 'text');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide password' }));
+    expect(password).toHaveAttribute('type', 'password');
+  });
+});

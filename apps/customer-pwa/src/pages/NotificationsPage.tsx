@@ -1,3 +1,5 @@
+import { Button } from '@leen-mart/ui';
+import { PageContainer } from '@/components/PageContainer';
 import { NotificationList } from '@/features/notification/components/NotificationList';
 import {
   useMarkAllNotificationsReadMutation,
@@ -17,21 +19,28 @@ export const NotificationsPage = (): JSX.Element => {
   const unread = count?.unread ?? 0;
 
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">Notifications</h1>
-        {unread > 0 && (
-          <button
-            type="button"
-            disabled={isMarkingAll}
-            onClick={() => void markAllRead()}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            Mark all as read
-          </button>
-        )}
-      </div>
-      <NotificationList />
+    <main>
+      <PageContainer>
+        <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 py-6 sm:py-8">
+          <div className="flex items-center justify-between gap-4">
+            <h1 className="font-display text-xl font-bold tracking-tight text-text sm:text-2xl">
+              Notifications
+            </h1>
+            {unread > 0 && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                loading={isMarkingAll}
+                onClick={() => void markAllRead()}
+              >
+                Mark all as read
+              </Button>
+            )}
+          </div>
+          <NotificationList />
+        </div>
+      </PageContainer>
     </main>
   );
 };

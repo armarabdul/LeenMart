@@ -1,5 +1,6 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react';
 import type { AddAddressRequest } from '@leen-mart/contracts';
+import { Alert, Button, Input } from '@leen-mart/ui';
 import { apiErrorMessage } from '@/shared/api/base-api';
 import { useAddAddressMutation } from '../address.api';
 
@@ -19,9 +20,6 @@ const EMPTY_FORM: AddAddressRequest = {
   landmark: '',
   label: '',
 };
-
-const inputClass =
-  'w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500';
 
 /** A new-address form, used inline within checkout's address step — there is no standalone address-book page in S3-3A. */
 export const AddressForm = ({ onAdded, onCancel }: AddressFormProps): JSX.Element => {
@@ -47,80 +45,46 @@ export const AddressForm = ({ onAdded, onCancel }: AddressFormProps): JSX.Elemen
   return (
     <form
       onSubmit={(event) => void handleSubmit(event)}
-      className="flex flex-col gap-3 rounded-md border border-slate-200 p-4"
+      className="flex flex-col gap-3 rounded-card border border-border bg-surface p-4"
     >
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-sm text-slate-700">
-          Recipient name
-          <input
-            required
-            value={form.recipientName}
-            onChange={set('recipientName')}
-            className={inputClass}
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-sm text-slate-700">
-          Phone (+91XXXXXXXXXX)
-          <input required value={form.phone} onChange={set('phone')} className={inputClass} />
-        </label>
+        <Input
+          label="Recipient name"
+          required
+          value={form.recipientName}
+          onChange={set('recipientName')}
+        />
+        <Input label="Phone (+91XXXXXXXXXX)" required value={form.phone} onChange={set('phone')} />
       </div>
 
-      <label className="flex flex-col gap-1 text-sm text-slate-700">
-        Address line 1
-        <input required value={form.line1} onChange={set('line1')} className={inputClass} />
-      </label>
-      <label className="flex flex-col gap-1 text-sm text-slate-700">
-        Address line 2 (optional)
-        <input value={form.line2 ?? ''} onChange={set('line2')} className={inputClass} />
-      </label>
+      <Input label="Address line 1" required value={form.line1} onChange={set('line1')} />
+      <Input label="Address line 2 (optional)" value={form.line2 ?? ''} onChange={set('line2')} />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <label className="flex flex-col gap-1 text-sm text-slate-700">
-          City
-          <input required value={form.city} onChange={set('city')} className={inputClass} />
-        </label>
-        <label className="flex flex-col gap-1 text-sm text-slate-700">
-          State
-          <input required value={form.state} onChange={set('state')} className={inputClass} />
-        </label>
-        <label className="flex flex-col gap-1 text-sm text-slate-700">
-          PIN code
-          <input required value={form.pincode} onChange={set('pincode')} className={inputClass} />
-        </label>
+        <Input label="City" required value={form.city} onChange={set('city')} />
+        <Input label="State" required value={form.state} onChange={set('state')} />
+        <Input label="PIN code" required value={form.pincode} onChange={set('pincode')} />
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-sm text-slate-700">
-          Landmark (optional)
-          <input value={form.landmark ?? ''} onChange={set('landmark')} className={inputClass} />
-        </label>
-        <label className="flex flex-col gap-1 text-sm text-slate-700">
-          Label (e.g. Home, Office)
-          <input required value={form.label} onChange={set('label')} className={inputClass} />
-        </label>
+        <Input label="Landmark (optional)" value={form.landmark ?? ''} onChange={set('landmark')} />
+        <Input
+          label="Label (e.g. Home, Office)"
+          required
+          value={form.label}
+          onChange={set('label')}
+        />
       </div>
 
-      {error !== undefined && (
-        <p role="alert" className="text-sm text-red-700">
-          {apiErrorMessage(error)}
-        </p>
-      )}
+      {error !== undefined && <Alert tone="danger">{apiErrorMessage(error)}</Alert>}
 
       <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded-md px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900"
-        >
+        <Button type="button" variant="ghost" onClick={onCancel}>
           Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={isLoading}
-          className="rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50"
-        >
+        </Button>
+        <Button type="submit" loading={isLoading}>
           {isLoading ? 'Saving…' : 'Save address'}
-        </button>
+        </Button>
       </div>
     </form>
   );

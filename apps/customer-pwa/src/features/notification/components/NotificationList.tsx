@@ -1,12 +1,25 @@
 import { useState } from 'react';
+import { Alert, Button, EmptyState, Skeleton } from '@leen-mart/ui';
 import { apiErrorMessage } from '@/shared/api/base-api';
 import { useListNotificationsQuery } from '../notification.api';
 import { NotificationItem } from './NotificationItem';
 
-const Skeleton = (): JSX.Element => (
-  <div className="flex flex-col gap-3">
+const BellIcon = (): JSX.Element => (
+  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="h-8 w-8">
+    <path
+      d="M18 8a6 6 0 1 0-12 0c0 4-1.5 5.5-2 6h16c-.5-.5-2-2-2-6Z"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinejoin="round"
+    />
+    <path d="M10 18a2 2 0 0 0 4 0" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+  </svg>
+);
+
+const NotificationsSkeleton = (): JSX.Element => (
+  <div className="flex flex-col gap-3" aria-busy="true" aria-label="Loading your notifications">
     {Array.from({ length: 3 }, (_, index) => (
-      <div key={index} className="h-20 w-full animate-pulse rounded-lg bg-slate-100" />
+      <Skeleton key={index} shape="rect" className="h-20 w-full" />
     ))}
   </div>
 );
@@ -31,24 +44,23 @@ const NotificationChunk = ({ cursor, isFirst, isLast, onLoadMore }: ChunkProps):
     cursor === undefined ? undefined : { cursor },
   );
 
-  if (isLoading) return <Skeleton />;
+  if (isLoading) return <NotificationsSkeleton />;
 
   if (isError || !data) {
     return (
-      <p
-        role="alert"
-        className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700"
-      >
+      <Alert tone="danger">
         {apiErrorMessage(error, 'Your notifications could not be loaded. Please try again.')}
-      </p>
+      </Alert>
     );
   }
 
   if (isFirst && data.items.length === 0) {
     return (
-      <p className="rounded-lg border border-slate-200 bg-white p-8 text-center text-sm text-slate-600">
-        You have no notifications yet. Updates about your orders will appear here.
-      </p>
+      <EmptyState
+        icon={<BellIcon />}
+        title="No notifications yet"
+        description="Updates about your orders will appear here."
+      />
     );
   }
 
@@ -65,13 +77,14 @@ const NotificationChunk = ({ cursor, isFirst, isLast, onLoadMore }: ChunkProps):
         ))}
       </ul>
       {isLast && nextCursor !== null && (
-        <button
+        <Button
           type="button"
+          variant="secondary"
           onClick={() => onLoadMore(nextCursor)}
-          className="self-center rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          className="self-center"
         >
           Load more
-        </button>
+        </Button>
       )}
     </>
   );

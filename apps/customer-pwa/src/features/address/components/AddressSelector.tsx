@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Alert, Badge, Button, Skeleton, cn } from '@leen-mart/ui';
 import { apiErrorMessage } from '@/shared/api/base-api';
 import { useGetAddressesQuery } from '../address.api';
 import { AddressForm } from './AddressForm';
@@ -9,9 +10,9 @@ interface AddressSelectorProps {
 }
 
 const AddressSkeleton = (): JSX.Element => (
-  <div className="flex flex-col gap-2">
+  <div className="flex flex-col gap-2" aria-busy="true" aria-label="Loading your addresses">
     {Array.from({ length: 2 }, (_, index) => (
-      <div key={index} className="h-16 w-full animate-pulse rounded-md bg-slate-100" />
+      <Skeleton key={index} shape="rect" className="h-16 w-full" />
     ))}
   </div>
 );
@@ -34,12 +35,9 @@ export const AddressSelector = ({
 
   if (isError || !addresses) {
     return (
-      <p
-        role="alert"
-        className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700"
-      >
+      <Alert tone="danger">
         {apiErrorMessage(error, 'Your addresses could not be loaded. Please try again.')}
-      </p>
+      </Alert>
     );
   }
 
@@ -47,7 +45,7 @@ export const AddressSelector = ({
     return (
       <div className="flex flex-col gap-3">
         {addresses.length === 0 && (
-          <p className="text-sm text-slate-600">
+          <p className="text-sm text-text-muted">
             You have no saved addresses yet — add one to continue.
           </p>
         )}
@@ -65,46 +63,49 @@ export const AddressSelector = ({
   return (
     <div className="flex flex-col gap-3">
       <ul className="flex flex-col gap-2">
-        {addresses.map((address) => (
-          <li key={address.id}>
-            <label
-              className={`flex cursor-pointer flex-col gap-1 rounded-md border p-3 text-sm ${
-                selectedAddressId === address.id
-                  ? 'border-brand-500 bg-brand-50'
-                  : 'border-slate-200 bg-white hover:border-slate-300'
-              }`}
-            >
-              <span className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="address"
-                  checked={selectedAddressId === address.id}
-                  onChange={() => onSelect(address.id)}
-                />
-                <span className="font-medium text-slate-900">{address.label}</span>
-                {address.isDefault && (
-                  <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs text-slate-700">
-                    Default
-                  </span>
+        {addresses.map((address) => {
+          const isSelected = selectedAddressId === address.id;
+          return (
+            <li key={address.id}>
+              <label
+                className={cn(
+                  'flex cursor-pointer flex-col gap-1 rounded-card border p-3 text-sm transition-colors',
+                  isSelected
+                    ? 'border-primary bg-primary-soft'
+                    : 'border-border bg-surface hover:border-border-strong',
                 )}
-              </span>
-              <span className="pl-6 text-slate-600">
-                {address.recipientName}, {address.line1}
-                {address.line2 ? `, ${address.line2}` : ''}, {address.city}, {address.state}{' '}
-                {address.pincode}
-              </span>
-              <span className="pl-6 text-slate-500">{address.phone}</span>
-            </label>
-          </li>
-        ))}
+              >
+                <span className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="address"
+                    checked={isSelected}
+                    onChange={() => onSelect(address.id)}
+                    className="h-4 w-4 accent-primary"
+                  />
+                  <span className="font-medium text-text">{address.label}</span>
+                  {address.isDefault && <Badge>Default</Badge>}
+                </span>
+                <span className="pl-6 text-text-muted">
+                  {address.recipientName}, {address.line1}
+                  {address.line2 ? `, ${address.line2}` : ''}, {address.city}, {address.state}{' '}
+                  {address.pincode}
+                </span>
+                <span className="pl-6 text-text-faint">{address.phone}</span>
+              </label>
+            </li>
+          );
+        })}
       </ul>
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         onClick={() => setIsAdding(true)}
-        className="self-start text-sm font-medium text-brand-700 hover:text-brand-600"
+        className="self-start -ml-2"
       >
         + Add a new address
-      </button>
+      </Button>
     </div>
   );
 };
