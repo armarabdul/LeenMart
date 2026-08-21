@@ -18,6 +18,12 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@leen-mart/vendor-portal", "dev"],
       "port": 5174
+    },
+    {
+      "name": "admin-console",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@leen-mart/admin-console", "dev"],
+      "port": 5175
     }
   ]
 }

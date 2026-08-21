@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+
+    /*
+     * `@leen-mart/ui`'s shared `primary` token (Phase B design system),
+     * bound to this app's own indigo identity — see `vendor-portal`'s own
+     * `styles.css` comment for why RGB channels, not a hex string. Values
+     * match the existing `brand.700`/`brand.600` above exactly.
+     */
+    --ui-primary: 67 56 202; /* brand-700 #4338ca */
+    --ui-primary-hover: 79 70 229; /* brand-600 #4f46e5 */
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

@@ -30,6 +30,82 @@ importers:
         specifier: 5.7.3
         version: 5.7.3
 
+  apps/admin-console:
+    dependencies:
+      '@leen-mart/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@leen-mart/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      '@reduxjs/toolkit':
+        specifier: 2.5.0
+        version: 2.5.0(react-redux@9.2.0(@types/react@18.3.18)(react@18.3.1)(redux@5.0.1))(react@18.3.1)
+      react:
+        specifier: 18.3.1
+        version: 18.3.1
+      react-dom:
+        specifier: 18.3.1
+        version: 18.3.1(react@18.3.1)
+      react-redux:
+        specifier: 9.2.0
+        version: 9.2.0(@types/react@18.3.18)(react@18.3.1)(redux@5.0.1)
+      react-router-dom:
+        specifier: 7.1.1
+        version: 7.1.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      zod:
+        specifier: 3.24.1
+        version: 3.24.1
+    devDependencies:
+      '@leen-mart/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@testing-library/jest-dom':
+        specifier: 6.6.3
+        version: 6.6.3
+      '@testing-library/react':
+        specifier: 16.1.0
+        version: 16.1.0(@testing-library/dom@10.4.1)(@types/react-dom@18.3.5(@types/react@18.3.18))(@types/react@18.3.18)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@types/node':
+        specifier: 22.10.5
+        version: 22.10.5
+      '@types/react':
+        specifier: 18.3.18
+        version: 18.3.18
+      '@types/react-dom':
+        specifier: 18.3.5
+        version: 18.3.5(@types/react@18.3.18)
+      '@vitejs/plugin-react':
+        specifier: 4.3.4
+        version: 4.3.4(vite@6.0.7(@types/node@22.10.5)(jiti@2.6.1)(terser@5.49.2)(tsx@4.19.2)(yaml@2.9.0))
+      '@vitest/expect':
+        specifier: 2.1.8
+        version: 2.1.8
+      autoprefixer:
+        specifier: 10.4.20
+        version: 10.4.20(postcss@8.4.49)
+      eslint:
+        specifier: 9.18.0
+        version: 9.18.0(jiti@2.6.1)
+      jsdom:
+        specifier: 25.0.1
+        version: 25.0.1
+      postcss:
+        specifier: 8.4.49
+        version: 8.4.49
+      tailwindcss:
+        specifier: 3.4.17
+        version: 3.4.17
+      typescript:
+        specifier: 5.7.3
+        version: 5.7.3
+      vite:
+        specifier: 6.0.7
+        version: 6.0.7(@types/node@22.10.5)(jiti@2.6.1)(terser@5.49.2)(tsx@4.19.2)(yaml@2.9.0)
+      vitest:
+        specifier: 2.1.8
+        version: 2.1.8(@types/node@22.10.5)(jsdom@25.0.1)(terser@5.49.2)
+
   apps/api:
     dependencies:
       '@aws-sdk/client-kms':
