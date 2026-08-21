@@ -1,8 +1,11 @@
 import { Link, useParams } from 'react-router-dom';
 import type { OrderItemResponse, OrderResponse, SubOrderResponse } from '@leen-mart/contracts';
+import { Alert, Card, Skeleton, StatusBadge } from '@leen-mart/ui';
 import { apiErrorMessage } from '@/shared/api/base-api';
 import { formatMoney } from '@/shared/lib/format-money';
 import { ORDER_STATUS_LABEL } from '@/shared/lib/order-status-label';
+import { ORDER_STATUS_TONE } from '@/shared/lib/order-status-tone';
+import { PageContainer } from '@/components/PageContainer';
 import { PickupLocationPanel } from '@/features/checkout/components/PickupLocationPanel';
 import { PickupQrPanel } from '@/features/checkout/components/PickupQrPanel';
 import { useGetOrderQuery } from '@/features/checkout/checkout.api';
@@ -11,9 +14,9 @@ import { CancelOrderButton } from '@/features/checkout/components/CancelOrderBut
 import { WriteReviewControl } from '@/features/review/components/WriteReviewControl';
 
 const OrderSkeleton = (): JSX.Element => (
-  <div className="flex flex-col gap-4">
+  <div className="flex flex-col gap-4" aria-busy="true" aria-label="Loading your order">
     {Array.from({ length: 3 }, (_, index) => (
-      <div key={index} className="h-20 w-full animate-pulse rounded-md bg-slate-100" />
+      <Skeleton key={index} shape="rect" className="h-20 w-full" />
     ))}
   </div>
 );
@@ -31,16 +34,16 @@ const OrderItemRow = ({
   readonly item: OrderItemResponse;
   readonly subOrderStatus: string;
 }): JSX.Element => (
-  <li className="flex items-center justify-between py-2 text-sm">
-    <span className="text-slate-700">
+  <li className="flex items-start justify-between gap-3 py-2 text-sm">
+    <span className="min-w-0 text-text-muted">
       {item.productName} — {item.variantName}{' '}
-      <span className="text-slate-400">× {item.quantity}</span>
+      <span className="text-text-faint">× {item.quantity}</span>
       {/* S8-REVIEWS: only once this item's sub-order has reached DELIVERED/COMPLETED. */}
       <WriteReviewControl orderItemId={item.id} subOrderStatus={subOrderStatus} />
     </span>
-    <span className="text-right">
-      <span className="block font-medium text-slate-900">{formatMoney(item.lineAmount)}</span>
-      <span className="block text-xs text-slate-500">
+    <span className="shrink-0 text-right">
+      <span className="block font-medium text-text">{formatMoney(item.lineAmount)}</span>
+      <span className="block text-xs text-text-muted">
         {item.tax.resolved ? `GST: ${formatMoney(item.tax.amount)}` : 'GST to be confirmed'}
       </span>
     </span>
@@ -54,14 +57,15 @@ const SubOrderCard = ({
   readonly subOrder: SubOrderResponse;
   readonly orderId: string;
 }): JSX.Element => (
-  <div className="rounded-lg border border-slate-200 bg-white p-4">
-    <div className="flex items-center justify-between">
-      <h3 className="text-sm font-semibold text-slate-900">Sold by {subOrder.vendorShopName}</h3>
-      <span className="text-xs font-medium text-slate-500">
-        {ORDER_STATUS_LABEL[subOrder.status]}
-      </span>
+  <Card className="flex flex-col gap-1">
+    <div className="flex items-center justify-between gap-3">
+      <h3 className="text-sm font-semibold text-text">Sold by {subOrder.vendorShopName}</h3>
+      <StatusBadge
+        tone={ORDER_STATUS_TONE[subOrder.status]}
+        label={ORDER_STATUS_LABEL[subOrder.status]}
+      />
     </div>
-    <ul className="divide-y divide-slate-100">
+    <ul className="divide-y divide-border">
       {subOrder.items.map((item) => (
         <OrderItemRow key={item.id} item={item} subOrderStatus={subOrder.status} />
       ))}
@@ -80,10 +84,10 @@ const SubOrderCard = ({
     {subOrder.fulfilmentMode === 'PICKUP' && subOrder.status === 'READY_FOR_PICKUP' && (
       <PickupQrPanel orderId={orderId} subOrderId={subOrder.id} />
     )}
-    <div className="flex justify-end border-t border-slate-100 pt-2 text-sm font-medium text-slate-900">
+    <div className="flex justify-end border-t border-border pt-2 text-sm font-medium text-text">
       Subtotal: {formatMoney(subOrder.totalAmount)}
     </div>
-  </div>
+  </Card>
 );
 
 const AddressSummary = ({
@@ -91,16 +95,29 @@ const AddressSummary = ({
 }: {
   readonly address: OrderResponse['address'];
 }): JSX.Element => (
-  <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-700">
-    <p className="font-medium text-slate-900">
-      {address.recipientName} <span className="font-normal text-slate-500">({address.label})</span>
+  <Card className="text-sm text-text-muted">
+    <p className="font-medium text-text">
+      {address.recipientName} <span className="font-normal text-text-muted">({address.label})</span>
     </p>
     <p>
       {address.line1}
       {address.line2 ? `, ${address.line2}` : ''}, {address.city}, {address.state} {address.pincode}
     </p>
     <p>{address.phone}</p>
-  </div>
+  </Card>
+);
+
+const OrderShell = ({ children }: { readonly children: React.ReactNode }): JSX.Element => (
+  <main>
+    <PageContainer>
+      <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 py-6 sm:py-8">
+        <h1 className="font-display text-xl font-bold tracking-tight text-text sm:text-2xl">
+          Order
+        </h1>
+        {children}
+      </div>
+    </PageContainer>
+  </main>
 );
 
 export const OrderConfirmationPage = (): JSX.Element => {
@@ -109,73 +126,75 @@ export const OrderConfirmationPage = (): JSX.Element => {
 
   if (isLoading) {
     return (
-      <main className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">Order</h1>
+      <OrderShell>
         <OrderSkeleton />
-      </main>
+      </OrderShell>
     );
   }
 
   if (isError || !order) {
     return (
-      <main className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">Order</h1>
-        <p
-          role="alert"
-          className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700"
-        >
+      <OrderShell>
+        <Alert tone="danger" title="Order not found">
           {apiErrorMessage(error, 'This order could not be found.')}
-        </p>
-        <Link to="/catalogue" className="text-sm font-medium text-brand-700 hover:text-brand-600">
+        </Alert>
+        <Link to="/catalogue" className="text-sm font-medium text-primary hover:text-primary-hover">
           Continue shopping
         </Link>
-      </main>
+      </OrderShell>
     );
   }
 
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8">
-      <header className="flex flex-col gap-1">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-slate-900">Order placed</h1>
-            <p className="text-sm text-slate-600">
-              Order <span className="font-mono">{order.id}</span>
-            </p>
+    <main>
+      <PageContainer>
+        <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 py-6 sm:py-8">
+          <header className="flex flex-col gap-1">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h1 className="font-display text-xl font-bold tracking-tight text-text sm:text-2xl">
+                  Order placed
+                </h1>
+                <p className="text-sm text-text-muted">
+                  Order <span className="font-mono">{order.id}</span>
+                </p>
+              </div>
+              {(order.status === 'PENDING_PAYMENT' || order.status === 'CONFIRMED') && (
+                <CancelOrderButton orderId={order.id} />
+              )}
+            </div>
+          </header>
+
+          {order.status === 'PENDING_PAYMENT' && <TestPaymentPanel orderId={order.id} />}
+
+          <section className="flex flex-col gap-3">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-text-faint">
+              Delivery address
+            </h2>
+            <AddressSummary address={order.address} />
+          </section>
+
+          <section className="flex flex-col gap-3">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-text-faint">Items</h2>
+            <div className="flex flex-col gap-3">
+              {order.subOrders.map((subOrder) => (
+                <SubOrderCard key={subOrder.id} subOrder={subOrder} orderId={order.id} />
+              ))}
+            </div>
+          </section>
+
+          <div className="flex justify-end border-t border-border pt-4 text-lg font-semibold text-text">
+            Total: {formatMoney(order.totalAmount)}
           </div>
-          {(order.status === 'PENDING_PAYMENT' || order.status === 'CONFIRMED') && (
-            <CancelOrderButton orderId={order.id} />
-          )}
+
+          <Link
+            to="/catalogue"
+            className="text-sm font-medium text-primary hover:text-primary-hover"
+          >
+            Continue shopping
+          </Link>
         </div>
-      </header>
-
-      {order.status === 'PENDING_PAYMENT' && <TestPaymentPanel orderId={order.id} />}
-
-      <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Delivery address
-        </h2>
-        <AddressSummary address={order.address} />
-      </section>
-
-      <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Items ({ORDER_STATUS_LABEL[order.status]})
-        </h2>
-        <div className="flex flex-col gap-3">
-          {order.subOrders.map((subOrder) => (
-            <SubOrderCard key={subOrder.id} subOrder={subOrder} orderId={order.id} />
-          ))}
-        </div>
-      </section>
-
-      <div className="flex justify-end text-lg font-semibold text-slate-900">
-        Total: {formatMoney(order.totalAmount)}
-      </div>
-
-      <Link to="/catalogue" className="text-sm font-medium text-brand-700 hover:text-brand-600">
-        Continue shopping
-      </Link>
+      </PageContainer>
     </main>
   );
 };

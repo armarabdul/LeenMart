@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ConfirmPaymentRequest } from '@leen-mart/contracts';
+import { Alert, Button } from '@leen-mart/ui';
 import { apiErrorMessage, isApiError } from '@/shared/api/base-api';
 import { useConfirmPaymentMutation, useInitiatePaymentMutation } from '../payment.api';
 
@@ -11,6 +12,9 @@ type PaymentTestScenario = ConfirmPaymentRequest['testScenario'];
 
 type PanelState = 'idle' | 'initiating' | 'awaitingScenario' | 'confirming' | 'failed';
 
+/** The two states in which a request is in flight and no control may look actionable. */
+const isBusy = (state: PanelState): boolean => state === 'initiating' || state === 'confirming';
+
 /**
  * S3-3B's payment step, rendered inline on the order page whenever the order
  * is still `PENDING_PAYMENT` — no separate payment route (the confirmation
@@ -20,6 +24,15 @@ type PanelState = 'idle' | 'initiating' | 'awaitingScenario' | 'confirming' | 'f
  * deterministic outcome the mock gateway returns, then waits for the real
  * `POST .../payment/confirm` response — there is no local "confirmed" state
  * to fake.
+ *
+ * **Phase E presentation.** Every in-flight state replaces the controls
+ * rather than merely dimming them, so there is never a moment where a button
+ * looks pressable while a payment request is outstanding, and the progress
+ * text lives in a single `role="status"` region so a screen reader hears the
+ * transition. Success is deliberately not rendered here at all: when the
+ * confirmation succeeds this panel's own tag invalidation refetches the order
+ * as `CONFIRMED` and the parent stops rendering the panel — so a "payment
+ * successful" message can never appear ahead of the server agreeing.
  */
 export const TestPaymentPanel = ({ orderId }: TestPaymentPanelProps): JSX.Element => {
   const [panelState, setPanelState] = useState<PanelState>('idle');
@@ -58,75 +71,64 @@ export const TestPaymentPanel = ({ orderId }: TestPaymentPanelProps): JSX.Elemen
   return (
     <section
       aria-label="Payment"
-      className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4"
+      aria-busy={isBusy(panelState) || undefined}
+      className="flex flex-col gap-3 rounded-card border border-warning/30 bg-warning/10 p-4"
     >
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-amber-800">
-        Payment — TEST / DEMO mode
-      </h2>
-      <p className="text-sm text-amber-800">
+      <h2 className="text-sm font-semibold text-text">Payment — TEST / DEMO mode</h2>
+      <p className="text-sm text-text-muted">
         This is a test environment. No real payment provider is contacted and no real charge is ever
         made — every outcome below is simulated.
       </p>
 
       {panelState === 'idle' && (
-        <button
-          type="button"
-          onClick={() => void handleInitiate()}
-          className="self-start rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600"
-        >
+        <Button type="button" className="self-start" onClick={() => void handleInitiate()}>
           Start test payment
-        </button>
+        </Button>
       )}
 
-      {panelState === 'initiating' && (
-        <p className="text-sm text-amber-800" role="status">
-          Starting payment…
+      {/* One live region for the whole panel: the customer hears "Starting
+          payment…" then "Confirming payment…" from the same place rather than
+          from two regions that compete. */}
+      {isBusy(panelState) && (
+        <p className="flex items-center gap-2 text-sm text-text" role="status">
+          <span
+            aria-hidden="true"
+            className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-text-faint border-t-transparent"
+          />
+          {panelState === 'initiating' ? 'Starting payment…' : 'Confirming payment…'}
         </p>
       )}
 
       {panelState === 'awaitingScenario' && (
         <div className="flex flex-col gap-2">
-          <p className="text-sm text-amber-800">Choose a test outcome to simulate:</p>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => void handleConfirm('SUCCEEDED')}
-              className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500"
-            >
+          <p className="text-sm text-text-muted">Choose a test outcome to simulate:</p>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" onClick={() => void handleConfirm('SUCCEEDED')}>
               Simulate successful payment
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleConfirm('FAILED')}
-              className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500"
-            >
+            </Button>
+            <Button type="button" variant="danger" onClick={() => void handleConfirm('FAILED')}>
               Simulate failed payment
-            </button>
+            </Button>
           </div>
         </div>
       )}
 
-      {panelState === 'confirming' && (
-        <p className="text-sm text-amber-800" role="status">
-          Confirming payment…
-        </p>
-      )}
-
       {panelState === 'failed' && (
-        <div className="flex flex-col gap-2">
-          <p role="alert" className="text-sm text-red-700">
+        <div className="flex flex-col gap-3">
+          <Alert tone="danger" title="Payment not completed">
             {apiErrorMessage(
               confirmError ?? initiateError,
               'The payment could not be completed. Please try again.',
             )}
-          </p>
-          <button
+          </Alert>
+          <Button
             type="button"
+            variant="secondary"
+            className="self-start"
             onClick={() => void handleInitiate()}
-            className="self-start rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600"
           >
             Retry payment
-          </button>
+          </Button>
         </div>
       )}
     </section>

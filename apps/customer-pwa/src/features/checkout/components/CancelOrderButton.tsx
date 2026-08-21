@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Alert, Button } from '@leen-mart/ui';
 import { apiErrorMessage } from '@/shared/api/base-api';
 import { useCancelOrderMutation } from '../checkout.api';
 
@@ -29,18 +30,21 @@ export const CancelOrderButton = ({ orderId }: CancelOrderButtonProps): JSX.Elem
   return (
     <div className="flex flex-col items-end gap-2">
       {hasErrored && (
-        <p role="alert" className="text-sm text-red-700">
+        <Alert tone="danger">
           {apiErrorMessage(error, 'This order could not be cancelled. Please try again.')}
-        </p>
+        </Alert>
       )}
-      <button
+      <Button
         type="button"
+        variant="secondary"
+        size="sm"
         onClick={() => void handleCancel()}
         disabled={isLoading}
-        className="rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+        loading={isLoading}
+        className="min-h-11 border-danger/40 text-danger hover:bg-danger/10"
       >
         {isLoading ? 'Cancelling…' : 'Cancel order'}
-      </button>
+      </Button>
     </div>
   );
 };

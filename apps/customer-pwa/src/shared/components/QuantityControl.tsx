@@ -72,14 +72,11 @@ export const QuantityControl = ({
         onClick={() => onChange(bounds.previousQuantity)}
         disabled={disabled || bounds.outOfStock || bounds.atMin}
         aria-label="Decrease quantity"
-        className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-50"
+        className="flex h-11 w-11 items-center justify-center rounded-md border border-border-strong text-text hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50 sm:h-9 sm:w-9"
       >
         −
       </button>
-      <span
-        className="min-w-[2ch] text-center text-sm font-medium text-slate-900"
-        aria-live="polite"
-      >
+      <span className="min-w-[2ch] text-center text-sm font-medium text-text" aria-live="polite">
         {bounds.outOfStock ? 0 : quantity}
       </span>
       <button
@@ -87,12 +84,12 @@ export const QuantityControl = ({
         onClick={() => onChange(bounds.nextQuantity)}
         disabled={disabled || bounds.outOfStock || bounds.atMax}
         aria-label="Increase quantity"
-        className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-50"
+        className="flex h-11 w-11 items-center justify-center rounded-md border border-border-strong text-text hover:bg-surface-alt focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50 sm:h-9 sm:w-9"
       >
         +
       </button>
       {showStepHint && (
-        <span className="text-xs text-slate-500">Sold in steps of {quantityStep}</span>
+        <span className="text-xs text-text-muted">Sold in steps of {quantityStep}</span>
       )}
     </div>
   );

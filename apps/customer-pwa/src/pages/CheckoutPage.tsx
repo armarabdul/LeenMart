@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { CartItemResponse } from '@leen-mart/contracts';
+import { Alert, Button, Card, EmptyState, Skeleton } from '@leen-mart/ui';
 import { useAppSelector } from '@/app/hooks';
 import { apiErrorMessage, isApiError } from '@/shared/api/base-api';
 import { selectKnownVariants, type KnownVariantSummary } from '@/shared/state/known-variants.slice';
 import { formatMoney } from '@/shared/lib/format-money';
+import { PageContainer } from '@/components/PageContainer';
 import { useGetCartQuery } from '@/features/cart/cart.api';
 import { AddressSelector } from '@/features/address/components/AddressSelector';
 import { FulfilmentModeSelector } from '@/features/checkout/components/FulfilmentModeSelector';
@@ -61,19 +63,29 @@ const PlacementError = ({ error }: { readonly error: unknown }): JSX.Element => 
         : apiErrorMessage(error, 'Your order could not be placed. Please try again.');
 
   return (
-    <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+    <Alert tone="danger" title="Your order couldn’t be placed">
       {message}
-    </p>
+    </Alert>
   );
 };
 
-/** S3-3A's honest disclosure: there is no real gateway behind this checkout. */
+/**
+ * S3-3A's honest disclosure: there is no real gateway behind this checkout.
+ *
+ * Deliberately *not* an `Alert`: this is a permanent property of the
+ * environment, not an event, and `Alert`'s `warning` tone carries
+ * `role="alert"` — an assertive live region that would interrupt a screen
+ * reader on every render and compete with the real placement error below it.
+ */
 const TestPaymentNotice = (): JSX.Element => (
-  <section className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
-    <h2 className="text-sm font-semibold uppercase tracking-wide text-amber-800">
+  <section
+    aria-labelledby="checkout-payment-mode"
+    className="rounded-md border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-text"
+  >
+    <h2 id="checkout-payment-mode" className="font-semibold">
       Payment — TEST / DEMO mode
     </h2>
-    <p className="text-sm text-amber-800">
+    <p className="mt-0.5 text-text-muted">
       This is a test environment — no real payment provider is contacted. After you place your order
       you&apos;ll complete a simulated test payment on the next screen.
     </p>
@@ -81,11 +93,31 @@ const TestPaymentNotice = (): JSX.Element => (
 );
 
 const CheckoutSkeleton = (): JSX.Element => (
-  <div className="flex flex-col gap-4">
+  <div className="flex flex-col gap-4" aria-busy="true" aria-label="Loading checkout">
     {Array.from({ length: 3 }, (_, index) => (
-      <div key={index} className="h-16 w-full animate-pulse rounded-md bg-slate-100" />
+      <Skeleton key={index} shape="rect" className="h-20 w-full" />
     ))}
   </div>
+);
+
+/**
+ * A titled step of the single-page checkout.
+ *
+ * Leen Mart's checkout genuinely is one page — there is no server-side wizard
+ * and no partial-order state to resume — so this gives each part its own card
+ * and heading rather than dressing the flow up as a multi-step form it is not.
+ */
+const CheckoutSection = ({
+  title,
+  children,
+}: {
+  readonly title: string;
+  readonly children: React.ReactNode;
+}): JSX.Element => (
+  <Card className="flex flex-col gap-3 p-4">
+    <h2 className="text-sm font-semibold text-text">{title}</h2>
+    {children}
+  </Card>
 );
 
 /** `null` when any line's price could not be resolved — never a partial total (matches `CartPage`'s own `useCartTotal`). */
@@ -111,12 +143,12 @@ const CheckoutItemRow = ({
   readonly item: CartItemResponse;
   readonly known: KnownVariantSummary | undefined;
 }): JSX.Element => (
-  <li className="flex items-center justify-between text-sm">
-    <span className="text-slate-700">
+  <li className="flex items-start justify-between gap-3 text-sm">
+    <span className="min-w-0 text-text-muted">
       {known ? `${known.productName} — ${known.variantName}` : 'Item unavailable'}{' '}
-      <span className="text-slate-400">× {item.quantity}</span>
+      <span className="text-text-faint">× {item.quantity}</span>
     </span>
-    <span className="font-medium text-slate-900">
+    <span className="shrink-0 font-medium text-text">
       {known
         ? formatMoney({
             amount: String(Number(known.price.amount) * item.quantity),
@@ -127,35 +159,110 @@ const CheckoutItemRow = ({
   </li>
 );
 
-const OrderReviewSection = ({
-  items,
-  knownVariants,
+/**
+ * What the customer is paying, and what is still to be determined.
+ *
+ * The subtotal is the only figure this application can state before placement.
+ * Tax is resolved server-side per line and can legitimately come back
+ * unresolved (`orderItemTaxSchema`), and there is no delivery charge or
+ * discount anywhere in the domain — so this shows one line plus an honest
+ * note, never a fabricated breakdown.
+ */
+const CheckoutSummary = ({
   subtotal,
+  itemCount,
+  canPlace,
+  isPlacing,
+  onPlaceOrder,
 }: {
-  readonly items: readonly CartItemResponse[];
-  readonly knownVariants: Readonly<Record<string, KnownVariantSummary>>;
   readonly subtotal: string | null;
+  readonly itemCount: number;
+  readonly canPlace: boolean;
+  readonly isPlacing: boolean;
+  readonly onPlaceOrder: () => void;
 }): JSX.Element => (
-  <section className="flex flex-col gap-3">
-    <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Order review</h2>
-    <ul className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-4">
-      {items.map((item) => (
-        <CheckoutItemRow key={item.id} item={item} known={knownVariants[item.variantId]} />
-      ))}
-    </ul>
+  <Card className="flex flex-col gap-4 p-4">
+    <h2 className="text-sm font-semibold text-text">Order summary</h2>
 
-    {subtotal !== null ? (
-      <p className="text-right text-lg font-semibold text-slate-900">Subtotal: {subtotal}</p>
-    ) : (
-      <p className="text-right text-sm text-slate-500">
-        Subtotal unavailable — some items&apos; pricing could not be resolved.
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="text-sm text-text-muted">
+        Subtotal ({itemCount} {itemCount === 1 ? 'item' : 'items'})
+      </span>
+      {subtotal !== null ? (
+        <span className="text-lg font-semibold text-text">{subtotal}</span>
+      ) : (
+        <span className="text-sm text-text-muted">&mdash;</span>
+      )}
+    </div>
+
+    {subtotal === null && (
+      <p className="text-xs text-text-muted">
+        Subtotal unavailable &mdash; some items&apos; pricing could not be resolved.
       </p>
     )}
-    <p className="text-xs text-slate-500">
+
+    <p className="text-xs text-text-muted">
       Applicable taxes are calculated when your order is placed and will appear on your order
       confirmation — GST to be confirmed.
     </p>
-  </section>
+
+    <Button
+      type="button"
+      size="lg"
+      onClick={onPlaceOrder}
+      disabled={!canPlace || isPlacing}
+      loading={isPlacing}
+      className="w-full"
+    >
+      Place order (test payment)
+    </Button>
+
+    {!canPlace && (
+      <p className="text-center text-xs text-text-muted">Choose a delivery address to continue.</p>
+    )}
+  </Card>
+);
+
+/** Nothing to check out — routed here directly, or the cart emptied in another tab. */
+const EmptyCartState = (): JSX.Element => (
+  <main>
+    <PageContainer>
+      <div className="py-12 sm:py-16">
+        <EmptyState
+          title="Your cart is empty"
+          description="Add something to your cart before checking out."
+          action={
+            <Link
+              to="/catalogue"
+              className="inline-flex h-11 items-center rounded-md bg-primary px-4 text-sm font-medium text-on-primary hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+            >
+              Go to catalogue
+            </Link>
+          }
+        />
+      </div>
+    </PageContainer>
+  </main>
+);
+
+/** Decisions on the left, money and the commit action on the right from `lg` up. */
+const CheckoutLayout = ({ children }: { readonly children: React.ReactNode }): JSX.Element => (
+  <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
+    {children}
+  </div>
+);
+
+const CheckoutShell = ({ children }: { readonly children: React.ReactNode }): JSX.Element => (
+  <main>
+    <PageContainer>
+      <div className="flex flex-col gap-6 py-6 sm:py-8">
+        <h1 className="font-display text-xl font-bold tracking-tight text-text sm:text-2xl">
+          Checkout
+        </h1>
+        {children}
+      </div>
+    </PageContainer>
+  </main>
 );
 
 /**
@@ -163,6 +270,12 @@ const OrderReviewSection = ({
  * all live here rather than behind a wizard, matching the honest scope of
  * S3-3A: there is no real payment gateway to justify a multi-screen flow
  * around one.
+ *
+ * **Phase E layout.** Two zones from `lg` up: the decisions on the left, the
+ * money and the final action on the right where they stay in view while the
+ * customer works down the page. Below `lg` the same order stacks, so the
+ * summary and the commit button are the last things read — which is the right
+ * order for a screen whose last action spends money.
  */
 export const CheckoutPage = (): JSX.Element => {
   const {
@@ -228,79 +341,72 @@ export const CheckoutPage = (): JSX.Element => {
 
   if (isCartLoading) {
     return (
-      <main className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">Checkout</h1>
+      <CheckoutShell>
         <CheckoutSkeleton />
-      </main>
+      </CheckoutShell>
     );
   }
 
   if (isCartError || !cart) {
     return (
-      <main className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">Checkout</h1>
-        <p
-          role="alert"
-          className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700"
-        >
+      <CheckoutShell>
+        <Alert tone="danger" title="Your cart couldn’t be loaded">
           {apiErrorMessage(cartError, 'Your cart could not be loaded. Please try again.')}
-        </p>
-      </main>
+        </Alert>
+      </CheckoutShell>
     );
   }
 
   if (items.length === 0) {
-    return (
-      <main className="mx-auto flex w-full max-w-2xl flex-col items-center gap-4 px-4 py-16 text-center">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">Your cart is empty</h1>
-        <p className="text-sm text-slate-600">Add something to your cart before checking out.</p>
-        <Link
-          to="/catalogue"
-          className="rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600"
-        >
-          Go to catalogue
-        </Link>
-      </main>
-    );
+    return <EmptyCartState />;
   }
 
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-4 py-8">
-      <h1 className="text-xl font-bold tracking-tight text-slate-900">Checkout</h1>
+    <CheckoutShell>
+      <CheckoutLayout>
+        <div className="flex min-w-0 flex-col gap-4">
+          <CheckoutSection title="Delivery address">
+            <AddressSelector
+              selectedAddressId={selectedAddressId}
+              onSelect={setSelectedAddressId}
+            />
+          </CheckoutSection>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Delivery address
-        </h2>
-        <AddressSelector selectedAddressId={selectedAddressId} onSelect={setSelectedAddressId} />
-      </section>
+          <FulfilmentModeSelector
+            vendors={vendors}
+            pickupVendorIds={pickupVendorIds}
+            onToggle={togglePickup}
+          />
 
-      <FulfilmentModeSelector
-        vendors={vendors}
-        pickupVendorIds={pickupVendorIds}
-        onToggle={togglePickup}
-      />
+          <SlotSelector
+            availability={slotAvailability}
+            selections={slotSelections}
+            onSelect={selectSlot}
+          />
 
-      <SlotSelector
-        availability={slotAvailability}
-        selections={slotSelections}
-        onSelect={selectSlot}
-      />
+          <CheckoutSection title="Order review">
+            <ul className="flex flex-col gap-2">
+              {items.map((item) => (
+                <CheckoutItemRow key={item.id} item={item} known={knownVariants[item.variantId]} />
+              ))}
+            </ul>
+          </CheckoutSection>
 
-      <OrderReviewSection items={items} knownVariants={knownVariants} subtotal={subtotal} />
+          <TestPaymentNotice />
 
-      <TestPaymentNotice />
+          {placeError !== undefined && <PlacementError error={placeError} />}
+        </div>
 
-      {placeError !== undefined && <PlacementError error={placeError} />}
-
-      <button
-        type="button"
-        onClick={() => void handlePlaceOrder()}
-        disabled={!selectedAddressId || isPlacing}
-        className="rounded-md bg-brand-700 px-4 py-3 text-sm font-medium text-white hover:bg-brand-600 disabled:opacity-50"
-      >
-        {isPlacing ? 'Placing order…' : 'Place order (test payment)'}
-      </button>
-    </main>
+        <div className="lg:sticky lg:top-24">
+          <CheckoutSummary
+            subtotal={subtotal}
+            itemCount={items.length}
+            canPlace={selectedAddressId !== null}
+            isPlacing={isPlacing}
+            onPlaceOrder={() => void handlePlaceOrder()}
+          />
+        </div>
+      </CheckoutLayout>
+    </CheckoutShell>
   );
 };

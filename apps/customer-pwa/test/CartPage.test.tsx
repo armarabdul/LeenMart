@@ -138,7 +138,9 @@ describe('CartPage', () => {
     fireEvent.click(screen.getByLabelText('Increase quantity'));
     expect(updateCartItem).toHaveBeenCalledWith({ itemId: 'item-1', quantity: 4 });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    // Phase E names the control after what it removes; an unresolved line
+    // has no product name to use, so it falls back to 'Remove item'.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove item' }));
     expect(removeCartItem).toHaveBeenCalledWith('item-1');
   });
 
@@ -152,8 +154,11 @@ describe('CartPage', () => {
   it('shows a total only once every item has resolved', () => {
     renderCartPage({ id: 'cart-1', items: [cartItem({ quantity: 2 })] }, { knownVariant: true });
 
-    // 9900 minor units * quantity 2 = 19800 -> ₹198.00
-    expect(screen.getByText(/Total: ₹198\.00/)).toBeInTheDocument();
+    // 9900 minor units * quantity 2 = 19800 -> ₹198.00. Phase E moves this
+    // into an order-summary card, so the label and the amount are separate
+    // elements rather than one 'Total: …' string.
+    expect(screen.getByText('Subtotal (1 item)')).toBeInTheDocument();
+    expect(screen.getAllByText('₹198.00').length).toBeGreaterThan(0);
   });
 
   it('withholds the total rather than showing a partial/misleading amount when any item is unresolved', () => {

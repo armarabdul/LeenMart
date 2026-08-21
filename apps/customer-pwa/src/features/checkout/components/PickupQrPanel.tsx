@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { Alert } from '@leen-mart/ui';
 import { apiErrorMessage } from '@/shared/api/base-api';
 import { useGetPickupTokenQuery } from '../checkout.api';
 
@@ -54,18 +55,18 @@ export const PickupQrPanel = ({ orderId, subOrderId }: PickupQrPanelProps): JSX.
   }, [expiresAt, fulfilledTimeStamp, refetch]);
 
   return (
-    <div className="mt-3 flex flex-col gap-2 rounded-md border border-brand-200 bg-brand-50 p-3">
-      <p className="text-sm font-medium text-brand-900">Ready for pickup</p>
-      <p className="text-sm text-brand-800">
+    <div className="mt-3 flex flex-col gap-2 rounded-card border border-primary/30 bg-primary-soft p-3">
+      <p className="text-sm font-medium text-text">Ready for pickup</p>
+      <p className="text-sm text-text-muted">
         Show this code at the shop. It refreshes automatically and can be used once.
       </p>
 
-      {isLoading && <p className="text-sm text-slate-600">Preparing your pickup code…</p>}
+      {isLoading && <p className="text-sm text-text-muted">Preparing your pickup code…</p>}
 
       {isError && (
-        <p role="alert" className="text-sm text-red-700">
+        <Alert tone="danger">
           {apiErrorMessage(error, 'Your pickup code could not be loaded. Please try again.')}
-        </p>
+        </Alert>
       )}
 
       {/* RTK Query keeps the last successful `data` alongside an error, so the
@@ -77,16 +78,19 @@ export const PickupQrPanel = ({ orderId, subOrderId }: PickupQrPanelProps): JSX.
         <>
           <output
             aria-label="Pickup code"
-            className="block break-all rounded border border-brand-300 bg-white p-2 font-mono text-xs text-slate-800"
+            className="block break-all rounded border border-border-strong bg-surface p-2 font-mono text-xs text-text"
           >
             {data.token}
           </output>
           {/* S4-QR-FALLBACK: the scanner-broken fallback, rotated alongside
               the QR code above — read this number aloud if the vendor's
               scanner isn't working. */}
-          <p className="text-xs text-brand-800">
+          <p className="text-xs text-text-muted">
             Scanner not working? Give the vendor this code instead:{' '}
-            <output aria-label="Manual pickup code" className="font-mono text-sm font-semibold">
+            <output
+              aria-label="Manual pickup code"
+              className="font-mono text-sm font-semibold text-text"
+            >
               {data.manualCode}
             </output>
           </p>

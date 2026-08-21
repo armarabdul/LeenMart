@@ -22,9 +22,9 @@ export const PickupLocationPanel = ({
   shopName,
   location,
 }: PickupLocationPanelProps): JSX.Element => (
-  <div className="mt-3 flex flex-col gap-1 rounded-md border border-slate-200 bg-slate-50 p-3">
-    <p className="text-sm font-medium text-slate-900">Collect from</p>
-    <address className="text-sm not-italic text-slate-700">
+  <div className="mt-3 flex flex-col gap-1 rounded-card border border-border bg-surface-alt p-3">
+    <p className="text-sm font-medium text-text">Collect from</p>
+    <address className="text-sm not-italic text-text-muted">
       <span className="block font-medium">{shopName}</span>
       <span className="block">
         {location.line1}

@@ -191,7 +191,10 @@ describe('CheckoutPage', () => {
     renderCheckout({ id: 'cart-1', items: [cartItem()] }, { knownVariant: true });
 
     expect(screen.getByText(/Alphonso Mango — 500 g pack/)).toBeInTheDocument();
-    expect(screen.getByText(/Subtotal: ₹198\.00/)).toBeInTheDocument();
+    // Phase E moves the subtotal into an order-summary card, so the label and
+    // the amount are separate elements rather than one 'Subtotal: …' string.
+    expect(screen.getByText('Subtotal (1 item)')).toBeInTheDocument();
+    expect(screen.getAllByText('₹198.00').length).toBeGreaterThan(0);
   });
 
   it('shows an honest fallback for an unresolved item, never a fabricated name', () => {
