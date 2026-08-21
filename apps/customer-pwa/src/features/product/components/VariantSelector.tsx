@@ -20,7 +20,7 @@ export const VariantSelector = ({
 
   return (
     <fieldset className="flex flex-col gap-2">
-      <legend className="text-sm font-medium text-slate-700">Choose an option</legend>
+      <legend className="text-sm font-medium text-text">Choose an option</legend>
       <div className="flex flex-wrap gap-2">
         {variants.map((variant) => {
           const isSelected = variant.id === selectedVariantId;
@@ -32,14 +32,14 @@ export const VariantSelector = ({
               onClick={() => onSelect(variant.id)}
               disabled={isUnavailable}
               aria-pressed={isSelected}
-              className={`flex flex-col items-start rounded-md border px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${
+              className={`flex min-h-11 flex-col items-start justify-center rounded-md border px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${
                 isSelected
-                  ? 'border-brand-600 bg-brand-50 text-brand-700'
-                  : 'border-slate-300 text-slate-700 hover:bg-slate-50'
+                  ? 'border-primary bg-primary-soft text-primary'
+                  : 'border-border-strong text-text hover:bg-surface-alt'
               }`}
             >
               <span className="font-medium">{variant.name}</span>
-              <span className="text-xs text-slate-500">
+              <span className="text-xs text-text-muted">
                 {formatMoney(variant.price)}
                 {isUnavailable ? ' · Out of stock' : ''}
               </span>

@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { createBrowserRouter, RouterProvider } from 'react-router-dom';
+import { Skeleton } from '@leen-mart/ui';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { AppLayout } from '@/components/AppLayout';
 import { RequireAuth } from '@/features/auth/RequireAuth';
@@ -52,9 +53,19 @@ const AccountPage = lazy(() =>
   import('@/pages/AccountPage').then((module) => ({ default: module.AccountPage })),
 );
 
+/**
+ * The suspense fallback shown while a lazy route chunk loads (Phase G).
+ *
+ * Deliberately generic and small — this appears between every route
+ * transition, for every page, so it can't mimic any one page's layout
+ * without being wrong for all the others. `aria-label` carries the "Loading"
+ * announcement; there is no visible text to avoid a layout-shifting flash for
+ * the common case where the chunk is already cached and this never gets a
+ * chance to render for more than a frame.
+ */
 const RouteFallback = (): JSX.Element => (
-  <div className="flex min-h-screen items-center justify-center">
-    <p className="text-sm text-slate-500">Loading…</p>
+  <div className="flex min-h-screen items-center justify-center" role="status" aria-label="Loading">
+    <Skeleton shape="circle" className="h-8 w-8" />
   </div>
 );
 

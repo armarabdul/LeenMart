@@ -1,4 +1,5 @@
 import { useLocation, useNavigate } from 'react-router-dom';
+import { Alert, Button } from '@leen-mart/ui';
 import { useAppSelector } from '@/app/hooks';
 import { selectIsAuthenticated } from '@/shared/api/session.slice';
 import { apiErrorMessage } from '@/shared/api/base-api';
@@ -44,19 +45,17 @@ export const AddToCartButton = ({
 
   return (
     <div className="flex flex-col gap-2">
-      <button
+      <Button
         type="button"
+        size="lg"
         onClick={handleClick}
-        disabled={disabled || isLoading}
-        className="rounded-md bg-brand-700 px-4 py-2 text-sm font-medium text-white hover:bg-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 disabled:opacity-50"
+        disabled={disabled}
+        loading={isLoading}
+        className="w-full"
       >
         {isLoading ? 'Adding…' : justAdded ? 'Added to cart' : 'Add to cart'}
-      </button>
-      {error !== undefined && (
-        <p role="alert" className="text-sm text-red-700">
-          {apiErrorMessage(error)}
-        </p>
-      )}
+      </Button>
+      {error !== undefined && <Alert tone="danger">{apiErrorMessage(error)}</Alert>}
     </div>
   );
 };

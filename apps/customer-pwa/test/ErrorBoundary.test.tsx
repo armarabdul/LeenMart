@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 const Explode = (): never => {
   throw new Error('render blew up');
+};
+
+/** Throws until `shouldThrow` is flipped from outside — lets a test drive recovery. */
+let shouldThrow = true;
+const ToggleBomb = (): JSX.Element => {
+  if (shouldThrow) throw new Error('render blew up');
+  return <p>recovered content</p>;
 };
 
 describe('ErrorBoundary', () => {
@@ -40,6 +47,75 @@ describe('ErrorBoundary', () => {
     );
 
     expect(screen.getByText('custom fallback')).toBeInTheDocument();
+    consoleError.mockRestore();
+  });
+
+  it('surfaces the error message as an accessible alert', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    render(
+      <ErrorBoundary>
+        <Explode />
+      </ErrorBoundary>,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'The page could not be displayed. Try again, and if the problem persists please contact support.',
+    );
+    consoleError.mockRestore();
+  });
+
+  it('recovers and renders the children again once "Try again" is clicked', () => {
+    shouldThrow = true;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    render(
+      <ErrorBoundary>
+        <ToggleBomb />
+      </ErrorBoundary>,
+    );
+
+    expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+
+    shouldThrow = false;
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }));
+
+    expect(screen.getByText('recovered content')).toBeInTheDocument();
+    expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument();
+    consoleError.mockRestore();
+  });
+
+  it('shows the internal error detail in development', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const originalDev = import.meta.env.DEV;
+    import.meta.env.DEV = true;
+
+    render(
+      <ErrorBoundary>
+        <Explode />
+      </ErrorBoundary>,
+    );
+
+    expect(screen.getByText(/render blew up/)).toBeInTheDocument();
+
+    import.meta.env.DEV = originalDev;
+    consoleError.mockRestore();
+  });
+
+  it('never exposes internal error detail outside development', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const originalDev = import.meta.env.DEV;
+    import.meta.env.DEV = false;
+
+    render(
+      <ErrorBoundary>
+        <Explode />
+      </ErrorBoundary>,
+    );
+
+    expect(screen.queryByText(/render blew up/)).not.toBeInTheDocument();
+
+    import.meta.env.DEV = originalDev;
     consoleError.mockRestore();
   });
 });
