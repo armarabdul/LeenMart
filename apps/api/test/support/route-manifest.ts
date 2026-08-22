@@ -762,6 +762,22 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     why: 'Admin-only vendor activation across every vendor (S3-3A, D-S3-04) — same permission/access-level gate as the KYC decision route above.',
   },
 
+  // --- admin vendor suspend/reinstate: /api/v1/admin/vendors (Phase L.4) ---
+  {
+    method: 'POST',
+    prefix: '/api/v1/admin/vendors',
+    path: '/:vendorId/suspend',
+    classification: 'ADMIN',
+    why: 'Admin-only vendor suspension across every vendor (SDD 15.1/16.1); SUSPEND_VENDOR_OR_USER is FULL only for RISK_ANALYST/SUPER_ADMIN — role matrix asserted directly in admin-vendor-suspension.test.ts.',
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/admin/vendors',
+    path: '/:vendorId/reinstate',
+    classification: 'ADMIN',
+    why: 'Admin-only vendor reinstatement across every vendor (SDD 15.1); same permission/access-level gate as the suspend route above.',
+  },
+
   // --- admin taxonomy: /api/v1/admin/categories (S2-2a) ---
   //
   // Every route here is ADMIN rather than TENANT_OWNED, and for a stronger

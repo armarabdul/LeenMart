@@ -3,12 +3,14 @@
  * `entityType`), following the same dotted, bounded-context-scoped
  * convention `identity/domain/audit-actions.ts` established.
  *
- * Five actions this chunk actually writes are listed: the four KYC-6
+ * Only actions this chunk actually writes are listed: the four KYC-6
  * lifecycle events (submission, review claim, approval, rejection) plus
  * KYC-7's document access — SDD 12.1/12.3 name "every KYC document access"
- * as its own mandatory audit write, distinct from a lifecycle transition.
- * Upload intents and queue/detail reads remain unlisted: an upload intent
- * commits nothing yet, and a metadata read is an application-log event
+ * as its own mandatory audit write, distinct from a lifecycle transition —
+ * plus S3-3A's activation and Phase L.4's suspension/reinstatement, the
+ * `VendorProfile` aggregate's own lifecycle writes. Upload intents and
+ * queue/detail reads remain unlisted: an upload intent commits nothing yet,
+ * and a metadata read is an application-log event
  * (`GetKycReviewSubmissionUseCase`'s own comment says so), not one of these —
  * an unused constant here would be a guess about a feature that does not
  * exist yet.
@@ -30,6 +32,13 @@ export const VENDOR_AUDIT_ACTIONS = {
    * needed to ever have a caller.
    */
   ACTIVATED: 'vendor.activated',
+  /**
+   * An administrator suspended a vendor (SDD §15.1/§16.1, Phase L.4). Always
+   * carries a `reason` — SDD §16.1 requires one for every suspension.
+   */
+  SUSPENDED: 'vendor.suspended',
+  /** An administrator reinstated a suspended vendor (SDD §15.1, Phase L.4). */
+  REINSTATED: 'vendor.reinstated',
 } as const;
 
 export type VendorAuditAction = (typeof VENDOR_AUDIT_ACTIONS)[keyof typeof VENDOR_AUDIT_ACTIONS];

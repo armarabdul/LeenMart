@@ -79,5 +79,10 @@ export const KycActionPanel = ({ kycId, data }: KycActionPanelProps): JSX.Elemen
     );
   }
 
+  // ACTIVE/SUSPENDED — suspend/reinstate (Phase L.4) — are composed directly
+  // in `KycDetailPage`, not here: a feature may not import another feature's
+  // components (SDD 25.3), and vendor lifecycle status is a page-level
+  // concern this panel already stops short of for every status but a KYC
+  // decision.
   return null;
 };

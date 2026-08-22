@@ -3,10 +3,10 @@ import {
   toVendorId,
   type Principal,
   type SessionDenylist,
-  type SessionId,
   type SessionRepository,
   type UserRepository,
 } from '../../../identity/index.js';
+import { revokeEverySession } from '../../../../shared/application/services/revoke-every-session.js';
 import { VendorProfile } from '../../domain/entities/vendor-profile.entity.js';
 import {
   VendorAlreadyRegisteredError,
@@ -58,40 +58,11 @@ export interface RegisterVendorDeps {
  * moment assert CUSTOMER and would keep doing so until they expired; the
  * session denylist (SDD 7.2) is what makes the change take effect now rather
  * than up to one access-token lifetime from now. The caller must
- * re-authenticate, and their next login mints VENDOR_OWNER.
+ * re-authenticate, and their next login mints VENDOR_OWNER. Revocation itself
+ * is `revokeEverySession` (`shared/application/services/`), shared with
+ * vendor suspension (L.4) — the second concrete caller that made extracting
+ * it worthwhile.
  */
-/**
- * Kills every session the user holds and denies each one's access token.
- *
- * Reuses SDD 7.2's existing two-step revocation exactly as
- * `RefreshSessionUseCase` does: revoking the refresh rows bounds future
- * rotations, and denying each `sid` is what stops the access tokens already
- * in flight. Denies *all* session ids, not just the ones this call killed —
- * a session revoked at logout minutes ago can still hold a signature-valid
- * token carrying the old role, which is precisely the credential that must
- * stop working.
- */
-const revokeEverySession = async (
-  deps: RegisterVendorDeps,
-  userId: Principal['userId'],
-  now: Date,
-): Promise<void> => {
-  const { sessionRepository, sessionDenylist, accessTokenTtlSeconds, logger } = deps;
-
-  const revoked = await sessionRepository.revokeAllForUser(userId, now);
-  const allSessionIds = await sessionRepository.findSessionIdsByUserId(userId);
-  await Promise.all(
-    allSessionIds.map((sessionId: SessionId) =>
-      sessionDenylist.deny(sessionId, accessTokenTtlSeconds),
-    ),
-  );
-
-  logger.info(
-    { userId, revokedCount: revoked.length, deniedCount: allSessionIds.length },
-    'Vendor promotion revoked every session for the account (SDD 7.2)',
-  );
-};
-
 export class RegisterVendorUseCase {
   constructor(private readonly deps: RegisterVendorDeps) {}
 

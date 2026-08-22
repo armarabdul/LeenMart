@@ -195,4 +195,30 @@ describe('KycDetailPage', () => {
     expect(await screen.findByText('PAN card')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /view document/i })).not.toBeInTheDocument();
   });
+
+  describe('vendor status action (Phase L.4)', () => {
+    it('composes the suspend action for an ACTIVE vendor, at the page level', () => {
+      stub(detail({ vendorStatus: 'ACTIVE' }));
+      renderDetail();
+
+      expect(screen.getByRole('button', { name: 'Suspend vendor' })).toBeInTheDocument();
+      // KycActionPanel itself renders nothing for ACTIVE — this is the page's own composition, not a KYC decision.
+      expect(screen.queryByText('Decision')).not.toBeInTheDocument();
+    });
+
+    it('composes the reinstate action for a SUSPENDED vendor, at the page level', () => {
+      stub(detail({ vendorStatus: 'SUSPENDED' }));
+      renderDetail();
+
+      expect(screen.getByRole('button', { name: 'Reinstate vendor' })).toBeInTheDocument();
+    });
+
+    it('offers neither action for a vendor still mid-KYC', () => {
+      stub(detail({ vendorStatus: 'KYC_UNDER_REVIEW' }));
+      renderDetail();
+
+      expect(screen.queryByRole('button', { name: 'Suspend vendor' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Reinstate vendor' })).not.toBeInTheDocument();
+    });
+  });
 });

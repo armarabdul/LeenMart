@@ -25,7 +25,7 @@ import {
   type AccessTokenService,
   type SessionDenylist,
 } from './modules/identity/index.js';
-import { createVendorModule } from './modules/vendor/index.js';
+import { createVendorModule, type VendorModule } from './modules/vendor/index.js';
 
 /**
  * Response headers a cross-origin browser client is allowed to read.
@@ -100,6 +100,17 @@ const mountAuditModule = (
 };
 
 /**
+ * Suspend/reinstate (SDD 15.1/16.1, Phase L.4), a separate prefix from
+ * `/admin/kyc`: these routes act on a vendor's ongoing standing, not on any
+ * one KYC submission. Split out of `mountBusinessModules` purely to keep
+ * that function under this file's max-lines-per-function budget, the same
+ * reason `mountAuditModule` and `mountOrderStreamRouter` were.
+ */
+const mountAdminVendorRouter = (app: Express, vendorModule: VendorModule): void => {
+  app.use('/api/v1/admin/vendors', vendorModule.adminVendorRouter);
+};
+
+/**
  * Mounts every module beyond `identity` itself. Split out of `createApp`
  * purely to stay under this file's max-lines-per-function budget — each of
  * these modules shares identity's token verifier *and* its session denylist
@@ -133,10 +144,7 @@ const mountBusinessModules = (
   // router: it reads across tenants on the elevated credential and never
   // establishes a tenant context.
   app.use('/api/v1/admin/kyc', vendorModule.adminKycRouter);
-  // The admin review surface (SDD 9.4), mounted apart from the vendor-facing
-  // router: it establishes no tenant context and reads on the elevated
-  // credential.
-  app.use('/api/v1/admin/kyc', vendorModule.adminKycRouter);
+  mountAdminVendorRouter(app, vendorModule);
 
   const customerModule = createCustomerModule(params);
   app.use('/api/v1/me', customerModule.router);

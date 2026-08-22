@@ -299,6 +299,40 @@ export const activateVendorResponseSchema = z.object({
   status: vendorStatusSchema,
 });
 
+/**
+ * POST /admin/vendors/:vendorId/suspend (SDD §15.1/§16.1, Phase L.4).
+ * `reason` is required — §16.1: "no automatic suspension... every suspension
+ * requires a human decision... recorded with a reason" — and bounded the same
+ * way `decideVendorKycRequestSchema`'s rejection `note` is (free text, up to
+ * 1000 characters). It is never persisted on `VendorProfile`, which has no
+ * column for one; it travels straight to the audit record.
+ */
+export const suspendVendorRequestSchema = z
+  .object({
+    reason: z.string().trim().min(1).max(1000),
+  })
+  .strict();
+
+/**
+ * POST /admin/vendors/:vendorId/reinstate (SDD §15.1, Phase L.4). `reason` is
+ * optional — §16.1 requires one for suspending a vendor, not for reinstating
+ * one — but bounded identically to `suspendVendorRequestSchema`'s when
+ * supplied.
+ */
+export const reinstateVendorRequestSchema = z
+  .object({
+    reason: z.string().trim().min(1).max(1000).optional(),
+  })
+  .strict();
+
+/**
+ * Both suspend and reinstate report only the vendor's identity and resulting
+ * lifecycle state — the same minimal shape `activateVendorResponseSchema`
+ * already uses for the same class of admin lifecycle transition, reused
+ * rather than duplicated.
+ */
+export const vendorStatusChangeResponseSchema = activateVendorResponseSchema;
+
 export type VendorStatusDto = z.infer<typeof vendorStatusSchema>;
 export type RegisterVendorRequest = z.infer<typeof registerVendorRequestSchema>;
 export type RegisterVendorResponse = z.infer<typeof registerVendorResponseSchema>;
@@ -327,3 +361,6 @@ export type SetVendorDeliverySlotsRequest = z.infer<typeof setVendorDeliverySlot
 export type VendorDeliverySlotsResponse = z.infer<typeof vendorDeliverySlotsResponseSchema>;
 export type ActivateVendorRequest = z.infer<typeof activateVendorRequestSchema>;
 export type ActivateVendorResponse = z.infer<typeof activateVendorResponseSchema>;
+export type SuspendVendorRequest = z.infer<typeof suspendVendorRequestSchema>;
+export type ReinstateVendorRequest = z.infer<typeof reinstateVendorRequestSchema>;
+export type VendorStatusChangeResponse = z.infer<typeof vendorStatusChangeResponseSchema>;

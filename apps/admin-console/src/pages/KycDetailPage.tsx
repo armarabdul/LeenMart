@@ -7,6 +7,7 @@ import { KycActionPanel } from '@/features/kyc-review/components/KycActionPanel'
 import { VENDOR_STATUS_LABEL } from '@/features/kyc-review/lib/kyc-status-label';
 import { VENDOR_STATUS_TONE } from '@/features/kyc-review/lib/kyc-status-tone';
 import { KYC_REJECTION_REASON_LABEL } from '@/features/kyc-review/lib/kyc-rejection-reason-label';
+import { VendorStatusActionPanel } from '@/features/vendor-management/components/VendorStatusActionPanel';
 
 const DetailSkeleton = (): JSX.Element => (
   <div className="flex flex-col gap-4" aria-busy="true" aria-label="Loading KYC submission">
@@ -87,6 +88,20 @@ export const KycDetailPage = (): JSX.Element => {
       <KycDocumentList documents={data.documents} />
 
       <KycActionPanel kycId={kycId} data={data} />
+
+      {/*
+        Suspend/reinstate (Phase L.4): a vendor lifecycle action, not a KYC
+        decision, composed here at the page level rather than inside
+        `KycActionPanel` — a feature may not import another feature's
+        components (SDD 25.3). Every vendor that could ever be ACTIVE or
+        SUSPENDED necessarily has a completed KYC submission (only
+        `activate()`, reachable solely from `KYC_APPROVED`, can put them in
+        ACTIVE in the first place), so this view already reaches the full
+        universe of vendors this action could ever apply to.
+      */}
+      {(data.vendorStatus === 'ACTIVE' || data.vendorStatus === 'SUSPENDED') && (
+        <VendorStatusActionPanel vendorId={data.vendorId} status={data.vendorStatus} />
+      )}
     </main>
   );
 };

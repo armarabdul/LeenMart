@@ -62,7 +62,13 @@ export const kycReviewApi = baseApi.injectEndpoints({
     getKycSubmission: builder.query<AdminKycSubmissionDetail, string>({
       query: (kycId) => `/admin/kyc/submissions/${encodeURIComponent(kycId)}`,
       transformResponse: (response: { data: AdminKycSubmissionDetail }) => response.data,
-      providesTags: (_result, _error, kycId) => [{ type: 'KycSubmission', id: kycId }],
+      // Also tagged by vendor id (Phase L.4): this is the only read the
+      // vendor-management suspend/reinstate mutations can invalidate by
+      // vendorId, since there is no separate vendor-read endpoint.
+      providesTags: (result, _error, kycId) => [
+        { type: 'KycSubmission', id: kycId },
+        ...(result ? [{ type: 'Vendor' as const, id: result.vendorId }] : []),
+      ],
     }),
     startKycReview: builder.mutation<StartKycReviewResponse, string>({
       query: (kycId) => ({

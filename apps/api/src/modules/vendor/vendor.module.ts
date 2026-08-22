@@ -55,10 +55,14 @@ import {
 } from './application/use-cases/manage-vendor-delivery-slots.use-case.js';
 import { SetVendorShopNameUseCase } from './application/use-cases/set-vendor-shop-name.use-case.js';
 import { ActivateVendorUseCase } from './application/use-cases/activate-vendor.use-case.js';
+import { SuspendVendorUseCase } from './application/use-cases/suspend-vendor.use-case.js';
+import { ReinstateVendorUseCase } from './application/use-cases/reinstate-vendor.use-case.js';
 import { createVendorController } from './interface/http/vendor.controller.js';
 import { createVendorRouter } from './interface/http/vendor.routes.js';
 import { createAdminKycController } from './interface/http/admin-kyc.controller.js';
 import { createAdminKycRouter } from './interface/http/admin-kyc.routes.js';
+import { createAdminVendorController } from './interface/http/admin-vendor.controller.js';
+import { createAdminVendorRouter } from './interface/http/admin-vendor.routes.js';
 import { PrismaKycReviewQuery } from './infrastructure/persistence/prisma-kyc-review-query.js';
 import { ListKycReviewQueueUseCase } from './application/use-cases/list-kyc-review-queue.use-case.js';
 import { GetKycReviewSubmissionUseCase } from './application/use-cases/get-kyc-review-submission.use-case.js';
@@ -106,6 +110,8 @@ export interface VendorModule {
   readonly router: Router;
   /** Mounted separately at `/api/v1/admin/kyc` — a distinct surface (SDD 9.4). */
   readonly adminKycRouter: Router;
+  /** Mounted separately at `/api/v1/admin/vendors` (Phase L.4) — suspend/reinstate, deliberately not nested under `/admin/kyc`. */
+  readonly adminVendorRouter: Router;
   /**
    * Resolves a user to the vendor they own, for `tenantContext`.
    *
@@ -531,6 +537,68 @@ const buildAdminKycRouter = (params: {
 };
 
 /**
+ * The suspend/reinstate surface (Phase L.4), mounted separately from
+ * `adminKycRouter` at `/api/v1/admin/vendors`. Built the same way the KYC
+ * decision use cases are: `adminPrisma` and `AdminTransactionRunner`, since
+ * suspending or reinstating any vendor is cross-tenant by definition and
+ * these routes never establish a tenant context.
+ *
+ * `userRepository`/`sessionRepository` are built on `adminPrisma` too, not
+ * `prisma` — `users` carries no RLS either way, and building every
+ * repository this transaction touches on the same client is what lets
+ * `SuspendVendorUseCase` write `VendorProfile`, the linked `User`, and the
+ * audit record inside one shared transaction (mirrors
+ * `buildRegisterVendorUseCase`'s identical vendor/identity pairing, on the
+ * elevated credential this admin surface needs instead of the tenant-scoped
+ * one registration uses).
+ */
+const buildAdminVendorRouter = (params: {
+  adminPrisma: PrismaClient;
+  accessTokenService: AccessTokenService;
+  sessionDenylist: SessionDenylist;
+  accessTokenTtlSeconds: number;
+  idGenerator: IdGenerator;
+  clock: Clock;
+  logger: Logger;
+}): Router => {
+  const vendorRepository = new PrismaVendorRepository(params.adminPrisma);
+  const userRepository = new PrismaUserRepository(params.adminPrisma);
+  const sessionRepository = new PrismaRefreshTokenRepository(params.adminPrisma);
+  const transactionRunner = new AdminTransactionRunner(params.adminPrisma);
+  const auditWriter = buildAuditWriter({
+    prisma: params.adminPrisma,
+    idGenerator: params.idGenerator,
+    clock: params.clock,
+  });
+
+  const suspendVendorUseCase = new SuspendVendorUseCase({
+    vendorRepository,
+    userRepository,
+    sessionRepository,
+    sessionDenylist: params.sessionDenylist,
+    transactionRunner,
+    auditWriter,
+    accessTokenTtlSeconds: params.accessTokenTtlSeconds,
+    clock: params.clock,
+    logger: params.logger,
+  });
+  const reinstateVendorUseCase = new ReinstateVendorUseCase({
+    vendorRepository,
+    userRepository,
+    transactionRunner,
+    auditWriter,
+    clock: params.clock,
+    logger: params.logger,
+  });
+
+  return createAdminVendorRouter(
+    createAdminVendorController({ suspendVendorUseCase, reinstateVendorUseCase }),
+    params.accessTokenService,
+    params.sessionDenylist,
+  );
+};
+
+/**
  * This module's own composition root (SDD 2.3), mirroring
  * `createIdentityModule`: `app.ts` knows nothing about Prisma or the vendor
  * lifecycle — it hands over the shared container's ports and gets a router.
@@ -609,5 +677,15 @@ export const createVendorModule = (deps: VendorModuleDeps): VendorModule => {
     logger: moduleLogger,
   });
 
-  return { router, adminKycRouter, resolveVendorTenant };
+  const adminVendorRouter = buildAdminVendorRouter({
+    adminPrisma,
+    accessTokenService,
+    sessionDenylist,
+    accessTokenTtlSeconds,
+    idGenerator,
+    clock,
+    logger: moduleLogger,
+  });
+
+  return { router, adminKycRouter, adminVendorRouter, resolveVendorTenant };
 };

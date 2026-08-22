@@ -84,6 +84,7 @@ export const baseApi = createApi({
     'Category',
     'CategoryAttribute',
     'AuditLog',
+    'Vendor',
   ],
   endpoints: () => ({}),
   refetchOnReconnect: true,
