@@ -12,6 +12,7 @@ import {
 } from './shared/interface/http/middleware/error-handler.js';
 import { createHealthRouter } from './shared/interface/http/routes/health.routes.js';
 import type { VendorTenantResolver } from './shared/interface/http/middleware/tenant-context.js';
+import { createAuditModule } from './modules/audit/index.js';
 import { createCartModule } from './modules/cart/index.js';
 import { createNotificationModule } from './modules/notification/index.js';
 import { createCatalogueModule } from './modules/catalogue/index.js';
@@ -72,6 +73,30 @@ const mountOrderStreamRouter = (
     logger: params.logger,
   });
   app.use('/api/v1/vendor/stream', orderStreamModule.router);
+};
+
+/**
+ * The admin audit-log read surface (SDD 18.4, Phase L.3): platform-wide, no
+ * tenant context, reads on the plain `prisma` client — `audit_logs` carries
+ * no RLS policy, matching every existing `AuditWriter`'s own client choice.
+ * Called from `createApp` directly, right after `adminUserManagementRouter`
+ * is mounted: both are SUPER_ADMIN-adjacent, identity-scoped surfaces rather
+ * than business modules, so neither goes through `mountBusinessModules`.
+ */
+const mountAuditModule = (
+  app: Express,
+  params: {
+    prisma: Container['prisma'];
+    accessTokenService: AccessTokenService;
+    sessionDenylist: SessionDenylist;
+  },
+): void => {
+  const auditModule = createAuditModule({
+    prisma: params.prisma,
+    accessTokenService: params.accessTokenService,
+    sessionDenylist: params.sessionDenylist,
+  });
+  app.use('/api/v1/admin/audit-logs', auditModule.adminAuditLogRouter);
 };
 
 /**
@@ -341,6 +366,11 @@ export const createApp = (container: Container): Express => {
   // mounted apart from `adminAuthRouter`: that one is pre-authentication
   // (login/enrollment), this one is authenticated and permission-gated.
   app.use('/api/v1/admin/users', identityModule.adminUserManagementRouter);
+  mountAuditModule(app, {
+    prisma,
+    accessTokenService: identityModule.accessTokenService,
+    sessionDenylist: identityModule.sessionDenylist,
+  });
 
   mountBusinessModules(app, {
     prisma,

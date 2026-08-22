@@ -42,6 +42,19 @@ export default defineWorkspace([
        * without depending on the invoking shell to have exported it first.
        */
       env: { ENV_FILE: '.env.test' },
+      /**
+       * Closes the same race for the handful of integration test files that
+       * construct a bare `new PrismaClient()` without ever importing
+       * `src/container.js` or `src/shared/config/env.js` themselves (e.g.
+       * `prisma-audit-log.repository.test.ts`) — such a file has no import
+       * path that would make `env.ts`'s authoritative, `override: true`
+       * dotenv load run before its own `PrismaClient` construction, so
+       * whichever file Vitest happens to collect first in a given run
+       * decided (undetected) whether that construction raced
+       * `@prisma/client`'s own independent `.env` auto-loader and lost. See
+       * `force-test-env.ts` for the full explanation.
+       */
+      setupFiles: ['./test/support/force-test-env.ts'],
     },
   },
 ]);

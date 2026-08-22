@@ -42,6 +42,10 @@ class InMemoryAuditLogRepository implements AuditLogRepository {
   findByEntity(): Promise<readonly AuditLogEntry[]> {
     return Promise.resolve(this.appended);
   }
+
+  listPage(): ReturnType<AuditLogRepository['listPage']> {
+    return Promise.resolve({ items: this.appended, nextCursor: null, hasMore: false });
+  }
 }
 
 const NOW = new Date('2026-01-01T00:00:00.000Z');
@@ -128,6 +132,7 @@ describe('AmbientAuditWriter', () => {
           append: () => Promise.reject(new Error('table unavailable')),
           findByActor: () => Promise.resolve([]),
           findByEntity: () => Promise.resolve([]),
+          listPage: () => Promise.resolve({ items: [], nextCursor: null, hasMore: false }),
         },
         idGenerator: new UuidV7Generator(),
         clock: new FixedClock(NOW),

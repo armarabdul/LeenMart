@@ -17,6 +17,29 @@ import type { AuditLogEntry } from '../entities/audit-log-entry.entity.js';
  * 18.4's "queryable by admins" implies: what did this person do, and what
  * happened to this thing.
  */
+/** One page of the general audit browse (Phase L.3) — the platform's existing cursor convention (SDD 9.2), same shape `AdminUserPage`/`NotificationPage` publish. */
+export interface AuditLogEntryPage {
+  readonly items: readonly AuditLogEntry[];
+  readonly nextCursor: string | null;
+  readonly hasMore: boolean;
+}
+
+/**
+ * Filters for `listPage`, all optional and composable. `actorId` and
+ * `entityType`/`entityId` deliberately overlap what `findByActor`/
+ * `findByEntity` already answer — this method exists for the queries neither
+ * of those two narrow finders can express: unfiltered browse, filtering by
+ * `action` alone, or combining filters together.
+ */
+export interface ListAuditLogEntriesFilter {
+  readonly limit: number;
+  readonly cursor?: string | undefined;
+  readonly actorId?: UserId | undefined;
+  readonly entityType?: string | undefined;
+  readonly entityId?: Uuid | undefined;
+  readonly action?: string | undefined;
+}
+
 export interface AuditLogRepository {
   /**
    * Re-binds this repository to a transaction the caller already opened. See
@@ -54,4 +77,25 @@ export interface AuditLogRepository {
     entityId: Uuid,
     limit: number,
   ): Promise<readonly AuditLogEntry[]>;
+
+  /**
+   * The general, filterable, cursor-paginated browse (Phase L.3) — what
+   * `GET /api/v1/admin/audit-logs` reads from. Most recent first, same as the
+   * two finders above.
+   *
+   * `idx_audit_created_at (created_at)` exists with no caller until this
+   * method: this is the query it was always built for.
+   *
+   * **The cursor is composite, `createdAt` and `id` together, and that is not
+   * decoration.** `audit_logs`' primary key is `(id, created_at)` — required
+   * because the table is range-partitioned monthly on `created_at`, so
+   * PostgreSQL mandates the partition key be part of any unique constraint —
+   * which means `id` alone cannot seek a keyset position, and two entries
+   * recorded in the same millisecond (routine under concurrent admin actions)
+   * would let a timestamp-only cursor skip or repeat rows at the page
+   * boundary. Mirrors `PrismaNotificationReadRepository.listForRecipient`'s
+   * own `createdAt|id` cursor exactly, the one other place in this codebase
+   * already solved this.
+   */
+  listPage(filter: ListAuditLogEntriesFilter): Promise<AuditLogEntryPage>;
 }

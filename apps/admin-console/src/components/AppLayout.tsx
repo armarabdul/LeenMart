@@ -18,9 +18,9 @@ const navLinkClassName = ({ isActive }: { isActive: boolean }): string =>
  * `AppLayout` shape exactly, including its mobile-overflow fix (the header
  * row scrolls internally via `overflow-x-auto` rather than the page itself
  * overflowing horizontally at narrow widths). Navigation exposes only the
- * four screens actually implemented this phase (L3) — no placeholder
- * entries for refunds, settlement, fraud, or any other decision-gated
- * capability.
+ * screens actually implemented so far (L3, plus Audit Log in Phase L.3) — no
+ * placeholder entries for refunds, settlement, fraud, or any other
+ * decision-gated capability.
  */
 export const AppLayout = (): JSX.Element => {
   const isAuthenticated = useAppSelector(selectIsAuthenticated);
@@ -59,6 +59,9 @@ export const AppLayout = (): JSX.Element => {
               </NavLink>
               <NavLink to="/categories" className={navLinkClassName}>
                 Categories
+              </NavLink>
+              <NavLink to="/audit-log" className={navLinkClassName}>
+                Audit Log
               </NavLink>
             </nav>
           )}

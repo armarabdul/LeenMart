@@ -6,7 +6,11 @@ import {
   type AuditLogSnapshot,
 } from '../../domain/entities/audit-log-entry.entity.js';
 import { toAuditLogEntryId } from '../../domain/value-objects/audit-log-entry-id.value-object.js';
-import type { AuditLogRepository } from '../../domain/repositories/audit-log.repository.js';
+import type {
+  AuditLogEntryPage,
+  AuditLogRepository,
+  ListAuditLogEntriesFilter,
+} from '../../domain/repositories/audit-log.repository.js';
 
 interface AuditLogRow {
   readonly id: string;
@@ -45,6 +49,28 @@ const toJsonInput = (
   snapshot: AuditLogSnapshot | null,
 ): Prisma.InputJsonValue | typeof Prisma.DbNull =>
   snapshot === null ? Prisma.DbNull : (snapshot as Prisma.InputJsonValue);
+
+/**
+ * The page cursor: the sort key, both halves of it. Opaque to the client by
+ * intent — a position in a list, not an id to construct — but not encrypted:
+ * it carries only a timestamp and an id the caller can already see in the
+ * page it came from. Mirrors `PrismaNotificationReadRepository`'s own
+ * `encodeCursor`/`decodeCursor` exactly, the existing precedent for a
+ * composite `(createdAt, id)` keyset in this codebase.
+ */
+const encodeCursor = (createdAt: Date, id: string): string => `${createdAt.toISOString()}|${id}`;
+
+const decodeCursor = (cursor: string | undefined): { createdAt: Date; id: string } | null => {
+  if (!cursor) return null;
+  const separator = cursor.lastIndexOf('|');
+  if (separator <= 0) return null;
+  const createdAt = new Date(cursor.slice(0, separator));
+  const id = cursor.slice(separator + 1);
+  // A malformed cursor returns the first page rather than an error: it is a
+  // position, and the honest answer to "I do not know where that is" is the
+  // start of the list.
+  return Number.isNaN(createdAt.getTime()) || id.length === 0 ? null : { createdAt, id };
+};
 
 const toDomain = (row: AuditLogRow): AuditLogEntry =>
   AuditLogEntry.reconstitute({
@@ -134,5 +160,54 @@ export class PrismaAuditLogRepository implements AuditLogRepository {
       take: limit,
     });
     return rows.map(toDomain);
+  }
+
+  /**
+   * The general, filterable, cursor-paginated browse (Phase L.3). Filters
+   * compose as a plain `AND` — Prisma omits a key entirely when the value is
+   * `undefined`, so an unset filter simply does not narrow the query.
+   *
+   * Keyset pagination, not offset: strictly older, or the same instant with a
+   * lower id, the same tie-safe shape
+   * `PrismaNotificationReadRepository.listForRecipient` already uses for the
+   * identical `(createdAt, id)` compound-key problem. One row beyond the page
+   * answers `hasMore` without a second count query.
+   */
+  async listPage(filter: ListAuditLogEntriesFilter): Promise<AuditLogEntryPage> {
+    const cursor = decodeCursor(filter.cursor);
+    const rows = await this.prisma.auditLog.findMany({
+      where: {
+        // Spread rather than assigned, one key per filter: with
+        // `exactOptionalPropertyTypes`, Prisma's generated `WhereInput`
+        // accepts a key being *absent* but not a key present with value
+        // `undefined` — the same distinction `toJsonInput` draws between "no
+        // snapshot" and a stored JSON null, applied here to the query shape
+        // instead of a column.
+        ...(filter.actorId !== undefined ? { actorId: filter.actorId } : {}),
+        ...(filter.entityType !== undefined ? { entityType: filter.entityType } : {}),
+        ...(filter.entityId !== undefined ? { entityId: filter.entityId } : {}),
+        ...(filter.action !== undefined ? { action: filter.action } : {}),
+        ...(cursor
+          ? {
+              OR: [
+                { createdAt: { lt: cursor.createdAt } },
+                { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: filter.limit + 1,
+    });
+
+    const hasMore = rows.length > filter.limit;
+    const page = hasMore ? rows.slice(0, filter.limit) : rows;
+    const last = page.at(-1);
+
+    return {
+      items: page.map(toDomain),
+      nextCursor: hasMore && last ? encodeCursor(last.createdAt, last.id) : null,
+      hasMore,
+    };
   }
 }

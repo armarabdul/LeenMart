@@ -430,4 +430,199 @@ describe('PrismaAuditLogRepository', () => {
       expect(survivor).not.toBeNull();
     });
   });
+
+  /**
+   * The general browse (Phase L.3). `audit_logs` accumulates forever and is
+   * never cleaned up (see the suite comment), so every test here isolates
+   * itself either by filter (a freshly generated actor/entity id, or a
+   * run-scoped `entityType`/`action` string) or — for the genuinely
+   * unfiltered case — by dating its own rows far beyond any other fixture in
+   * this file (`2099-*`, offset by `run` so two runs never collide), which
+   * guarantees they sort at the very top of the whole table regardless of
+   * accumulated history.
+   */
+  describe('listPage (Phase L.3)', () => {
+    const FAR_FUTURE_MS = new Date('2099-01-01T00:00:00.000Z').getTime() + run;
+    const at = (offsetSeconds: number): Date => new Date(FAR_FUTURE_MS + offsetSeconds * 1000);
+    const scope = `AuditRepoTest-listPage-${run}`;
+
+    it('lists unfiltered, newest first — the general browse', async () => {
+      await append({ entityType: scope, action: 'LISTPAGE_UNFILTERED_OLDEST', now: at(0) });
+      await append({ entityType: scope, action: 'LISTPAGE_UNFILTERED_MIDDLE', now: at(1) });
+      await append({ entityType: scope, action: 'LISTPAGE_UNFILTERED_NEWEST', now: at(2) });
+
+      // A large, unfiltered page rather than `limit: 3`: another suite (e.g.
+      // `admin-audit-log.test.ts`) may also date its own fixtures far in the
+      // future, so this only asserts these three rows' *relative* order
+      // within the general browse, never that they are the very newest rows
+      // in the whole table.
+      const page = await repository.listPage({ limit: 500 });
+      const actions = page.items.map((entry) => entry.action);
+      const newestIndex = actions.indexOf('LISTPAGE_UNFILTERED_NEWEST');
+      const middleIndex = actions.indexOf('LISTPAGE_UNFILTERED_MIDDLE');
+      const oldestIndex = actions.indexOf('LISTPAGE_UNFILTERED_OLDEST');
+      expect(newestIndex).toBeGreaterThanOrEqual(0);
+      expect(middleIndex).toBeGreaterThan(newestIndex);
+      expect(oldestIndex).toBeGreaterThan(middleIndex);
+    });
+
+    it('filters by actorId', async () => {
+      const filterActorId = toUserId(idGenerator.generate());
+      const filterActor: AuditLogActor = {
+        actorId: filterActorId,
+        actorRole: 'FINANCE_ADMIN',
+        impersonatedBy: null,
+      };
+      await append({
+        actor: filterActor,
+        entityType: scope,
+        action: 'LISTPAGE_ACTOR_MATCH',
+        now: at(10),
+      });
+      await append({ entityType: scope, action: 'LISTPAGE_ACTOR_OTHER', now: at(11) });
+
+      const page = await repository.listPage({ limit: 10, actorId: filterActorId });
+      expect(page.items.map((entry) => entry.action)).toEqual(['LISTPAGE_ACTOR_MATCH']);
+    });
+
+    it('filters by entityType', async () => {
+      const otherType = `${scope}-other`;
+      await append({ entityType: scope, action: 'LISTPAGE_ETYPE_MATCH', now: at(20) });
+      await append({ entityType: otherType, action: 'LISTPAGE_ETYPE_OTHER', now: at(21) });
+
+      const page = await repository.listPage({ limit: 50, entityType: scope });
+      const actions = page.items.map((entry) => entry.action);
+      expect(actions).toContain('LISTPAGE_ETYPE_MATCH');
+      expect(actions).not.toContain('LISTPAGE_ETYPE_OTHER');
+    });
+
+    it('filters by entityId', async () => {
+      const filterEntityId = toUuid(idGenerator.generate());
+      await append({
+        entityType: scope,
+        entityId: filterEntityId,
+        action: 'LISTPAGE_EID_MATCH',
+        now: at(30),
+      });
+      await append({
+        entityType: scope,
+        entityId: toUuid(idGenerator.generate()),
+        action: 'LISTPAGE_EID_OTHER',
+        now: at(31),
+      });
+
+      const page = await repository.listPage({ limit: 10, entityId: filterEntityId });
+      expect(page.items.map((entry) => entry.action)).toEqual(['LISTPAGE_EID_MATCH']);
+    });
+
+    it('filters by action', async () => {
+      const uniqueAction = `LISTPAGE_ACTION_${run}`;
+      await append({ entityType: scope, action: uniqueAction, now: at(40) });
+      await append({ entityType: scope, action: 'LISTPAGE_ACTION_OTHER', now: at(41) });
+
+      const page = await repository.listPage({ limit: 10, action: uniqueAction });
+      expect(page.items.map((entry) => entry.action)).toEqual([uniqueAction]);
+    });
+
+    it('composes multiple filters as AND', async () => {
+      const combinedActorId = toUserId(idGenerator.generate());
+      const combinedActor: AuditLogActor = {
+        actorId: combinedActorId,
+        actorRole: 'RISK_ANALYST',
+        impersonatedBy: null,
+      };
+      const combinedAction = `LISTPAGE_COMBINED_${run}`;
+      await append({
+        actor: combinedActor,
+        entityType: scope,
+        action: combinedAction,
+        now: at(50),
+      });
+      // Same actor, wrong action — must be excluded.
+      await append({
+        actor: combinedActor,
+        entityType: scope,
+        action: 'LISTPAGE_COMBINED_WRONG_ACTION',
+        now: at(51),
+      });
+      // Right action, wrong actor — must be excluded.
+      await append({ entityType: scope, action: combinedAction, now: at(52) });
+
+      const page = await repository.listPage({
+        limit: 10,
+        actorId: combinedActorId,
+        action: combinedAction,
+      });
+      expect(page.items.map((entry) => entry.action)).toEqual([combinedAction]);
+    });
+
+    it('returns an empty page, hasMore=false, nextCursor=null for a filter matching nothing', async () => {
+      const page = await repository.listPage({ limit: 10, entityType: `${scope}-nonexistent` });
+      expect(page.items).toEqual([]);
+      expect(page.hasMore).toBe(false);
+      expect(page.nextCursor).toBeNull();
+    });
+
+    describe('pagination and the compound cursor', () => {
+      const pagingScope = `${scope}-paging`;
+
+      beforeAll(async () => {
+        // Five entries, strictly increasing `createdAt`, with two sharing
+        // the exact same instant to exercise the cursor's `id` tie-break —
+        // the case a timestamp-only cursor would skip or repeat rows on.
+        await append({ entityType: pagingScope, action: 'P1', now: at(100) });
+        await append({ entityType: pagingScope, action: 'P2', now: at(101) });
+        await append({ entityType: pagingScope, action: 'P3_TIE_A', now: at(102) });
+        await append({ entityType: pagingScope, action: 'P3_TIE_B', now: at(102) });
+        await append({ entityType: pagingScope, action: 'P4', now: at(103) });
+      });
+
+      it('returns hasMore=true and a usable nextCursor short of the full set', async () => {
+        const page = await repository.listPage({ limit: 2, entityType: pagingScope });
+        expect(page.hasMore).toBe(true);
+        expect(page.nextCursor).not.toBeNull();
+        expect(page.items.map((entry) => entry.action)).toEqual(['P4', 'P3_TIE_B']);
+      });
+
+      it('walks past a same-instant tie correctly via the compound cursor', async () => {
+        const first = await repository.listPage({ limit: 2, entityType: pagingScope });
+        const second = await repository.listPage({
+          limit: 2,
+          entityType: pagingScope,
+          cursor: first.nextCursor ?? undefined,
+        });
+        expect(second.items.map((entry) => entry.action)).toEqual(['P3_TIE_A', 'P2']);
+        expect(second.hasMore).toBe(true);
+      });
+
+      it('reaches the last page with hasMore=false exactly at the boundary', async () => {
+        const first = await repository.listPage({ limit: 2, entityType: pagingScope });
+        const second = await repository.listPage({
+          limit: 2,
+          entityType: pagingScope,
+          cursor: first.nextCursor ?? undefined,
+        });
+        const third = await repository.listPage({
+          limit: 2,
+          entityType: pagingScope,
+          cursor: second.nextCursor ?? undefined,
+        });
+        expect(third.items.map((entry) => entry.action)).toEqual(['P1']);
+        expect(third.hasMore).toBe(false);
+        expect(third.nextCursor).toBeNull();
+      });
+
+      it('walks every page with no gaps or repeats, in strict newest-first order', async () => {
+        const collected: string[] = [];
+        let cursor: string | undefined;
+        for (let guard = 0; guard < 10; guard += 1) {
+          const page = await repository.listPage({ limit: 2, entityType: pagingScope, cursor });
+          collected.push(...page.items.map((entry) => entry.action));
+          if (!page.hasMore) break;
+          cursor = page.nextCursor ?? undefined;
+        }
+        expect(collected).toEqual(['P4', 'P3_TIE_B', 'P3_TIE_A', 'P2', 'P1']);
+      });
+    });
+  });
 });

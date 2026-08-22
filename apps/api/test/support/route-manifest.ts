@@ -586,6 +586,15 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     why: 'Lists every admin-family account across the platform; FULL-access (SUPER_ADMIN) only — there is no READ_ONLY grant on this permission for anyone else to hold.',
   },
 
+  // --- audit log: /api/v1/admin/audit-logs (Phase L.3) ---
+  {
+    method: 'GET',
+    prefix: '/api/v1/admin/audit-logs',
+    path: '/',
+    classification: 'ADMIN',
+    why: 'Platform-wide audit trail read (SDD 18.4); audit_logs carries no vendor/tenant column to scope by. VIEW_AUDIT_LOG grants READ_ONLY to FINANCE_ADMIN/RISK_ANALYST and FULL to SUPER_ADMIN — the role matrix is asserted directly in admin-audit-log.test.ts.',
+  },
+
   // --- vendor: /api/v1/vendors ---
   {
     method: 'POST',

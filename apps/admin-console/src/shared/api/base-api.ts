@@ -83,6 +83,7 @@ export const baseApi = createApi({
     'ReviewQueue',
     'Category',
     'CategoryAttribute',
+    'AuditLog',
   ],
   endpoints: () => ({}),
   refetchOnReconnect: true,

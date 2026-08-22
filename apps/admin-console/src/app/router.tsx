@@ -33,6 +33,9 @@ const CategoriesPage = lazy(() =>
 const CategoryDetailPage = lazy(() =>
   import('@/pages/CategoryDetailPage').then((module) => ({ default: module.CategoryDetailPage })),
 );
+const AuditLogPage = lazy(() =>
+  import('@/pages/AuditLogPage').then((module) => ({ default: module.AuditLogPage })),
+);
 const NotFoundPage = lazy(() =>
   import('@/pages/NotFoundPage').then((module) => ({ default: module.NotFoundPage })),
 );
@@ -66,6 +69,7 @@ const router = createBrowserRouter([
           { path: '/review-moderation', element: withBoundary(<ReviewQueuePage />) },
           { path: '/categories', element: withBoundary(<CategoriesPage />) },
           { path: '/categories/:categoryId', element: withBoundary(<CategoryDetailPage />) },
+          { path: '/audit-log', element: withBoundary(<AuditLogPage />) },
         ],
       },
       { path: '*', element: withBoundary(<NotFoundPage />) },
