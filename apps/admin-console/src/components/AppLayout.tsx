@@ -18,8 +18,8 @@ const navLinkClassName = ({ isActive }: { isActive: boolean }): string =>
  * `AppLayout` shape exactly, including its mobile-overflow fix (the header
  * row scrolls internally via `overflow-x-auto` rather than the page itself
  * overflowing horizontally at narrow widths). Navigation exposes only the
- * screens actually implemented so far (L3, plus Audit Log in Phase L.3) — no
- * placeholder entries for refunds, settlement, fraud, or any other
+ * screens actually implemented so far (through Admin Users in Phase L.5) —
+ * no placeholder entries for refunds, settlement, fraud, or any other
  * decision-gated capability.
  */
 export const AppLayout = (): JSX.Element => {
@@ -62,6 +62,9 @@ export const AppLayout = (): JSX.Element => {
               </NavLink>
               <NavLink to="/audit-log" className={navLinkClassName}>
                 Audit Log
+              </NavLink>
+              <NavLink to="/admin-users" className={navLinkClassName}>
+                Admin Users
               </NavLink>
             </nav>
           )}

@@ -36,6 +36,9 @@ const CategoryDetailPage = lazy(() =>
 const AuditLogPage = lazy(() =>
   import('@/pages/AuditLogPage').then((module) => ({ default: module.AuditLogPage })),
 );
+const AdminUsersPage = lazy(() =>
+  import('@/pages/AdminUsersPage').then((module) => ({ default: module.AdminUsersPage })),
+);
 const NotFoundPage = lazy(() =>
   import('@/pages/NotFoundPage').then((module) => ({ default: module.NotFoundPage })),
 );
@@ -70,6 +73,7 @@ const router = createBrowserRouter([
           { path: '/categories', element: withBoundary(<CategoriesPage />) },
           { path: '/categories/:categoryId', element: withBoundary(<CategoryDetailPage />) },
           { path: '/audit-log', element: withBoundary(<AuditLogPage />) },
+          { path: '/admin-users', element: withBoundary(<AdminUsersPage />) },
         ],
       },
       { path: '*', element: withBoundary(<NotFoundPage />) },
