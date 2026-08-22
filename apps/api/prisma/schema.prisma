@@ -124,6 +124,7 @@ model User {
   kycDecided    VendorKycSubmission[] @relation("KycDecider")
   notifications Notification[]
   reviews       Review[]
+  preorderReservations PreorderReservation[]
 
   @@map("users")
 }
@@ -337,6 +338,7 @@ model VendorProfile {
   businessHourClosures BusinessHourClosure[]
   deliverySlots       DeliverySlot[]
   slotCapacity        SlotCapacity[]
+  preorderCampaigns   PreorderCampaign[]
 
   @@map("vendors")
 }
@@ -1951,4 +1953,228 @@ model Review {
   /// The moderation queue: everything awaiting a decision, oldest first.
   @@index([status, createdAt], map: "idx_reviews_status_created")
   @@map("reviews")
+}
+
+/// SDD §14.2's exact lifecycle, transcribed verbatim — no invented states.
+/// `SOLD_OUT` and `CLOSED` are both "no longer accepting reservations" (the
+/// diagram's own two branches out of `OPEN`); both feed into `FULFILLING`.
+enum PreorderCampaignStatus {
+  DRAFT
+  SCHEDULED
+  OPEN
+  SOLD_OUT
+  CLOSED
+  CANCELLED
+  FULFILLING
+  COMPLETED
+  PARTIALLY_FULFILLED
+}
+
+/// Reservation states are not tabulated by the SDD (only the §14.3 narrative
+/// flow is given) — this is the discovery report's own approved,
+/// narrative-grounded inference (Phase Next, "one explicit architectural
+/// note"), kept deliberately isolated to this module so it can change later
+/// without touching anything outside `preorder`.
+enum PreorderReservationStatus {
+  PENDING
+  CONFIRMED
+  EXPIRED
+  PAYMENT_FAILED
+  CANCELLED
+}
+
+/// SDD §14.1: "fulfilment_mode (pickup / delivery / both)" — a third value
+/// the *campaign* may declare, distinct from the existing order-module
+/// `FulfilmentMode` (`DELIVERY`/`PICKUP` only), which stays untouched: a
+/// converted `SubOrder` still picks exactly one of the two real fulfilment
+/// modes at conversion time.
+enum PreorderFulfilmentMode {
+  DELIVERY
+  PICKUP
+  BOTH
+}
+
+enum PreorderPaymentAttemptKind {
+  ADVANCE
+  BALANCE
+}
+
+/// Mirrors `PaymentAttemptStatus` exactly (order module) — kept as its own
+/// enum rather than reused because a reservation's payment attempt is not an
+/// `Order`'s attempt and must never be confusable with one at the type level.
+enum PreorderPaymentAttemptStatus {
+  INITIATED
+  SUCCEEDED
+  FAILED
+}
+
+/// A vendor's preorder campaign (SDD §14, "the flagship feature"), attached
+/// to a `ProductVariant` — a **selling mode, not a product kind** (SDD 6.3).
+///
+/// `variantId` is a plain `uuid` column with **no database foreign key** —
+/// `preorder` and `catalogue` are different modules, and SDD 5.1 forbids a FK
+/// crossing a module boundary except to the shared `users`/`vendors`
+/// identity anchors. Existence and eligibility are verified at the
+/// application layer against the real variant, through the same
+/// `publicPrisma`-bound repository `cart`'s own `AddCartItemUseCase`
+/// established for exactly this situation.
+///
+/// **No price field.** SDD §14.1's own field list for a campaign never
+/// names one — the variant already carries `priceAmount`/`priceCurrency`,
+/// resolved fresh at reservation time and snapshotted onto the
+/// `PreorderReservation` row, the same way `OrderItem` snapshots price at
+/// order placement rather than the cart carrying one. §14.6's "price...
+/// frozen once the first reservation is confirmed" is therefore automatic:
+/// a confirmed reservation already holds its own immutable snapshot.
+///
+/// `remainingQuantity` moves only through one atomic conditional `UPDATE`
+/// (`WHERE status='OPEN' AND remaining_quantity >= :qty`), guarded by the
+/// `CHECK` below — the same idiom `inventory.available` and
+/// `slot_capacity.booked` already establish, so the database itself makes
+/// overselling impossible regardless of any application bug (SDD §14.4).
+model PreorderCampaign {
+  id       String @id @db.Uuid
+  vendorId String @map("vendor_id") @db.Uuid
+  /// See this model's own doc comment — deliberately no foreign key.
+  variantId String @map("variant_id") @db.Uuid
+
+  status PreorderCampaignStatus @default(DRAFT)
+
+  opensAt               DateTime @map("opens_at") @db.Timestamptz(6)
+  orderCutoffAt         DateTime @map("order_cutoff_at") @db.Timestamptz(6)
+  fulfilmentWindowStart DateTime @map("fulfilment_window_start") @db.Timestamptz(6)
+  fulfilmentWindowEnd   DateTime @map("fulfilment_window_end") @db.Timestamptz(6)
+
+  totalQuantity     Int @map("total_quantity")
+  remainingQuantity Int @map("remaining_quantity")
+
+  advancePercent Int                    @map("advance_percent")
+  maxPerCustomer Int                    @map("max_per_customer")
+  fulfilmentMode PreorderFulfilmentMode @map("fulfilment_mode")
+
+  /// Set the moment the first reservation reaches `CONFIRMED` (SDD §14.6):
+  /// from then on, `remainingQuantity` may only increase and
+  /// `orderCutoffAt`/`fulfilmentWindowStart`/`fulfilmentWindowEnd` are
+  /// frozen — enforced in the domain layer, this column is what the guard
+  /// reads.
+  firstReservationConfirmedAt DateTime? @map("first_reservation_confirmed_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  vendor       VendorProfile          @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  reservations PreorderReservation[]
+
+  /// `remainingQuantity` between 0 and `totalQuantity`, inclusive — the
+  /// oversell-prevention backstop (SDD §14.4).
+  @@index([vendorId, status], map: "idx_preorder_campaigns_vendor_status")
+  /// The campaign-open sweep's own query shape.
+  @@index([status, opensAt], map: "idx_preorder_campaigns_status_opens_at")
+  /// The campaign-close sweep's own query shape.
+  @@index([status, orderCutoffAt], map: "idx_preorder_campaigns_status_cutoff")
+  @@map("preorder_campaigns")
+}
+
+/// One customer's hold against one campaign (SDD §14.3). `PENDING` on
+/// creation with a 10-minute `expiresAt` (ASM-11); becomes `CONFIRMED` only
+/// once the advance payment succeeds, at which point `campaign.remaining
+/// Quantity` has already been **permanently** decremented (the decrement
+/// happens at creation, inside the same transaction as this row's insert —
+/// see `create-reservation.use-case.ts` — not deferred to confirmation,
+/// since a `PENDING` hold must itself occupy the capacity it claims).
+///
+/// Price/advance/balance are snapshotted at creation, the same convention
+/// `OrderItem` already establishes for order lines — never recomputed later,
+/// so a vendor's later price change cannot retroactively alter what an
+/// existing reservation owes.
+model PreorderReservation {
+  id         String @id @db.Uuid
+  campaignId String @map("campaign_id") @db.Uuid
+  customerId String @map("customer_id") @db.Uuid
+  /// Denormalised from `campaign.vendorId` at creation, immutable — the same
+  /// `LedgerJournal.vendorId` technique (S3-7): a direct RLS column
+  /// comparison for the vendor's own demand-summary read, not a subquery
+  /// through `preorder_campaigns` on every row.
+  vendorId String @map("vendor_id") @db.Uuid
+
+  quantity Int
+  status   PreorderReservationStatus @default(PENDING)
+  /// The customer's own choice, captured at creation and validated against
+  /// `campaign.fulfilmentMode.allows(...)` — always `DELIVERY` or `PICKUP`
+  /// here, never `BOTH` (that value only ever describes what a campaign
+  /// permits, never what one reservation resolved to). Needed so
+  /// `ConvertReservationToOrderUseCase` has an unambiguous mode to build the
+  /// resulting `SubOrder` with — a `BOTH`-mode campaign gives the reservation
+  /// no way to infer one on its own.
+  fulfilmentMode PreorderFulfilmentMode @map("fulfilment_mode")
+  /// No relation — `addresses` belongs to `customer`, a different module
+  /// (SDD 5.1), and is not one of the shared identity anchors that rule
+  /// permits crossing to. Existence/ownership verified at the application
+  /// layer, the same `variantId`/`campaignId`-on-other-tables precedent.
+  addressId String @map("address_id") @db.Uuid
+
+  unitPriceAmount   BigInt @map("unit_price_amount")
+  unitPriceCurrency String @default("INR") @map("unit_price_currency") @db.VarChar(3)
+  advanceAmount     BigInt @map("advance_amount")
+  balanceAmount     BigInt @map("balance_amount")
+
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(6)
+  confirmedAt   DateTime? @map("confirmed_at") @db.Timestamptz(6)
+  balancePaidAt DateTime? @map("balance_paid_at") @db.Timestamptz(6)
+  releasedAt    DateTime? @map("released_at") @db.Timestamptz(6)
+
+  /// No foreign key — `order` is a different module (SDD 5.1). Set once
+  /// `ConvertReservationToOrderUseCase` succeeds; the existing order module
+  /// is authoritative for everything from that moment on.
+  convertedOrderId String? @map("converted_order_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  campaign        PreorderCampaign          @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  customer        User                      @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  paymentAttempts PreorderPaymentAttempt[]
+
+  /// The expiry sweep's own query shape.
+  @@index([status, expiresAt], map: "idx_preorder_reservations_status_expires")
+  /// `max_per_customer` enforcement.
+  @@index([campaignId, customerId], map: "idx_preorder_reservations_campaign_customer")
+  /// The vendor demand-summary query's own shape.
+  @@index([campaignId, status], map: "idx_preorder_reservations_campaign_status")
+  /// The RLS policy's own comparison, and the vendor-wide (not just
+  /// per-campaign) demand queries.
+  @@index([vendorId, status], map: "idx_preorder_reservations_vendor_status")
+  /// "My reservations".
+  @@index([customerId, createdAt(sort: Desc)], map: "idx_preorder_reservations_customer_created")
+  @@map("preorder_reservations")
+}
+
+/// A reservation's advance or balance payment attempt against the existing
+/// mock `PaymentGateway` port — deliberately **not** the order module's own
+/// `PaymentAttempt` table (which is `orderId`-scoped and belongs to `order`):
+/// a reservation is not yet an `Order` at advance-payment time, and SDD 5.1's
+/// module-boundary rule argues against reaching into another module's table
+/// for a row that is properly this module's own concern. Same append-only
+/// convention as `PaymentAttempt`: no repository method ever updates a
+/// `SUCCEEDED`/`FAILED` row back to another state.
+model PreorderPaymentAttempt {
+  id            String                        @id @db.Uuid
+  reservationId String                        @map("reservation_id") @db.Uuid
+  kind          PreorderPaymentAttemptKind
+  status        PreorderPaymentAttemptStatus  @default(INITIATED)
+  /// Always the literal `'MOCK'` this milestone — mirrors `PaymentAttempt
+  /// .provider`'s own reasoning exactly: a real provider's attempts would
+  /// live in this same column once a real `PaymentGateway` adapter exists.
+  provider          String  @default("MOCK") @db.VarChar(20)
+  providerReference String? @map("provider_reference") @db.VarChar(100)
+  amount            BigInt
+  currency          String  @default("INR") @db.VarChar(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  reservation PreorderReservation @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+
+  @@index([reservationId, kind, status], map: "idx_preorder_payment_attempts_reservation")
+  @@map("preorder_payment_attempts")
 }

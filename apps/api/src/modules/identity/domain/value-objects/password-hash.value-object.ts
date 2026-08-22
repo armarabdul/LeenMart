@@ -16,7 +16,9 @@ export class PasswordHash {
   static create(value: string): PasswordHash {
     if (value.trim().length < MIN_HASH_LENGTH) {
       throw new InvalidPasswordError({
-        details: [{ field: 'passwordHash', issue: 'must be a hashed value, never empty or plaintext' }],
+        details: [
+          { field: 'passwordHash', issue: 'must be a hashed value, never empty or plaintext' },
+        ],
       });
     }
     return new PasswordHash(value);

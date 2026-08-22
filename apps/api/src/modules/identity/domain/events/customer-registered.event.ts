@@ -4,7 +4,8 @@ import type { Email } from '../value-objects/email.value-object.js';
 import type { PhoneNumber } from '../value-objects/phone-number.value-object.js';
 
 /** Both `email` and `phone` are optional: a customer may register with either, per the customer auth strategy (phone+OTP primary, email optional). */
-export interface CustomerRegisteredEvent extends IdentityDomainEvent<'identity.customer.registered'> {
+export interface CustomerRegisteredEvent
+  extends IdentityDomainEvent<'identity.customer.registered'> {
   readonly userId: UserId;
   readonly email?: Email;
   readonly phone?: PhoneNumber;

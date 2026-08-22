@@ -15,6 +15,8 @@ export * from './value-objects/order-item-id.value-object.js';
 export * from './value-objects/order-status.value-object.js';
 export * from './value-objects/payment-attempt-id.value-object.js';
 export * from './value-objects/payment-attempt-status.value-object.js';
+/** Not previously crossed a module boundary — added for `ConvertReservationToOrderUseCase` (Phase Next), the first caller outside `order` that needs to construct a `SubOrder` of its own. */
+export * from './value-objects/fulfilment-mode.value-object.js';
 
 // errors
 export * from './errors/order-errors.js';

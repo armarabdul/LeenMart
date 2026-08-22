@@ -70,6 +70,7 @@ describe('product and variant repository mutations (S2-3b)', () => {
     productId: ProductId,
     vendorId: VendorId = vendorA,
     sku = `SKU-${(seq += 1)}`,
+    now = NOW,
   ): ProductVariant =>
     ProductVariant.create({
       id: toProductVariantId(ids.generate()),
@@ -80,7 +81,7 @@ describe('product and variant repository mutations (S2-3b)', () => {
       price: Money.fromMinor(19900n, 'INR'),
       unitOfMeasure: 'per kg',
       quantityStep: 250,
-      now: NOW,
+      now,
     });
 
   const persistProduct = async (vendorId: VendorId = vendorA): Promise<Product> => {
@@ -260,8 +261,8 @@ describe('product and variant repository mutations (S2-3b)', () => {
 
     it('lists a product’s live variants oldest first', async () => {
       const product = await persistProduct();
-      const first = makeVariant(product.id);
-      const second = makeVariant(product.id);
+      const first = makeVariant(product.id, vendorA, undefined, NOW);
+      const second = makeVariant(product.id, vendorA, undefined, LATER);
       await variants.create(first);
       await variants.create(second);
 

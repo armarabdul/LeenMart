@@ -410,6 +410,7 @@ describe('database role separation', () => {
 
       expect(rows.map((row) => row.relname).sort()).toEqual([
         'inventory',
+        'preorder_campaigns',
         'product_media',
         'product_variants',
         'products',
@@ -605,6 +606,9 @@ describe('database role separation', () => {
         // S4-QR: the checkout credential issues and rotates the customer's
         // pickup token; the vendor credential only ever reads and redeems it.
         'pickup_tokens',
+        'preorder_campaigns',
+        'preorder_payment_attempts',
+        'preorder_reservations',
         // S4-SERV: SELECT only — checkout reads a vendor's declared delivery
         // pincodes to validate placement, and never writes them.
         'serviceable_pincodes',
@@ -658,6 +662,9 @@ describe('database role separation', () => {
         // S4-QR: a pickup token is the credential that completes a
         // sub-order, so it is vendor-scoped like every other order table.
         'pickup_tokens',
+        'preorder_campaigns',
+        'preorder_payment_attempts',
+        'preorder_reservations',
         'product_media',
         'product_media_variants',
         'product_variants',

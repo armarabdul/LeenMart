@@ -12,7 +12,10 @@ export const uuidSchema = z.string().uuid();
 export const phoneSchema = z
   .string()
   .trim()
-  .regex(/^\+91[6-9]\d{9}$/, 'Must be a valid Indian mobile number in E.164 format (+91XXXXXXXXXX)');
+  .regex(
+    /^\+91[6-9]\d{9}$/,
+    'Must be a valid Indian mobile number in E.164 format (+91XXXXXXXXXX)',
+  );
 
 export const emailSchema = z.string().trim().toLowerCase().email().max(254);
 

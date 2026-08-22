@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Express } from 'express';
 import { UuidV7Generator } from '@leen-mart/domain-kit';
 import {
@@ -112,10 +112,17 @@ describe('cross-tenant route matrix (SDD 6.6 layer 2)', () => {
   let app: Express;
   let ctx: RouteTestContext;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     harness = createIntegrationHarness();
     app = harness.app;
     ctx = { app, db: harness.db };
+    const keys = await harness.container.redis.keys('rl:*');
+    if (keys.length > 0) await harness.container.redis.del(...keys);
+  });
+
+  beforeEach(async () => {
+    const keys = await harness.container.redis.keys('rl:*');
+    if (keys.length > 0) await harness.container.redis.del(...keys);
   });
 
   afterAll(async () => {

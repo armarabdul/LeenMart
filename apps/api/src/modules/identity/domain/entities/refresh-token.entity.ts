@@ -8,4 +8,7 @@
  * keeps compiling without modification (out of scope this milestone). It is
  * a re-export, not a second implementation — there is only one entity here.
  */
-export { Session as RefreshToken, type SessionProps as RefreshTokenProps } from './session.entity.js';
+export {
+  Session as RefreshToken,
+  type SessionProps as RefreshTokenProps,
+} from './session.entity.js';

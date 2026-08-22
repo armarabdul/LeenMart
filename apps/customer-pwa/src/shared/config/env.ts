@@ -14,9 +14,7 @@ const envSchema = z.object({
   VITE_API_BASE_URL: z.string().min(1).default('/api/v1'),
   VITE_APP_NAME: z.string().min(1).default('Leen Mart'),
   VITE_APP_VERSION: z.string().min(1).default('0.1.0'),
-  VITE_ENVIRONMENT: z
-    .enum(['development', 'test', 'staging', 'production'])
-    .default('development'),
+  VITE_ENVIRONMENT: z.enum(['development', 'test', 'staging', 'production']).default('development'),
 });
 
 const parsed = envSchema.safeParse(import.meta.env);

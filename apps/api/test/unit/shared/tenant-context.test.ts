@@ -147,7 +147,7 @@ describe('tenant context', () => {
   });
 
   describe('model registry', () => {
-    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a, S2-6b, S3-5, S3-8, S4-QR, S4-SERV, S4-HOURS, S4-SLOTS, S6-NOTIFY-INAPP and S8-REVIEWS protect', () => {
+    it('covers exactly the models KYC-2B-3, S2-3a, S2-4, S2-6a, S2-6b, S3-5, S3-8, S4-QR, S4-SERV, S4-HOURS, S4-SLOTS, S6-NOTIFY-INAPP, S8-REVIEWS and Phase Next protect', () => {
       expect([...TENANT_SCOPED_MODELS].sort()).toEqual([
         // S4-HOURS: vendor operating schedule and closures, scoped by vendor_id.
         'BusinessHour',
@@ -177,6 +177,12 @@ describe('tenant context', () => {
         // registry comment for why it was added in the same PR as the table,
         // not discovered afterward.
         'PickupToken',
+        // Phase Next: PreorderCampaign is vendor-owned full CRUD; PreorderReservation
+        // joins the registry only for the vendor's own demand-summary read on the
+        // wrapped `prisma` client — writes stay on the unwrapped `leenmart_checkout`
+        // path (see `tenant-context.ts`'s own comment on both).
+        'PreorderCampaign',
+        'PreorderReservation',
         'Product',
         'ProductMedia',
         // S2-6b: the worker writes these under a tenant context of its own,

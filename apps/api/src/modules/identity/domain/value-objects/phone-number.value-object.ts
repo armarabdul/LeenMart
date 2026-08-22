@@ -13,7 +13,12 @@ export class PhoneNumber {
     const normalized = value.trim();
     if (!PHONE_PATTERN.test(normalized)) {
       throw new InvalidPhoneError({
-        details: [{ field: 'phone', issue: 'must be a valid Indian mobile number in E.164 format (+91XXXXXXXXXX)' }],
+        details: [
+          {
+            field: 'phone',
+            issue: 'must be a valid Indian mobile number in E.164 format (+91XXXXXXXXXX)',
+          },
+        ],
       });
     }
     return new PhoneNumber(normalized);

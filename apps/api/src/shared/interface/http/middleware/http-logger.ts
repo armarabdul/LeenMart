@@ -24,7 +24,8 @@ export const createHttpLogger = (logger: PinoLogger): HttpLogger =>
       if (res.statusCode >= 400) return 'warn';
       return 'info';
     },
-    customSuccessMessage: (req, res) => `${req.method ?? 'UNKNOWN'} ${req.url ?? ''} ${res.statusCode}`,
+    customSuccessMessage: (req, res) =>
+      `${req.method ?? 'UNKNOWN'} ${req.url ?? ''} ${res.statusCode}`,
     customErrorMessage: (req, res, error) =>
       `${req.method ?? 'UNKNOWN'} ${req.url ?? ''} ${res.statusCode} — ${error.message}`,
     serializers: {

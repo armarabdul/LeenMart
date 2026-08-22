@@ -8,6 +8,7 @@ import { toMfaSecretId } from '../../domain/value-objects/mfa-secret-id.value-ob
 import type { MfaSecretRepository } from '../../domain/repositories/mfa-secret.repository.js';
 import type { TotpService } from '../../domain/services/totp.service.js';
 import type { MfaSecretCipher } from '../../domain/services/mfa-secret-cipher.service.js';
+import type { User } from '../../domain/entities/user.entity.js';
 import type { PasswordHasher } from '../ports/password-hasher.port.js';
 import type { UserRepository } from '../ports/user-repository.port.js';
 
@@ -50,18 +51,8 @@ export interface AdminMfaEnrollDeps {
 export class AdminMfaEnrollUseCase {
   constructor(private readonly deps: AdminMfaEnrollDeps) {}
 
-  async execute(input: AdminMfaEnrollInput): Promise<AdminMfaEnrollResult> {
-    const {
-      userRepository,
-      passwordHasher,
-      mfaSecretRepository,
-      totpService,
-      mfaSecretCipher,
-      idGenerator,
-      clock,
-      issuer,
-      logger,
-    } = this.deps;
+  private async fetchAndValidateAdmin(input: AdminMfaEnrollInput): Promise<User> {
+    const { userRepository, passwordHasher, mfaSecretRepository, logger } = this.deps;
 
     const user = await userRepository.findByEmail(input.email);
     if (!user?.passwordHash) {
@@ -89,6 +80,22 @@ export class AdminMfaEnrollUseCase {
       throw new InvalidCredentialsError();
     }
 
+    return user;
+  }
+
+  async execute(input: AdminMfaEnrollInput): Promise<AdminMfaEnrollResult> {
+    const {
+      mfaSecretRepository,
+      totpService,
+      mfaSecretCipher,
+      idGenerator,
+      clock,
+      issuer,
+      logger,
+    } = this.deps;
+
+    const user = await this.fetchAndValidateAdmin(input);
+
     const now = clock.now();
     const rawSecret = totpService.generateSecret();
     const mfaSecret = MfaSecret.enroll({
@@ -101,9 +108,6 @@ export class AdminMfaEnrollUseCase {
     try {
       await mfaSecretRepository.create(mfaSecret);
     } catch (error) {
-      // Lost a race against a concurrent enrollment attempt for the same
-      // admin — the database's unique constraint is the actual arbiter;
-      // this is not distinguishable from any other refusal above.
       if (error instanceof MfaSecretAlreadyExistsError) {
         logger.warn(
           { userId: user.id },

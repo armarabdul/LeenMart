@@ -42,7 +42,9 @@ export class Money {
       // sides to `never` inside this (currently unreachable) branch — a
       // consequence of the type, not the runtime value, which is why the
       // interpolation is wrapped rather than the check removed.
-      throw new TypeError(`Currency mismatch: ${String(this.currency)} vs ${String(other.currency)}`);
+      throw new TypeError(
+        `Currency mismatch: ${String(this.currency)} vs ${String(other.currency)}`,
+      );
     }
   }
 

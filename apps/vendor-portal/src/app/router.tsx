@@ -28,6 +28,21 @@ const VendorProductEditPage = lazy(() =>
     default: module.VendorProductEditPage,
   })),
 );
+const VendorPreorderCampaignsPage = lazy(() =>
+  import('@/pages/VendorPreorderCampaignsPage').then((module) => ({
+    default: module.VendorPreorderCampaignsPage,
+  })),
+);
+const VendorPreorderCampaignCreatePage = lazy(() =>
+  import('@/pages/VendorPreorderCampaignCreatePage').then((module) => ({
+    default: module.VendorPreorderCampaignCreatePage,
+  })),
+);
+const VendorPreorderCampaignDetailPage = lazy(() =>
+  import('@/pages/VendorPreorderCampaignDetailPage').then((module) => ({
+    default: module.VendorPreorderCampaignDetailPage,
+  })),
+);
 const VendorOrdersPage = lazy(() =>
   import('@/pages/VendorOrdersPage').then((module) => ({ default: module.VendorOrdersPage })),
 );
@@ -83,6 +98,15 @@ const router = createBrowserRouter([
           { path: '/products', element: withBoundary(<VendorProductsPage />) },
           { path: '/products/new', element: withBoundary(<VendorProductCreatePage />) },
           { path: '/products/:id', element: withBoundary(<VendorProductEditPage />) },
+          { path: '/preorder-campaigns', element: withBoundary(<VendorPreorderCampaignsPage />) },
+          {
+            path: '/preorder-campaigns/new',
+            element: withBoundary(<VendorPreorderCampaignCreatePage />),
+          },
+          {
+            path: '/preorder-campaigns/:id',
+            element: withBoundary(<VendorPreorderCampaignDetailPage />),
+          },
           { path: '/notifications', element: withBoundary(<NotificationsPage />) },
         ],
       },

@@ -69,10 +69,7 @@ export class ForbiddenError extends AppError {
   readonly kind = 'FORBIDDEN' as const;
   readonly code: string;
 
-  constructor(
-    message = 'You do not have access to this resource.',
-    options: AppErrorOptions = {},
-  ) {
+  constructor(message = 'You do not have access to this resource.', options: AppErrorOptions = {}) {
     super(message, options);
     this.code = options.code ?? 'FORBIDDEN';
   }

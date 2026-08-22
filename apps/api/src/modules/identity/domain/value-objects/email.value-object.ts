@@ -12,7 +12,11 @@ export class Email {
 
   static create(value: string): Email {
     const normalized = value.trim().toLowerCase();
-    if (normalized.length === 0 || normalized.length > MAX_EMAIL_LENGTH || !EMAIL_PATTERN.test(normalized)) {
+    if (
+      normalized.length === 0 ||
+      normalized.length > MAX_EMAIL_LENGTH ||
+      !EMAIL_PATTERN.test(normalized)
+    ) {
       throw new InvalidEmailError({
         details: [{ field: 'email', issue: 'must be a valid email address' }],
       });

@@ -47,6 +47,9 @@ export const AppLayout = (): JSX.Element => {
               <NavLink to="/products" className={navLinkClassName}>
                 Products
               </NavLink>
+              <NavLink to="/preorder-campaigns" className={navLinkClassName}>
+                Preorders
+              </NavLink>
               <NavLink to="/orders" end className={navLinkClassName}>
                 Orders
               </NavLink>

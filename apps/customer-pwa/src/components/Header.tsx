@@ -13,6 +13,7 @@ import { env } from '@/shared/config/env';
 const PRIMARY_NAV = [
   { to: '/', label: 'Home', end: true },
   { to: '/catalogue', label: 'Catalogue', end: false },
+  { to: '/preorders', label: 'Preorders', end: false },
 ] as const;
 
 const desktopNavClassName = ({ isActive }: { isActive: boolean }): string =>
@@ -218,6 +219,9 @@ export const Header = (): JSX.Element => {
             <>
               <NavLink to="/orders" className={drawerNavClassName} onClick={closeMenu}>
                 My orders
+              </NavLink>
+              <NavLink to="/my-reservations" className={drawerNavClassName} onClick={closeMenu}>
+                My reservations
               </NavLink>
               <NavLink to="/notifications" className={drawerNavClassName} onClick={closeMenu}>
                 Notifications

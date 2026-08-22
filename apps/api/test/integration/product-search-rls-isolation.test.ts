@@ -321,9 +321,11 @@ describe('leenmart_public RLS isolation (S2-7)', () => {
       // (cart eligibility/availability checks) — nothing else.
       expect(rows.map((row) => row.relname).sort()).toEqual([
         'inventory',
+        'preorder_campaigns',
         'product_media',
         'product_variants',
         'products',
+        'reviews',
       ]);
     });
   });

@@ -1,6 +1,12 @@
 import type { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
-import { type Clock, type ErrorDetail, type ErrorKind, isAppError, RateLimitError } from '@leen-mart/domain-kit';
+import {
+  type Clock,
+  type ErrorDetail,
+  type ErrorKind,
+  isAppError,
+  RateLimitError,
+} from '@leen-mart/domain-kit';
 import type { Logger as PinoLogger } from 'pino';
 import { getRequestId } from './request-context.js';
 
@@ -78,17 +84,15 @@ export const createErrorHandler =
     if (error instanceof ZodError) {
       const details = zodToDetails(error);
       logger.info({ requestId, details }, 'Request failed validation');
-      res
-        .status(STATUS_BY_KIND.VALIDATION)
-        .json(
-          buildBody({
-            code: 'VALIDATION_FAILED',
-            message: 'The request payload failed validation.',
-            details,
-            requestId,
-            now,
-          }),
-        );
+      res.status(STATUS_BY_KIND.VALIDATION).json(
+        buildBody({
+          code: 'VALIDATION_FAILED',
+          message: 'The request payload failed validation.',
+          details,
+          requestId,
+          now,
+        }),
+      );
       return;
     }
 
@@ -109,23 +113,23 @@ export const createErrorHandler =
         logger.info({ requestId, code: error.code }, error.message);
       }
 
-      res.status(status).json(buildBody({ code: error.code, message: error.message, details, requestId, now }));
+      res
+        .status(status)
+        .json(buildBody({ code: error.code, message: error.message, details, requestId, now }));
       return;
     }
 
     // Anything reaching here is a bug. Log everything, disclose nothing.
     logger.error({ requestId, err: error }, 'Unhandled error');
-    res
-      .status(STATUS_BY_KIND.INTERNAL)
-      .json(
-        buildBody({
-          code: 'INTERNAL_ERROR',
-          message: 'An unexpected error occurred. Quote the request id if you contact support.',
-          details: undefined,
-          requestId,
-          now,
-        }),
-      );
+    res.status(STATUS_BY_KIND.INTERNAL).json(
+      buildBody({
+        code: 'INTERNAL_ERROR',
+        message: 'An unexpected error occurred. Quote the request id if you contact support.',
+        details: undefined,
+        requestId,
+        now,
+      }),
+    );
   };
 
 /** Terminal 404 handler for unmatched routes. */

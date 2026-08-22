@@ -19,6 +19,7 @@ import { createCatalogueModule } from './modules/catalogue/index.js';
 import { createCustomerModule } from './modules/customer/index.js';
 import { createLedgerModule } from './modules/ledger/index.js';
 import { createOrderModule, createOrderStreamModule } from './modules/order/index.js';
+import { createPreorderModule } from './modules/preorder/index.js';
 import { createReviewModule } from './modules/review/index.js';
 import {
   createIdentityModule,
@@ -111,6 +112,52 @@ const mountAdminVendorRouter = (app: Express, vendorModule: VendorModule): void 
 };
 
 /**
+ * The ledger module (SDD 10.3, S3-7; vendor read surface added S3-8) and the
+ * order surface (SDD 9.4, S3-3A) — built together because the ledger's own
+ * `postOrderPaymentJournalsUseCase` is `orderModule`'s only writer-side
+ * caller, so both collaborators come from one instance. Split out of
+ * `mountBusinessModules` purely to keep that function under this file's
+ * max-lines-per-function budget, the same reason `mountReviewModule` was.
+ */
+const mountOrderAndLedgerModules = (
+  app: Express,
+  params: {
+    prisma: Container['prisma'];
+    publicPrisma: Container['publicPrisma'];
+    checkoutPrisma: Container['checkoutPrisma'];
+    env: Container['env'];
+    accessTokenService: AccessTokenService;
+    sessionDenylist: SessionDenylist;
+    idGenerator: Container['idGenerator'];
+    clock: Container['clock'];
+    logger: Container['logger'];
+  },
+  resolveVendorTenant: VendorTenantResolver,
+): void => {
+  const ledgerModule = createLedgerModule({ ...params, resolveVendorTenant });
+
+  // The order surface reads/writes on the dedicated `leenmart_checkout`
+  // credential rather than any tenant context — see `order.module.ts`'s own
+  // comment. D-1's own pattern: the resolver, and nothing else, crosses from
+  // `vendor` to `order` (SDD 5.1).
+  const orderModule = createOrderModule({
+    ...params,
+    resolveVendorTenant,
+    postOrderPaymentJournalsUseCase: ledgerModule.postOrderPaymentJournalsUseCase,
+  });
+  app.use('/api/v1/orders', orderModule.router);
+  // The vendor-facing order surface (SDD 9.4, S3-5): authenticated,
+  // tenant-scoped on `leenmart_app`, mounted apart from the customer router
+  // above — a distinct credential and a distinct resource shape (SubOrder,
+  // not Order).
+  app.use('/api/v1/vendor/orders', orderModule.vendorRouter);
+  // The vendor earnings statement (SDD 10.3, S3-8): authenticated,
+  // tenant-scoped on `leenmart_app`, read-only — a ledger-derived report, not
+  // a payout or settlement surface.
+  app.use('/api/v1/vendor/earnings', ledgerModule.vendorRouter);
+};
+
+/**
  * Mounts every module beyond `identity` itself. Split out of `createApp`
  * purely to stay under this file's max-lines-per-function budget — each of
  * these modules shares identity's token verifier *and* its session denylist
@@ -198,40 +245,13 @@ const mountBusinessModules = (
   // to `/api/v1/catalogue/*` rather than nested under it, auth optional.
   app.use('/api/v1/search', catalogueModule.publicSearchRouter);
 
-  // The ledger module (SDD 10.3, S3-7; vendor read surface added S3-8).
-  // Built once here, ahead of `orderModule`, so both its collaborators are
-  // handed out from a single instance: the posting use case goes into
-  // `orderModule` (the ledger's only writer-side caller), and its own
-  // vendor-facing router is mounted directly below.
-  const ledgerModule = createLedgerModule({
-    ...params,
-    resolveVendorTenant: vendorModule.resolveVendorTenant,
-  });
-
-  // The order surface (SDD 9.4, S3-3A): authenticated, customer-scoped,
-  // reading/writing on the dedicated `leenmart_checkout` credential rather
-  // than any tenant context — see `order.module.ts`'s own comment.
-  const orderModule = createOrderModule({
-    ...params,
-    // D-1's own pattern, repeated here: the resolver, and nothing else,
-    // crosses from `vendor` to `order` (SDD 5.1).
-    resolveVendorTenant: vendorModule.resolveVendorTenant,
-    postOrderPaymentJournalsUseCase: ledgerModule.postOrderPaymentJournalsUseCase,
-  });
-  app.use('/api/v1/orders', orderModule.router);
-  // The vendor-facing order surface (SDD 9.4, S3-5): authenticated,
-  // tenant-scoped on `leenmart_app`, mounted apart from the customer router
-  // above — a distinct credential and a distinct resource shape (SubOrder,
-  // not Order).
-  app.use('/api/v1/vendor/orders', orderModule.vendorRouter);
-  // The vendor earnings statement (SDD 10.3, S3-8): authenticated,
-  // tenant-scoped on `leenmart_app`, read-only — a ledger-derived report, not
-  // a payout or settlement surface.
-  app.use('/api/v1/vendor/earnings', ledgerModule.vendorRouter);
+  mountOrderAndLedgerModules(app, params, vendorModule.resolveVendorTenant);
 
   mountOrderStreamRouter(app, params, vendorModule.resolveVendorTenant);
 
   mountReviewModule(app, params, vendorModule.resolveVendorTenant);
+
+  mountPreorderModule(app, params, vendorModule.resolveVendorTenant);
 
   // Further business modules mount here as they are built.
 };
@@ -265,6 +285,36 @@ const mountReviewModule = (
   app.use('/api/v1/me', reviewModule.router);
   app.use('/api/v1/catalogue', reviewModule.publicRouter);
   app.use('/api/v1/admin/reviews', reviewModule.adminRouter);
+};
+
+/**
+ * The preorder surface (SDD §14, Phase Next): vendor campaign CRUD on
+ * `leenmart_app` (tenant-scoped, mirrors `catalogueModule.vendorProductRouter`),
+ * unauthenticated public browse on `leenmart_public` (mirrors
+ * `catalogueModule.publicProductRouter`), and the customer reservation/
+ * payment surface on `leenmart_checkout` (mirrors `orderModule.router`).
+ * Split out of `mountBusinessModules` purely to stay under this file's
+ * max-lines-per-function budget, the same reason `mountReviewModule` was.
+ */
+const mountPreorderModule = (
+  app: Express,
+  params: {
+    prisma: Container['prisma'];
+    publicPrisma: Container['publicPrisma'];
+    checkoutPrisma: Container['checkoutPrisma'];
+    redis: Container['redis'];
+    accessTokenService: AccessTokenService;
+    sessionDenylist: SessionDenylist;
+    idGenerator: Container['idGenerator'];
+    clock: Container['clock'];
+    logger: Container['logger'];
+  },
+  resolveVendorTenant: VendorTenantResolver,
+): void => {
+  const preorderModule = createPreorderModule({ ...params, resolveVendorTenant });
+  app.use('/api/v1/vendor/preorder-campaigns', preorderModule.vendorRouter);
+  app.use('/api/v1/preorders', preorderModule.publicRouter);
+  app.use('/api/v1/preorder-reservations', preorderModule.reservationRouter);
 };
 
 /**

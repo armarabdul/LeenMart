@@ -7,7 +7,11 @@ export interface OtpVerifiedEvent extends IdentityDomainEvent<'identity.otp.veri
   readonly userId: UserId;
 }
 
-export const createOtpVerifiedEvent = (props: { otpId: OtpId; userId: UserId; now: Date }): OtpVerifiedEvent => ({
+export const createOtpVerifiedEvent = (props: {
+  otpId: OtpId;
+  userId: UserId;
+  now: Date;
+}): OtpVerifiedEvent => ({
   type: 'identity.otp.verified',
   boundedContext: 'identity',
   occurredAt: props.now,

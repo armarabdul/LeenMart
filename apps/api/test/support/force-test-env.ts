@@ -26,4 +26,31 @@
  * already correctly pointed at `leenmart_test` — `dotenv`'s own
  * non-override default then leaves it alone.
  */
+import { beforeEach } from 'vitest';
+import { Redis } from 'ioredis';
 import '../../src/shared/config/env.js';
+
+let redisClient: Redis | null = null;
+
+const getRedisClient = (): Redis => {
+  if (!redisClient) {
+    const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
+    redisClient = new Redis(redisUrl, { maxRetriesPerRequest: null, lazyConnect: true });
+  }
+  return redisClient;
+};
+
+beforeEach(async () => {
+  try {
+    const client = getRedisClient();
+    if (client.status === 'wait') {
+      await client.connect();
+    }
+    const keys = await client.keys('rl:*');
+    if (keys.length > 0) {
+      await client.del(...keys);
+    }
+  } catch {
+    // Ignore Redis errors if Redis is not active in current test context
+  }
+});

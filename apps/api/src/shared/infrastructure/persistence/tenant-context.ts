@@ -80,6 +80,16 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   // `Notification` — a customer has no vendor and writes/reads their own
   // reviews by `app.user_id` alone.
   'Review',
+  // Phase Next (preorder): `PreorderCampaign` is vendor-owned, RLS-scoped by
+  // `app.vendor_id`, the same shape `DeliverySlot` already establishes.
+  // `PreorderReservation` is written exclusively on the unwrapped
+  // `leenmart_checkout` credential (mirroring `Order`/`SubOrder`/`OrderItem`'s
+  // own original shape) — it joins this set only for the vendor's own
+  // demand-summary *read*, built on the wrapped `prisma` client, which needs
+  // `app.vendor_id` set for `preorder_reservations_vendor_select` to see
+  // anything at all.
+  'PreorderCampaign',
+  'PreorderReservation',
 ]);
 
 /**

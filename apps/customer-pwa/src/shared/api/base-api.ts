@@ -92,7 +92,16 @@ export const baseApi = createApi({
   baseQuery: baseQueryWithReauth,
   // Declared centrally so features can invalidate across module boundaries
   // without importing each other.
-  tagTypes: ['Health', 'Cart', 'Address', 'Order', 'Notification', 'Review'],
+  tagTypes: [
+    'Health',
+    'Cart',
+    'Address',
+    'Order',
+    'Notification',
+    'Review',
+    'PreorderCampaign',
+    'PreorderReservation',
+  ],
   endpoints: () => ({}),
   refetchOnReconnect: true,
 });

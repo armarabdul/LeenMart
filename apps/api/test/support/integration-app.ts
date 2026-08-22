@@ -97,6 +97,26 @@ export const disposeIntegrationHarness = async (
   await db.productMediaVariant.deleteMany({ where: { vendorId: { in: vendorIds } } });
   await db.productMedia.deleteMany({ where: { vendorId: { in: vendorIds } } });
   await db.product.deleteMany({ where: { vendorId: { in: vendorIds } } });
+
+  // Preorder campaigns/reservations/payment-attempts (Phase Next) are all
+  // `RESTRICT` against `vendors`/`users` — same child-first reasoning as
+  // orders above. A reservation can be owned by a customer whose vendor is
+  // *not* one of `vendorIds` (the seeded campaign's own vendor), so this
+  // scopes by `ids` first and `vendorIds` second to catch both directions.
+  const campaigns = await db.preorderCampaign.findMany({
+    where: { vendorId: { in: vendorIds } },
+    select: { id: true },
+  });
+  const campaignIds = campaigns.map((campaign) => campaign.id);
+  const reservations = await db.preorderReservation.findMany({
+    where: { OR: [{ customerId: { in: ids } }, { campaignId: { in: campaignIds } }] },
+    select: { id: true },
+  });
+  const reservationIds = reservations.map((reservation) => reservation.id);
+  await db.preorderPaymentAttempt.deleteMany({ where: { reservationId: { in: reservationIds } } });
+  await db.preorderReservation.deleteMany({ where: { id: { in: reservationIds } } });
+  await db.preorderCampaign.deleteMany({ where: { id: { in: campaignIds } } });
+
   await db.vendorProfile.deleteMany({ where: { id: { in: vendorIds } } });
   await db.address.deleteMany({ where: { userId: { in: ids } } });
   await db.user.deleteMany({ where: { id: { in: ids } } });

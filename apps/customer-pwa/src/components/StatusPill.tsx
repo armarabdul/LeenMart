@@ -14,7 +14,9 @@ export const StatusPill = ({ status }: StatusPillProps): JSX.Element => {
     >
       <span
         aria-hidden="true"
-        className={isUp ? 'h-1.5 w-1.5 rounded-full bg-emerald-600' : 'h-1.5 w-1.5 rounded-full bg-red-600'}
+        className={
+          isUp ? 'h-1.5 w-1.5 rounded-full bg-emerald-600' : 'h-1.5 w-1.5 rounded-full bg-red-600'
+        }
       />
       {isUp ? 'Up' : 'Down'}
     </span>

@@ -40,6 +40,24 @@ const OrderHistoryPage = lazy(() =>
 const NotificationsPage = lazy(() =>
   import('@/pages/NotificationsPage').then((module) => ({ default: module.NotificationsPage })),
 );
+const PreorderCampaignsPage = lazy(() =>
+  import('@/pages/PreorderCampaignsPage').then((module) => ({
+    default: module.PreorderCampaignsPage,
+  })),
+);
+const PreorderCampaignDetailPage = lazy(() =>
+  import('@/pages/PreorderCampaignDetailPage').then((module) => ({
+    default: module.PreorderCampaignDetailPage,
+  })),
+);
+const MyReservationsPage = lazy(() =>
+  import('@/pages/MyReservationsPage').then((module) => ({ default: module.MyReservationsPage })),
+);
+const ReservationDetailPage = lazy(() =>
+  import('@/pages/ReservationDetailPage').then((module) => ({
+    default: module.ReservationDetailPage,
+  })),
+);
 const NotFoundPage = lazy(() =>
   import('@/pages/NotFoundPage').then((module) => ({ default: module.NotFoundPage })),
 );
@@ -86,6 +104,11 @@ const router = createBrowserRouter([
       // Public: browsing a product never requires a session — only adding
       // it to the cart does (`AddToCartButton` handles that redirect itself).
       { path: '/products/:id', element: withBoundary(<ProductDetailPage />) },
+      // Public: browsing a campaign never requires a session — only
+      // reserving against it does (`PreorderCampaignDetailPage` shows a
+      // "log in to reserve" prompt itself rather than redirecting away).
+      { path: '/preorders', element: withBoundary(<PreorderCampaignsPage />) },
+      { path: '/preorders/:campaignId', element: withBoundary(<PreorderCampaignDetailPage />) },
       // `/cart` needs both `AppLayout`'s chrome and `RequireAuth`'s guard, so
       // `RequireAuth` nests here instead of standing alongside `AppLayout`
       // the way it does for `/account` below — that route deliberately keeps
@@ -97,6 +120,11 @@ const router = createBrowserRouter([
           { path: '/checkout', element: withBoundary(<CheckoutPage />) },
           { path: '/orders', element: withBoundary(<OrderHistoryPage />) },
           { path: '/orders/:id', element: withBoundary(<OrderConfirmationPage />) },
+          { path: '/my-reservations', element: withBoundary(<MyReservationsPage />) },
+          {
+            path: '/my-reservations/:reservationId',
+            element: withBoundary(<ReservationDetailPage />),
+          },
           { path: '/notifications', element: withBoundary(<NotificationsPage />) },
         ],
       },

@@ -455,6 +455,100 @@ const seedVendorSubOrder = async (ctx: RouteTestContext, owner: Actor): Promise<
 const snapshotVendorSubOrder = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
   ctx.db.subOrder.findUnique({ where: { id: resourceId } });
 
+// --- preorder campaigns (Phase Next) ---------------------------------------
+
+let preorderSeq = 0;
+
+const VALID_CAMPAIGN_WINDOW = (): {
+  opensAt: string;
+  orderCutoffAt: string;
+  fulfilmentWindowStart: string;
+  fulfilmentWindowEnd: string;
+} => {
+  const now = Date.now();
+  return {
+    opensAt: new Date(now - 60_000).toISOString(),
+    orderCutoffAt: new Date(now + 7 * 86_400_000).toISOString(),
+    fulfilmentWindowStart: new Date(now + 8 * 86_400_000).toISOString(),
+    fulfilmentWindowEnd: new Date(now + 9 * 86_400_000).toISOString(),
+  };
+};
+
+/** Creates one `DRAFT` preorder campaign owned by `owner` (a vendor), against a fresh variant of their own. */
+const seedCampaign = async (ctx: RouteTestContext, owner: Actor): Promise<string> => {
+  const categoryId = await seedCategoryRow(ctx);
+  const createResponse = await authed(request(ctx.app).post('/api/v1/vendor/products'), owner)
+    .send({
+      categoryId,
+      name: `Preorder Matrix Product ${(preorderSeq += 1)}`,
+      variant: {
+        sku: `PREORDER-MATRIX-${Date.now()}-${preorderSeq}`,
+        name: 'Default',
+        price: { amount: '19900', currency: 'INR' },
+        unitOfMeasure: 'per piece',
+        quantityStep: 1,
+      },
+    })
+    .expect(201);
+  const productId = (createResponse.body as { data: { product: { id: string } } }).data.product.id;
+  const variantRow = await ctx.db.productVariant.findFirstOrThrow({ where: { productId } });
+  // `CreateCampaignUseCase`'s own eligibility check reads the variant through
+  // `publicPrisma` (`leenmart_public`) — same reasoning `seedCartItem`/
+  // `seedOrder` already record for why a DRAFT product must be flipped
+  // APPROVED directly via `ctx.db` before it is visible to that read.
+  await ctx.db.product.update({ where: { id: productId }, data: { status: 'APPROVED' } });
+
+  const response = await authed(request(ctx.app).post('/api/v1/vendor/preorder-campaigns'), owner)
+    .send({
+      variantId: variantRow.id,
+      ...VALID_CAMPAIGN_WINDOW(),
+      totalQuantity: 10,
+      advancePercent: 20,
+      maxPerCustomer: 5,
+      fulfilmentMode: 'DELIVERY',
+    })
+    .expect(201);
+  return (response.body as { data: { id: string } }).data.id;
+};
+
+const snapshotCampaign = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
+  ctx.db.preorderCampaign.findUnique({ where: { id: resourceId } });
+
+/**
+ * `seedCampaign`, additionally flipped `OPEN` directly via `ctx.db` —
+ * mirrors `seedOrder`'s own reasoning for setting `vendorProfile.status`
+ * directly: `SCHEDULED -> OPEN` has no HTTP path a test can reach (it is the
+ * lifecycle sweep worker's own job), so the matrix sets it the same way
+ * every other "no HTTP path to this state" fixture in this file already
+ * does.
+ */
+const seedOpenCampaign = async (ctx: RouteTestContext, owner: Actor): Promise<string> => {
+  const campaignId = await seedCampaign(ctx, owner);
+  await ctx.db.preorderCampaign.update({ where: { id: campaignId }, data: { status: 'OPEN' } });
+  return campaignId;
+};
+
+/**
+ * Seeds one real, reserved preorder reservation owned by `owner` (a
+ * customer) against a fresh `OPEN` campaign from a matrix-dedicated vendor —
+ * same "one attacker, one victim, cached vendor" reasoning `seedCartItem`
+ * already uses.
+ */
+const seedReservation = async (ctx: RouteTestContext, owner: Actor): Promise<string> => {
+  const vendor = await vendorActor(ctx, 'preorder-matrix-vendor');
+  const campaignId = await seedOpenCampaign(ctx, vendor);
+  const addressId = await seedAddress(ctx, owner);
+
+  const response = await authed(request(ctx.app).post('/api/v1/preorder-reservations'), owner)
+    .set('Idempotency-Key', `matrix-${randomUUID()}`)
+    .send({ campaignId, quantity: 1, fulfilmentMode: 'DELIVERY', addressId })
+    .expect(201);
+  return (response.body as { data: { id: string } }).data.id;
+};
+
+const snapshotReservation = (ctx: RouteTestContext, resourceId: string): Promise<unknown> =>
+  ctx.db.preorderReservation.findUnique({ where: { id: resourceId } });
+
 /**
  * Every route the application actually mounts, classified.
  *
@@ -1518,6 +1612,212 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     path: '/:reviewId/decision',
     classification: 'ADMIN',
     why: 'Admin approve/hide decision across every customer’s review (MODERATE_REVIEWS, SDD 8.2).',
+  },
+
+  // --- vendor preorder campaigns: /api/v1/vendor/preorder-campaigns (Phase Next) ---
+  // Same tenant-scoped shape as /api/v1/vendor/products: `authenticate` +
+  // `tenantContext` + `CREATE_PREORDER_CAMPAIGN`. Each TENANT_OWNED entry
+  // supplies `vendorActor`, for the same reason the product routes do.
+  {
+    method: 'POST',
+    prefix: '/api/v1/vendor/preorder-campaigns',
+    path: '/',
+    classification: 'SELF_SCOPED',
+    why: 'Creates under the caller’s own tenant; the vendor comes from the tenant context, never the body.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendor/preorder-campaigns',
+    path: '/',
+    classification: 'SELF_SCOPED',
+    why: 'Lists only the caller’s own campaigns — the tenant-scoped client cannot return anyone else’s.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendor/preorder-campaigns',
+    path: '/:campaignId',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied campaign id and reads it.',
+    actor: vendorActor,
+    seed: seedCampaign,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).get(`/api/v1/vendor/preorder-campaigns/${resourceId}`), actor),
+  },
+  {
+    method: 'PATCH',
+    prefix: '/api/v1/vendor/preorder-campaigns',
+    path: '/:campaignId',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied campaign id and writes to it.',
+    actor: vendorActor,
+    seed: seedCampaign,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).patch(`/api/v1/vendor/preorder-campaigns/${resourceId}`), actor).send(
+        {
+          maxPerCustomer: 99,
+        },
+      ),
+    snapshot: snapshotCampaign,
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/vendor/preorder-campaigns',
+    path: '/:campaignId/cancel',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied campaign id and cancels it.',
+    actor: vendorActor,
+    seed: seedCampaign,
+    attempt: (ctx, actor, resourceId) =>
+      authed(
+        request(ctx.app).post(`/api/v1/vendor/preorder-campaigns/${resourceId}/cancel`),
+        actor,
+      ).send({
+        reason: 'Matrix hijack attempt',
+      }),
+    snapshot: snapshotCampaign,
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/vendor/preorder-campaigns',
+    path: '/:campaignId/demand-summary',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied campaign id and reads its aggregate demand.',
+    actor: vendorActor,
+    seed: seedCampaign,
+    attempt: (ctx, actor, resourceId) =>
+      authed(
+        request(ctx.app).get(`/api/v1/vendor/preorder-campaigns/${resourceId}/demand-summary`),
+        actor,
+      ),
+  },
+
+  // --- public preorders: /api/v1/preorders (Phase Next) ---
+  // Unauthenticated and tenant-free, the same underlying reason
+  // `/api/v1/catalogue/products/:id` is PUBLIC: `preorder_campaigns_public_read`
+  // (status != 'DRAFT') is what confines this route on `leenmart_public`.
+  {
+    method: 'GET',
+    prefix: '/api/v1/preorders',
+    path: '/',
+    classification: 'PUBLIC',
+    why: 'Unauthenticated public campaign browse; RLS on leenmart_public (preorder_campaigns_public_read) confines results to non-DRAFT rows regardless of tenant.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/preorders',
+    path: '/:campaignId',
+    classification: 'PUBLIC',
+    why: 'Unauthenticated public campaign detail; same RLS confinement as the listing above.',
+  },
+
+  // --- preorder reservations: /api/v1/preorder-reservations (Phase Next) ---
+  // Shaped like /api/v1/orders (financial, customer-owned) rather than
+  // /api/v1/me/cart: PLACE_ORDER/VIEW_OWN_ORDERS/CANCEL_OWN_ORDER, reused
+  // rather than a new permission. Every TENANT_OWNED entry defaults to a
+  // plain customer `owner` (`seedReservation`'s own doc comment).
+  {
+    method: 'POST',
+    prefix: '/api/v1/preorder-reservations',
+    path: '/',
+    classification: 'SELF_SCOPED',
+    why: 'Creates under the caller’s own principal; takes no resource id in the URL — campaignId in the body names a campaign, not another customer’s resource.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/preorder-reservations',
+    path: '/',
+    classification: 'SELF_SCOPED',
+    why: 'Lists only the caller’s own reservations; takes no resource id.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/preorder-reservations',
+    path: '/:id',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied reservation id and reads it.',
+    seed: seedReservation,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).get(`/api/v1/preorder-reservations/${resourceId}`), actor),
+    snapshot: snapshotReservation,
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/preorder-reservations',
+    path: '/:id/cancel',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied reservation id and cancels it.',
+    seed: seedReservation,
+    attempt: (ctx, actor, resourceId) =>
+      authed(request(ctx.app).post(`/api/v1/preorder-reservations/${resourceId}/cancel`), actor),
+    snapshot: snapshotReservation,
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/preorder-reservations',
+    path: '/:id/advance-payment/initiate',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied reservation id and starts an advance-payment attempt for it.',
+    seed: seedReservation,
+    attempt: (ctx, actor, resourceId) =>
+      authed(
+        request(ctx.app).post(
+          `/api/v1/preorder-reservations/${resourceId}/advance-payment/initiate`,
+        ),
+        actor,
+      ).set('Idempotency-Key', `matrix-${randomUUID()}`),
+    snapshot: snapshotReservation,
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/preorder-reservations',
+    path: '/:id/advance-payment/confirm',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied reservation id and confirms its advance payment — ownership is checked before any payment attempt lookup, so this refuses a non-owner regardless of whether one was ever initiated.',
+    seed: seedReservation,
+    attempt: (ctx, actor, resourceId) =>
+      authed(
+        request(ctx.app).post(
+          `/api/v1/preorder-reservations/${resourceId}/advance-payment/confirm`,
+        ),
+        actor,
+      )
+        .set('Idempotency-Key', `matrix-${randomUUID()}`)
+        .send({ testScenario: 'SUCCEEDED' }),
+    snapshot: snapshotReservation,
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/preorder-reservations',
+    path: '/:id/balance-payment/initiate',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied reservation id and starts a balance-payment attempt for it — refused on ownership before the reservation’s own CONFIRMED/outstanding-balance state is ever considered.',
+    seed: seedReservation,
+    attempt: (ctx, actor, resourceId) =>
+      authed(
+        request(ctx.app).post(
+          `/api/v1/preorder-reservations/${resourceId}/balance-payment/initiate`,
+        ),
+        actor,
+      ).set('Idempotency-Key', `matrix-${randomUUID()}`),
+    snapshot: snapshotReservation,
+  },
+  {
+    method: 'POST',
+    prefix: '/api/v1/preorder-reservations',
+    path: '/:id/balance-payment/confirm',
+    classification: 'TENANT_OWNED',
+    why: 'Accepts a client-supplied reservation id and confirms its balance payment — same ownership-before-anything-else refusal as advance-payment/confirm above.',
+    seed: seedReservation,
+    attempt: (ctx, actor, resourceId) =>
+      authed(
+        request(ctx.app).post(
+          `/api/v1/preorder-reservations/${resourceId}/balance-payment/confirm`,
+        ),
+        actor,
+      )
+        .set('Idempotency-Key', `matrix-${randomUUID()}`)
+        .send({ testScenario: 'SUCCEEDED' }),
+    snapshot: snapshotReservation,
   },
 ];
 

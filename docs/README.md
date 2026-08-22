@@ -1,9 +1,9 @@
 # Documentation
 
-| Path | Contents |
-|---|---|
-| `adr/` | Architecture decision records — one per significant decision |
-| `runbooks/` | One runbook per production alert |
+| Path        | Contents                                                     |
+| ----------- | ------------------------------------------------------------ |
+| `adr/`      | Architecture decision records — one per significant decision |
+| `runbooks/` | One runbook per production alert                             |
 
 The requirements gap analysis and the Software Design Document live alongside
 this repository as `01-requirements-gap-analysis.md` and

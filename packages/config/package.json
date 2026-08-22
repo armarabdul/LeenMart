@@ -17,7 +17,7 @@
     "tsconfig"
   ],
   "scripts": {
-    "build": "echo \"(config) nothing to build \u2014 presets are consumed as source\"",
+    "build": "echo \"(config) nothing to build — presets are consumed as source\"",
     "lint": "echo \"(config) no lintable sources\"",
     "typecheck": "echo \"(config) no typecheck\"",
     "test": "echo \"(config) no tests\"",

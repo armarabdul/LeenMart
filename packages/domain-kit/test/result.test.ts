@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { err, isErr, isOk, mapError, mapResult, ok, unwrap, unwrapOr } from '../src/result/result.js';
+import {
+  err,
+  isErr,
+  isOk,
+  mapError,
+  mapResult,
+  ok,
+  unwrap,
+  unwrapOr,
+} from '../src/result/result.js';
 
 describe('Result', () => {
   it('narrows a success', () => {

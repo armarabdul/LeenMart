@@ -8,6 +8,7 @@ import {
   createOrderSchedulerWorkerModule,
   createOrderStreamWorkerModule,
 } from './modules/order/index.js';
+import { createPreorderSchedulerWorkerModule } from './modules/preorder/index.js';
 import { createOutboxHandlerRegistry } from './shared/application/ports/outbox-handler.port.js';
 import { OutboxRelay } from './shared/application/services/outbox-relay.js';
 import { PrismaOutboxRelayStore } from './shared/infrastructure/persistence/prisma-outbox-relay-store.js';
@@ -79,7 +80,21 @@ const startScheduler = async (
     clock,
     logger,
   });
-  const schedulerRegistry = createScheduledJobRegistry([orderScheduler.pickupReminderJob]);
+  const preorderScheduler = createPreorderSchedulerWorkerModule({
+    prisma,
+    publicPrisma: container.publicPrisma,
+    checkoutPrisma,
+    redis: container.redis,
+    idGenerator,
+    clock,
+    logger,
+  });
+  const schedulerRegistry = createScheduledJobRegistry([
+    orderScheduler.pickupReminderJob,
+    preorderScheduler.campaignLifecycleJob,
+    preorderScheduler.reservationExpiryJob,
+    preorderScheduler.redisReconciliationJob,
+  ]);
   const schedulerQueue = createSchedulerQueue(bullRedis);
   await registerScheduledJobs(schedulerQueue, schedulerRegistry, logger);
   const schedulerWorker = createSchedulerWorker({

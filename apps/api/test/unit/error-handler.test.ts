@@ -10,7 +10,10 @@ import {
   RateLimitError,
   ValidationError,
 } from '@leen-mart/domain-kit';
-import { createErrorHandler, STATUS_BY_KIND } from '../../src/shared/interface/http/middleware/error-handler.js';
+import {
+  createErrorHandler,
+  STATUS_BY_KIND,
+} from '../../src/shared/interface/http/middleware/error-handler.js';
 
 const clock = new FixedClock(new Date('2026-01-01T00:00:00.000Z'));
 

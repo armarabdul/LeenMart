@@ -83,6 +83,7 @@ export const baseApi = createApi({
     'VendorProductVariant',
     'VendorInventory',
     'VendorProductMedia',
+    'PreorderCampaign',
   ],
   endpoints: () => ({}),
   refetchOnReconnect: true,

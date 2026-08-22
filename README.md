@@ -39,14 +39,14 @@ pnpm db:migrate
 pnpm dev
 ```
 
-| Service | URL |
-|---|---|
-| Customer PWA | http://localhost:5173 |
-| API | http://localhost:4000 |
-| Liveness | http://localhost:4000/healthz |
-| Readiness | http://localhost:4000/readyz |
+| Service       | URL                                                        |
+| ------------- | ---------------------------------------------------------- |
+| Customer PWA  | http://localhost:5173                                      |
+| API           | http://localhost:4000                                      |
+| Liveness      | http://localhost:4000/healthz                              |
+| Readiness     | http://localhost:4000/readyz                               |
 | MinIO console | http://localhost:9001 (`leenmart` / `leenmart-dev-secret`) |
-| Mailpit | http://localhost:8025 |
+| Mailpit       | http://localhost:8025                                      |
 
 The PWA home page renders live platform status. If it shows every dependency as
 **Up**, the whole stack is wired correctly.
@@ -92,17 +92,17 @@ leen-mart/
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `pnpm dev` | Run API and PWA together |
-| `pnpm build` | Build every package in dependency order |
-| `pnpm lint` | ESLint, including the architecture dependency rule |
-| `pnpm typecheck` | `tsc --noEmit` across the workspace |
-| `pnpm test` | Unit tests (fast, no I/O) |
-| `pnpm format` | Prettier write |
-| `pnpm infra:up` / `infra:down` / `infra:reset` | Local backing services |
-| `pnpm db:generate` / `db:migrate` / `db:studio` | Prisma |
-| `pnpm --filter @leen-mart/api test:integration` | Integration tests (needs `infra:up`) |
+| Command                                         | What it does                                       |
+| ----------------------------------------------- | -------------------------------------------------- |
+| `pnpm dev`                                      | Run API and PWA together                           |
+| `pnpm build`                                    | Build every package in dependency order            |
+| `pnpm lint`                                     | ESLint, including the architecture dependency rule |
+| `pnpm typecheck`                                | `tsc --noEmit` across the workspace                |
+| `pnpm test`                                     | Unit tests (fast, no I/O)                          |
+| `pnpm format`                                   | Prettier write                                     |
+| `pnpm infra:up` / `infra:down` / `infra:reset`  | Local backing services                             |
+| `pnpm db:generate` / `db:migrate` / `db:studio` | Prisma                                             |
+| `pnpm --filter @leen-mart/api test:integration` | Integration tests (needs `infra:up`)               |
 
 ---
 
@@ -176,23 +176,22 @@ Husky hooks: `pre-commit` runs lint-staged, `commit-msg` runs commitlint,
 
 ## Status
 
-| Requirement | State |
-|---|---|
-| Monorepo (pnpm + Turborepo) | Done |
-| Backend: Node + Express 5 + TypeScript | Done |
-| Frontend: React + Vite + TypeScript | Done |
-| PostgreSQL + PostGIS | Done (compose + Prisma datasource) |
-| Prisma ORM | Done (baseline schema: outbox + audit log) |
-| Redis | Done (client, health check, rate-limit store) |
-| Docker | Done (compose + production Dockerfiles) |
-| Environment configuration | Done (Zod-validated, fails fast) |
-| ESLint | Done (incl. architecture enforcement) |
-| Prettier | Done |
-| Husky | Done (3 hooks) |
-| Health endpoint | Done (`/healthz` + `/readyz`) |
-| Global error handler | Done |
-| Logging | Done (Pino, structured, redacted) |
-| Validation | Done (Zod middleware) |
-| Clean Architecture folder structure | Done |
-| Business modules | **Not implemented, by design** |
-
+| Requirement                            | State                                         |
+| -------------------------------------- | --------------------------------------------- |
+| Monorepo (pnpm + Turborepo)            | Done                                          |
+| Backend: Node + Express 5 + TypeScript | Done                                          |
+| Frontend: React + Vite + TypeScript    | Done                                          |
+| PostgreSQL + PostGIS                   | Done (compose + Prisma datasource)            |
+| Prisma ORM                             | Done (baseline schema: outbox + audit log)    |
+| Redis                                  | Done (client, health check, rate-limit store) |
+| Docker                                 | Done (compose + production Dockerfiles)       |
+| Environment configuration              | Done (Zod-validated, fails fast)              |
+| ESLint                                 | Done (incl. architecture enforcement)         |
+| Prettier                               | Done                                          |
+| Husky                                  | Done (3 hooks)                                |
+| Health endpoint                        | Done (`/healthz` + `/readyz`)                 |
+| Global error handler                   | Done                                          |
+| Logging                                | Done (Pino, structured, redacted)             |
+| Validation                             | Done (Zod middleware)                         |
+| Clean Architecture folder structure    | Done                                          |
+| Business modules                       | **Not implemented, by design**                |
