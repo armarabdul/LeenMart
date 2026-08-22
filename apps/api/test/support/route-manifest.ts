@@ -564,6 +564,28 @@ export const ROUTE_MANIFEST: readonly ManifestRoute[] = [
     why: 'Confirms the calling admin’s own factor; admins are not tenants.',
   },
 
+  // --- admin user management: /api/v1/admin/users (Phase L.2) ---
+  // Platform-owned, cross-tenant-by-design in the same sense the taxonomy
+  // admin surface is: `users` carries no vendor column, so there is no
+  // tenant boundary for one admin to cross into another's data.
+  // `MANAGE_ADMIN_USERS_OR_ROLES` plus `requireFullAccess` is the whole of
+  // the authorisation story, and the role matrix for it is asserted
+  // directly in admin-user-management.test.ts.
+  {
+    method: 'POST',
+    prefix: '/api/v1/admin/users',
+    path: '/',
+    classification: 'ADMIN',
+    why: 'Creates a platform-owned administrator account; FULL-access (SUPER_ADMIN) only.',
+  },
+  {
+    method: 'GET',
+    prefix: '/api/v1/admin/users',
+    path: '/',
+    classification: 'ADMIN',
+    why: 'Lists every admin-family account across the platform; FULL-access (SUPER_ADMIN) only — there is no READ_ONLY grant on this permission for anyone else to hold.',
+  },
+
   // --- vendor: /api/v1/vendors ---
   {
     method: 'POST',

@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { emailSchema, isoDateTimeSchema, phoneSchema, uuidSchema } from '../common/primitives.js';
+import {
+  cursorPaginationSchema,
+  emailSchema,
+  isoDateTimeSchema,
+  phoneSchema,
+  uuidSchema,
+} from '../common/primitives.js';
 
 /** Mirrors the domain `Role` value object's nine fixed roles (SDD 8.1). */
 export const roleSchema = z.enum([
@@ -120,6 +126,81 @@ export const adminMfaEnrollConfirmRequestSchema = z
   })
   .strict();
 
+/**
+ * The admin-family roles (SDD 8.1) — the read model's own vocabulary for
+ * "what role does this administrator hold," distinct from
+ * `subordinateAdminRoleSchema` below, which is deliberately narrower.
+ */
+export const adminRoleSchema = z.enum([
+  'SUPER_ADMIN',
+  'CATALOGUE_MODERATOR',
+  'FINANCE_ADMIN',
+  'RISK_ANALYST',
+  'SUPPORT_AGENT',
+]);
+
+/**
+ * The roles a SUPER_ADMIN may create through `POST /api/v1/admin/users`.
+ *
+ * Deliberately excludes SUPER_ADMIN. Nothing in SDD 8.1/8.2 states that the
+ * admin-management flow may mint a second SUPER_ADMIN, and
+ * `BootstrapAdminUseCase`'s own design — refusing to run a second time once
+ * *any* admin-family account exists — treats "the platform's SUPER_ADMIN" as
+ * a one-time, operator-run event, not a role this flow reproduces. Locked
+ * decision (Phase L.2): creation here stays confined to the four subordinate
+ * roles until a business decision explicitly says otherwise.
+ */
+export const subordinateAdminRoleSchema = z.enum([
+  'CATALOGUE_MODERATOR',
+  'FINANCE_ADMIN',
+  'RISK_ANALYST',
+  'SUPPORT_AGENT',
+]);
+
+/** Mirrors the domain `UserStatus` value object's four states. */
+export const adminUserStatusSchema = z.enum(['PENDING', 'ACTIVE', 'SUSPENDED', 'LOCKED']);
+
+/**
+ * POST /api/v1/admin/users — SUPER_ADMIN-only creation of a subordinate
+ * administrator account (SDD 8.1/8.2). Same password-policy floor as
+ * customer registration (SDD 7.5) — there is no separate, laxer rule for
+ * admins created this way than for the bootstrap path's own
+ * `ADMIN_PASSWORD_MIN_LENGTH`, which is numerically identical.
+ */
+export const createAdminUserRequestSchema = z
+  .object({
+    email: emailSchema,
+    password: z.string().min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH),
+    role: subordinateAdminRoleSchema,
+  })
+  .strict();
+
+/**
+ * One administrator as another administrator sees it (GET/POST
+ * `/api/v1/admin/users`).
+ *
+ * `.strict()` is doing the same security work it does on
+ * `adminKycSubmissionDetailSchema`: a column added to `users` later (a
+ * password hash is already one) fails loudly here instead of being
+ * published by a spread. No MFA state, no password, no session or token
+ * material — this is safe administrative metadata only.
+ */
+export const adminUserSchema = z
+  .object({
+    id: uuidSchema,
+    email: emailSchema,
+    role: adminRoleSchema,
+    status: adminUserStatusSchema,
+    createdAt: isoDateTimeSchema,
+    updatedAt: isoDateTimeSchema,
+  })
+  .strict();
+
+/** GET /api/v1/admin/users — the platform's existing cursor convention (SDD 9.2), same shape as `adminCategoryListQuerySchema`. */
+export const listAdminUsersQuerySchema = cursorPaginationSchema.strict();
+
+export const listAdminUsersResponseSchema = z.array(adminUserSchema);
+
 export const authUserSchema = z.object({
   id: uuidSchema,
   email: emailSchema.optional(),
@@ -164,6 +245,13 @@ export type AdminMfaVerifyRequest = z.infer<typeof adminMfaVerifyRequestSchema>;
 export type AdminMfaEnrollRequest = z.infer<typeof adminMfaEnrollRequestSchema>;
 export type AdminMfaEnrollResponse = z.infer<typeof adminMfaEnrollResponseSchema>;
 export type AdminMfaEnrollConfirmRequest = z.infer<typeof adminMfaEnrollConfirmRequestSchema>;
+export type AdminRoleDto = z.infer<typeof adminRoleSchema>;
+export type SubordinateAdminRoleDto = z.infer<typeof subordinateAdminRoleSchema>;
+export type AdminUserStatusDto = z.infer<typeof adminUserStatusSchema>;
+export type CreateAdminUserRequest = z.infer<typeof createAdminUserRequestSchema>;
+export type AdminUser = z.infer<typeof adminUserSchema>;
+export type ListAdminUsersQuery = z.infer<typeof listAdminUsersQuerySchema>;
+export type ListAdminUsersResponse = z.infer<typeof listAdminUsersResponseSchema>;
 export type RefreshSessionRequest = z.infer<typeof refreshSessionRequestSchema>;
 export type LogoutRequest = z.infer<typeof logoutRequestSchema>;
 export type RequestOtpRequest = z.infer<typeof requestOtpRequestSchema>;

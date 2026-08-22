@@ -4,6 +4,13 @@ import type { PhoneNumber } from '../value-objects/phone-number.value-object.js'
 import type { RoleName } from '../value-objects/role.value-object.js';
 import type { User } from '../entities/user.entity.js';
 
+/** One page of the admin-management list (Phase L.2), the platform's existing cursor convention (SDD 9.2) — same shape `CategoryPage` publishes. */
+export interface AdminUserPage {
+  readonly items: readonly User[];
+  readonly nextCursor: string | null;
+  readonly hasMore: boolean;
+}
+
 /**
  * `findByEmail` still uses a raw `string` — `Email` remains optional/unadopted
  * on `User` (Milestone 2 item 6, still deferred). `id` now uses the branded
@@ -34,4 +41,11 @@ export interface UserRepository {
    * find-by-role query, which nothing needs yet.
    */
   existsWithAnyRole(roles: readonly RoleName[]): Promise<boolean>;
+
+  /**
+   * One page of every admin-family account (SDD 8.1), on UUID v7's own time
+   * order — the SUPER_ADMIN-gated admin-management read surface's raw
+   * material (Phase L.2). Mirrors `CategoryRepository.listPage` exactly.
+   */
+  listAdmins(input: { limit: number; cursor?: string | undefined }): Promise<AdminUserPage>;
 }

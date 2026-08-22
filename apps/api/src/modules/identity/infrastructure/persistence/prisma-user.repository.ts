@@ -2,7 +2,12 @@ import type { TransactionScope } from '@leen-mart/domain-kit';
 import type { PrismaClient } from '@prisma/client';
 import { toUserId, type UserId } from '../../domain/value-objects/user-id.value-object.js';
 import type { UserRepository } from '../../application/ports/user-repository.port.js';
-import { Role, type RoleName } from '../../domain/value-objects/role.value-object.js';
+import type { AdminUserPage } from '../../domain/repositories/user.repository.js';
+import {
+  ADMIN_ROLE_NAMES,
+  Role,
+  type RoleName,
+} from '../../domain/value-objects/role.value-object.js';
 import { User } from '../../domain/entities/user.entity.js';
 import { PasswordHash } from '../../domain/value-objects/password-hash.value-object.js';
 import { PhoneNumber } from '../../domain/value-objects/phone-number.value-object.js';
@@ -107,5 +112,27 @@ export class PrismaUserRepository implements UserRepository {
       select: { id: true },
     });
     return row !== null;
+  }
+
+  async listAdmins(input: { limit: number; cursor?: string }): Promise<AdminUserPage> {
+    // One row beyond the page, so `hasMore` is an observation rather than a
+    // second count query — the same trick `PrismaCategoryRepository.listPage`
+    // uses, on the same UUID-v7-is-a-total-order reasoning.
+    const take = input.limit + 1;
+    const rows = await this.prisma.user.findMany({
+      where: { role: { in: [...ADMIN_ROLE_NAMES] }, deletedAt: null },
+      orderBy: { id: 'asc' },
+      take,
+      ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+    });
+
+    const hasMore = rows.length > input.limit;
+    const page = hasMore ? rows.slice(0, input.limit) : rows;
+
+    return {
+      items: page.map(toDomain),
+      nextCursor: hasMore ? (page[page.length - 1]?.id ?? null) : null,
+      hasMore,
+    };
   }
 }

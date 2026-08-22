@@ -11,6 +11,7 @@ import type { AccessTokenService } from './application/ports/access-token.port.j
 import type { SessionDenylist } from './application/ports/session-denylist.port.js';
 import { AmbientAuditWriter, type AuditWriter } from '../audit/index.js';
 import { PrismaAuditLogRepository } from '../audit/infrastructure/persistence/prisma-audit-log.repository.js';
+import { IdentityTransactionRunner } from '../../shared/infrastructure/persistence/tenant-prisma.js';
 import { RedisSessionDenylist } from './infrastructure/cache/redis-session-denylist.js';
 import { AesGcmMfaSecretCipher } from './infrastructure/security/aes-gcm-mfa-secret-cipher.service.js';
 import { Argon2OtpHasher } from './infrastructure/security/argon2-otp-hasher.js';
@@ -29,6 +30,8 @@ import { AdminLoginStepOneUseCase } from './application/use-cases/admin-login-st
 import { AdminLoginStepTwoUseCase } from './application/use-cases/admin-login-step-two.use-case.js';
 import { AdminMfaEnrollUseCase } from './application/use-cases/admin-mfa-enroll.use-case.js';
 import { AdminMfaEnrollConfirmUseCase } from './application/use-cases/admin-mfa-enroll-confirm.use-case.js';
+import { CreateAdminUserUseCase } from './application/use-cases/create-admin-user.use-case.js';
+import { ListAdminUsersUseCase } from './application/use-cases/list-admin-users.use-case.js';
 import { LoginUseCase } from './application/use-cases/login.use-case.js';
 import { LogoutUseCase } from './application/use-cases/logout.use-case.js';
 import { RefreshSessionUseCase } from './application/use-cases/refresh-session.use-case.js';
@@ -37,6 +40,8 @@ import { RequestOtpUseCase } from './application/use-cases/request-otp.use-case.
 import { VerifyOtpUseCase } from './application/use-cases/verify-otp.use-case.js';
 import { createAdminAuthController } from './interface/http/admin-auth.controller.js';
 import { createAdminAuthRouter } from './interface/http/admin-auth.routes.js';
+import { createAdminUserManagementController } from './interface/http/admin-user-management.controller.js';
+import { createAdminUserManagementRouter } from './interface/http/admin-user-management.routes.js';
 import { createIdentityController } from './interface/http/identity.controller.js';
 import { createIdentityRouter } from './interface/http/identity.routes.js';
 
@@ -54,6 +59,8 @@ export interface IdentityModule {
   readonly router: Router;
   /** Mounted separately at `/api/v1/admin` (SDD 9.4) — a distinct surface from `router`, even though both come from this module. */
   readonly adminAuthRouter: Router;
+  /** Mounted at `/api/v1/admin/users` (SDD 9.4, Phase L.2) — SUPER_ADMIN-gated management of subordinate administrator accounts. */
+  readonly adminUserManagementRouter: Router;
   readonly requestOtpUseCase: RequestOtpUseCase;
   readonly verifyOtpUseCase: VerifyOtpUseCase;
   /**
@@ -232,6 +239,29 @@ const buildAdminAuthUseCases = (deps: AdminAuthUseCaseDeps): AdminAuthUseCases =
   };
 };
 
+interface AdminUserManagementUseCaseDeps {
+  readonly userRepository: PrismaUserRepository;
+  readonly passwordHasher: Argon2PasswordHasher;
+  readonly transactionRunner: IdentityTransactionRunner;
+  readonly auditWriter: AuditWriter;
+  readonly idGenerator: IdGenerator;
+  readonly clock: Clock;
+  readonly logger: Logger;
+}
+
+interface AdminUserManagementUseCases {
+  readonly createAdminUserUseCase: CreateAdminUserUseCase;
+  readonly listAdminUsersUseCase: ListAdminUsersUseCase;
+}
+
+/** Split out of `createIdentityModule` purely to stay under this file's max-lines-per-function budget, the same reason its siblings above are. */
+const buildAdminUserManagementUseCases = (
+  deps: AdminUserManagementUseCaseDeps,
+): AdminUserManagementUseCases => ({
+  createAdminUserUseCase: new CreateAdminUserUseCase(deps),
+  listAdminUsersUseCase: new ListAdminUsersUseCase({ userRepository: deps.userRepository }),
+});
+
 interface IdentityInfrastructure {
   readonly userRepository: PrismaUserRepository;
   readonly refreshTokenRepository: PrismaRefreshTokenRepository;
@@ -249,6 +279,7 @@ interface IdentityInfrastructure {
   readonly sessionDenylist: RedisSessionDenylist;
   readonly auditWriter: AmbientAuditWriter;
   readonly sessionIssuer: SessionIssuer;
+  readonly transactionRunner: IdentityTransactionRunner;
 }
 
 /**
@@ -268,6 +299,46 @@ const buildAuditWriter = (deps: {
     clock: deps.clock,
   });
 
+interface SecurityPrimitives {
+  readonly passwordHasher: Argon2PasswordHasher;
+  readonly refreshTokenHasher: CryptoRefreshTokenHasher;
+  readonly challengeTokenHasher: CryptoRefreshTokenHasher;
+  readonly otpHasher: Argon2OtpHasher;
+  readonly otpGenerator: CryptoOtpGenerator;
+  readonly totpService: OtplibTotpService;
+  readonly mfaSecretCipher: AesGcmMfaSecretCipher;
+  readonly accessTokenService: JsonWebTokenAccessTokenService;
+}
+
+/** Split out of `buildInfrastructure` purely to stay under this file's max-lines-per-function budget. */
+const buildSecurityPrimitives = (deps: {
+  env: Env;
+  clock: Clock;
+  idGenerator: IdGenerator;
+}): SecurityPrimitives => ({
+  passwordHasher: new Argon2PasswordHasher(),
+  refreshTokenHasher: new CryptoRefreshTokenHasher(),
+  // Same primitive as `refreshTokenHasher`, a separate instance purely to
+  // keep the DI wiring's intent readable — an MFA challenge token is the
+  // same shape of thing (opaque, 256-bit, SHA-256 at rest), not the same
+  // token.
+  challengeTokenHasher: new CryptoRefreshTokenHasher(),
+  otpHasher: new Argon2OtpHasher(),
+  otpGenerator: new CryptoOtpGenerator(),
+  totpService: new OtplibTotpService(),
+  mfaSecretCipher: new AesGcmMfaSecretCipher(Buffer.from(deps.env.MFA_ENCRYPTION_KEY, 'hex')),
+  accessTokenService: new JsonWebTokenAccessTokenService(
+    {
+      secret: deps.env.JWT_ACCESS_SECRET,
+      issuer: deps.env.SERVICE_NAME,
+      audience: deps.env.JWT_AUDIENCE,
+      ttlSeconds: deps.env.JWT_ACCESS_TTL_SECONDS,
+    },
+    deps.clock,
+    deps.idGenerator,
+  ),
+});
+
 /** Split out of `createIdentityModule` purely to stay under this file's max-lines-per-function budget. */
 const buildInfrastructure = (deps: {
   prisma: PrismaClient;
@@ -283,29 +354,19 @@ const buildInfrastructure = (deps: {
   const otpRepository = new PrismaOtpRepository(prisma);
   const mfaSecretRepository = new PrismaMfaSecretRepository(prisma);
   const mfaChallengeRepository = new PrismaMfaChallengeRepository(prisma);
-  const passwordHasher = new Argon2PasswordHasher();
-  const refreshTokenHasher = new CryptoRefreshTokenHasher();
-  // Same primitive as `refreshTokenHasher`, a separate instance purely to
-  // keep the DI wiring's intent readable — an MFA challenge token is the
-  // same shape of thing (opaque, 256-bit, SHA-256 at rest), not the same
-  // token.
-  const challengeTokenHasher = new CryptoRefreshTokenHasher();
-  const otpHasher = new Argon2OtpHasher();
-  const otpGenerator = new CryptoOtpGenerator();
-  const totpService = new OtplibTotpService();
-  const mfaSecretCipher = new AesGcmMfaSecretCipher(Buffer.from(env.MFA_ENCRYPTION_KEY, 'hex'));
-  const accessTokenService = new JsonWebTokenAccessTokenService(
-    {
-      secret: env.JWT_ACCESS_SECRET,
-      issuer: env.SERVICE_NAME,
-      audience: env.JWT_AUDIENCE,
-      ttlSeconds: env.JWT_ACCESS_TTL_SECONDS,
-    },
-    clock,
-    idGenerator,
-  );
+  const {
+    passwordHasher,
+    refreshTokenHasher,
+    challengeTokenHasher,
+    otpHasher,
+    otpGenerator,
+    totpService,
+    mfaSecretCipher,
+    accessTokenService,
+  } = buildSecurityPrimitives({ env, clock, idGenerator });
   const sessionDenylist = new RedisSessionDenylist(redis);
   const auditWriter = buildAuditWriter({ prisma, idGenerator, clock });
+  const transactionRunner = new IdentityTransactionRunner(prisma);
   const sessionIssuer = new SessionIssuer({
     accessTokenService,
     refreshTokenHasher,
@@ -333,12 +394,14 @@ const buildInfrastructure = (deps: {
     sessionDenylist,
     auditWriter,
     sessionIssuer,
+    transactionRunner,
   };
 };
 
 interface IdentityRouters {
   readonly router: Router;
   readonly adminAuthRouter: Router;
+  readonly adminUserManagementRouter: Router;
 }
 
 /** Split out of `createIdentityModule` purely to stay under this file's max-lines-per-function budget. */
@@ -353,6 +416,8 @@ const buildRouters = (params: {
   adminLoginStepTwoUseCase: AdminLoginStepTwoUseCase;
   adminMfaEnrollUseCase: AdminMfaEnrollUseCase;
   adminMfaEnrollConfirmUseCase: AdminMfaEnrollConfirmUseCase;
+  createAdminUserUseCase: CreateAdminUserUseCase;
+  listAdminUsersUseCase: ListAdminUsersUseCase;
   accessTokenService: AccessTokenService;
   sessionDenylist: SessionDenylist;
   rateLimiters: AuthRateLimiters;
@@ -371,6 +436,10 @@ const buildRouters = (params: {
     adminMfaEnrollUseCase: params.adminMfaEnrollUseCase,
     adminMfaEnrollConfirmUseCase: params.adminMfaEnrollConfirmUseCase,
   });
+  const adminUserManagementController = createAdminUserManagementController({
+    createAdminUserUseCase: params.createAdminUserUseCase,
+    listAdminUsersUseCase: params.listAdminUsersUseCase,
+  });
 
   return {
     router: createIdentityRouter(
@@ -380,6 +449,11 @@ const buildRouters = (params: {
       params.rateLimiters,
     ),
     adminAuthRouter: createAdminAuthRouter(adminAuthController),
+    adminUserManagementRouter: createAdminUserManagementRouter(
+      adminUserManagementController,
+      params.accessTokenService,
+      params.sessionDenylist,
+    ),
   };
 };
 
@@ -388,49 +462,46 @@ const buildRouters = (params: {
  * argon2, JWTs or Prisma — it hands over the shared container's ports and
  * gets back a router.
  */
+interface OtpUseCases {
+  readonly requestOtpUseCase: RequestOtpUseCase;
+  readonly verifyOtpUseCase: VerifyOtpUseCase;
+}
+
+interface AllUseCases
+  extends AuthUseCases,
+    OtpUseCases,
+    AdminAuthUseCases,
+    AdminUserManagementUseCases {}
+
+/**
+ * Every use case this module builds, in one call — split out of
+ * `createIdentityModule` purely to stay under this file's
+ * max-lines-per-function budget, the same reason its siblings above are.
+ */
+const buildAllUseCases = (
+  infra: IdentityInfrastructure,
+  params: { env: Env; clock: Clock; idGenerator: IdGenerator; logger: Logger },
+): AllUseCases => {
+  const { env, clock, idGenerator, logger } = params;
+  const shared = { ...infra, idGenerator, clock, logger };
+
+  return {
+    ...buildAuthUseCases({ ...shared, accessTokenTtlSeconds: env.JWT_ACCESS_TTL_SECONDS }),
+    ...buildOtpUseCases(shared),
+    ...buildAdminAuthUseCases({ ...shared, issuer: env.SERVICE_NAME }),
+    ...buildAdminUserManagementUseCases(shared),
+  };
+};
+
 export const createIdentityModule = (deps: IdentityModuleDeps): IdentityModule => {
   const { prisma, redis, env, clock, idGenerator, logger } = deps;
   const moduleLogger = logger.child({ module: 'identity' });
 
   const infra = buildInfrastructure({ prisma, redis, env, clock, idGenerator });
+  const useCases = buildAllUseCases(infra, { env, clock, idGenerator, logger: moduleLogger });
 
-  const { registerCustomerUseCase, loginUseCase, refreshSessionUseCase, logoutUseCase } =
-    buildAuthUseCases({
-      ...infra,
-      accessTokenTtlSeconds: env.JWT_ACCESS_TTL_SECONDS,
-      idGenerator,
-      clock,
-      logger: moduleLogger,
-    });
-  const { requestOtpUseCase, verifyOtpUseCase } = buildOtpUseCases({
-    ...infra,
-    idGenerator,
-    clock,
-    logger: moduleLogger,
-  });
-  const {
-    adminLoginStepOneUseCase,
-    adminLoginStepTwoUseCase,
-    adminMfaEnrollUseCase,
-    adminMfaEnrollConfirmUseCase,
-  } = buildAdminAuthUseCases({
-    ...infra,
-    idGenerator,
-    clock,
-    issuer: env.SERVICE_NAME,
-    logger: moduleLogger,
-  });
-  const { router, adminAuthRouter } = buildRouters({
-    registerCustomerUseCase,
-    loginUseCase,
-    refreshSessionUseCase,
-    logoutUseCase,
-    requestOtpUseCase,
-    verifyOtpUseCase,
-    adminLoginStepOneUseCase,
-    adminLoginStepTwoUseCase,
-    adminMfaEnrollUseCase,
-    adminMfaEnrollConfirmUseCase,
+  const { router, adminAuthRouter, adminUserManagementRouter } = buildRouters({
+    ...useCases,
     accessTokenService: infra.accessTokenService,
     sessionDenylist: infra.sessionDenylist,
     rateLimiters: createAuthRateLimiters(redis, env),
@@ -438,8 +509,9 @@ export const createIdentityModule = (deps: IdentityModuleDeps): IdentityModule =
   return {
     router,
     adminAuthRouter,
-    requestOtpUseCase,
-    verifyOtpUseCase,
+    adminUserManagementRouter,
+    requestOtpUseCase: useCases.requestOtpUseCase,
+    verifyOtpUseCase: useCases.verifyOtpUseCase,
     accessTokenService: infra.accessTokenService,
     sessionDenylist: infra.sessionDenylist,
   };

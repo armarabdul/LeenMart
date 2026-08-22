@@ -337,6 +337,10 @@ export const createApp = (container: Container): Express => {
   const identityModule = createIdentityModule({ prisma, redis, env, clock, idGenerator, logger });
   app.use('/api/v1/identity', identityModule.router);
   app.use('/api/v1/admin', identityModule.adminAuthRouter);
+  // SUPER_ADMIN-gated subordinate-admin management (Phase L.2, SDD 8.1/8.2),
+  // mounted apart from `adminAuthRouter`: that one is pre-authentication
+  // (login/enrollment), this one is authenticated and permission-gated.
+  app.use('/api/v1/admin/users', identityModule.adminUserManagementRouter);
 
   mountBusinessModules(app, {
     prisma,

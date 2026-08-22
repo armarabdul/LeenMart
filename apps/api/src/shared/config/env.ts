@@ -7,8 +7,25 @@ import { z } from 'zod';
  * The service refuses to boot on an invalid or missing variable. This turns a
  * 3 a.m. production mystery ("why is it writing to the wrong bucket?") into a
  * deployment failure with a precise message.
+ *
+ * `override: true` is load-bearing, not a style choice. `@prisma/client`'s
+ * generated runtime does its own unconditional `.env` auto-load (relative to
+ * `schema.prisma`, with no knowledge of `ENV_FILE`) the first time a
+ * `PrismaClient` is constructed anywhere in the process. `dotenv.config()`
+ * defaults to `override: false`, so whichever of the two loaders runs first
+ * wins — and that order depends on which module an integration test happens
+ * to import first, which is exactly what let two integration test suites
+ * silently write real rows into the *development* database instead of
+ * `leenmart_test` (discovered during Phase L.2's final review — see
+ * `test/integration/test-environment-isolation.test.ts`). Loading `ENV_FILE`
+ * with `override: true` makes this call authoritative regardless of import
+ * order: whatever Prisma's own loader already set into `process.env`, this
+ * one — the only one that has ever heard of `ENV_FILE` — overwrites it
+ * afterwards. In ordinary `pnpm dev`/production use this changes nothing:
+ * this call already runs before any `PrismaClient` is constructed, so
+ * there is nothing yet in `process.env` for it to overwrite.
  */
-loadDotenv({ path: process.env.ENV_FILE ?? '.env' });
+loadDotenv({ path: process.env.ENV_FILE ?? '.env', override: true });
 
 const nodeEnvSchema = z.enum(['development', 'test', 'staging', 'production']);
 

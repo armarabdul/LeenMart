@@ -250,3 +250,25 @@ export class CheckoutTransactionRunner implements TransactionRunner {
     return this.checkoutPrisma.$transaction((tx) => work(tx as unknown as TransactionScope));
   }
 }
+
+/**
+ * `TransactionRunner` for the **identity module's own plain client**
+ * (Phase L.2) — structurally identical to `AdminTransactionRunner`/
+ * `CheckoutTransactionRunner` (a bare `$transaction`, no session GUCs), kept
+ * as its own class for the same reason those two are: a different
+ * authority, named accurately rather than borrowing a sibling's identity.
+ *
+ * `users` carries no RLS policy and no tenant column — every identity
+ * repository already reads and writes it on the plain `leenmart_app`-role
+ * client with no tenant context, including the admin login/enrollment flows
+ * this runner's first caller (`CreateAdminUserUseCase`) sits beside. There is
+ * therefore no session setting for this runner to configure and no tenant
+ * context to demand before opening, unlike `PrismaTransactionRunner`.
+ */
+export class IdentityTransactionRunner implements TransactionRunner {
+  constructor(private readonly prisma: PrismaClient) {}
+
+  async run<T>(work: (scope: TransactionScope) => Promise<T>): Promise<T> {
+    return this.prisma.$transaction((tx) => work(tx as unknown as TransactionScope));
+  }
+}

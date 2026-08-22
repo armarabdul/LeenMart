@@ -24,6 +24,8 @@ export const IDENTITY_AUDIT_ACTIONS = {
   ADMIN_LOGIN: 'identity.admin.login',
   /** An administrator's session deliberately ended. */
   ADMIN_LOGOUT: 'identity.admin.logout',
+  /** A SUPER_ADMIN created a subordinate administrator account (Phase L.2, SDD 8.1/8.2). */
+  ADMIN_USER_CREATED: 'identity.admin.user_created',
 } as const;
 
 export type IdentityAuditAction =

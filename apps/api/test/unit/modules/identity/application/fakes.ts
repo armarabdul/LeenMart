@@ -25,6 +25,8 @@ import type { PasswordHasher } from '../../../../../src/modules/identity/applica
 import type { RefreshTokenHasher } from '../../../../../src/modules/identity/application/ports/refresh-token-hasher.port.js';
 import type { RefreshTokenRepository } from '../../../../../src/modules/identity/application/ports/refresh-token-repository.port.js';
 import type { UserRepository } from '../../../../../src/modules/identity/application/ports/user-repository.port.js';
+import type { AdminUserPage } from '../../../../../src/modules/identity/domain/repositories/user.repository.js';
+import { ADMIN_ROLE_NAMES } from '../../../../../src/modules/identity/domain/value-objects/role.value-object.js';
 import type { OtpGenerator } from '../../../../../src/modules/identity/domain/services/otp-generator.service.js';
 import type { OtpHasher } from '../../../../../src/modules/identity/domain/services/otp-hasher.service.js';
 import type { OtpRepository } from '../../../../../src/modules/identity/domain/repositories/otp.repository.js';
@@ -91,6 +93,24 @@ export class InMemoryUserRepository implements UserRepository {
       if (roles.includes(user.role.name)) return Promise.resolve(true);
     }
     return Promise.resolve(false);
+  }
+
+  /** Mirrors the Prisma adapter's keyset pagination: sorted by id (UUID v7 is lexicographically time-ordered), a limit+1 fetch, cursor resumes strictly after the given id. */
+  listAdmins(input: { limit: number; cursor?: string | undefined }): Promise<AdminUserPage> {
+    const admins = [...this.byId.values()]
+      .filter((user) => (ADMIN_ROLE_NAMES as readonly string[]).includes(user.role.name))
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+    const startIndex = input.cursor ? admins.findIndex((user) => user.id === input.cursor) + 1 : 0;
+    const window = admins.slice(startIndex, startIndex + input.limit + 1);
+    const hasMore = window.length > input.limit;
+    const page = hasMore ? window.slice(0, input.limit) : window;
+
+    return Promise.resolve({
+      items: page,
+      nextCursor: hasMore ? (page[page.length - 1]?.id ?? null) : null,
+      hasMore,
+    });
   }
 }
 
